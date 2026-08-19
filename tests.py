@@ -568,17 +568,29 @@ class TestCodeLoom(unittest.TestCase):
             shutil.rmtree(tmp)
 
     def test_pack(self):
-        # --pack emits a single-shot context file with reading order + impact + symbols
+        # --pack emits a code-embedded task brief: reading order + embedded code + impact
         files = []
         for root, _, fs in os.walk(self.repo):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
         pack = codeloom.render_pack(files, self.repo, "retry")
-        self.assertIn("Reading order", pack)
-        self.assertIn("Impact", pack)
-        self.assertIn("Symbols", pack)
+        self.assertIn("READ THESE, IN ORDER", pack)
+        self.assertIn("THE RELEVANT CODE", pack)
+        self.assertIn("IMPACT", pack)
         self.assertIn("retry", pack)
+
+    def test_edit_relevance(self):
+        # edit-relevance ranks the call path, not just keyword matches
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        results = codeloom.edit_relevance(files, self.repo, "retry")
+        # the retry module should rank first (it defines the anchor)
+        self.assertTrue(results)
+        self.assertEqual(results[0]["module"], "src.utils.retry")
 
     def test_index_auto_refresh(self):
         # a fresh index is fast; a changed file triggers a rebuild

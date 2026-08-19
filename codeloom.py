@@ -2657,6 +2657,92 @@ def task_relevance(files: List[str], root: str, task: str, top: int = 10) -> Lis
     scored.sort(key=lambda s: (-s["score"], s["module"]))
     return scored[:top]
 
+# --------------------------------------------------------------------------- #
+# Edit-relevance ranking (--task/--plan/--pack) — the moat
+# --------------------------------------------------------------------------- #
+# The plan's Phase 2: rank by EDIT relevance, not keyword overlap.
+#   1. ANCHOR: extract anchor symbols from the task text ("fix the login bug"
+#      -> anchor = {login})
+#   2. WALK: from each anchor, walk the call graph BOTH directions
+#      - callers (what calls login?)  -> "what breaks"
+#      - callees (what does login call?) -> "what it needs"
+#      - depth 1-2, weighted by distance
+#   3. RANK: score = f(anchor_distance, keyword_hits, dependent_count)
+#      - anchor_distance is DOMINANT (this is the fix)
+#      - keyword_hits is a tiebreaker, not the primary signal
+#   4. RESULT: session.py ranks above constants.py for "fix the login bug"
+#      because it's on login's call path, even with fewer word hits.
+#
+# This is the difference between "where does 'login' appear" and "what code
+# actually runs when a login happens." The second is what an agent needs.
+
+def _anchor_symbols(task: str) -> set:
+    """Extract anchor symbols from the task text. These are the nouns/verbs
+    that name the code the task is about (e.g. 'login', 'retry', 'auth')."""
+    toks = _tokenize(task)
+    # drop generic task words that aren't code anchors
+    stop = {"fix", "the", "a", "an", "bug", "add", "implement", "change", "update",
+            "remove", "refactor", "make", "this", "that", "for", "in", "to", "of",
+            "and", "or", "with", "on", "at", "by", "from", "into", "new", "feature",
+            "support", "handle", "error", "issue", "problem", "work", "code", "logic"}
+    return {t for t in toks if t not in stop}
+
+def edit_relevance(files: List[str], root: str, task: str, top: int = 10) -> List[dict]:
+    """Rank modules by EDIT relevance: anchor symbols walked through the call
+    graph both directions, weighted by distance. This is the moat — it ranks
+    the execution path, not the keyword matches."""
+    anchors = _anchor_symbols(task)
+    if not anchors:
+        return task_relevance(files, root, task, top)  # fallback
+    # build the call graph (module -> {func -> set(callees)})
+    calls = build_call_graph_multi(files, root)
+    # build a reverse index: which modules define each anchor symbol
+    anchor_modules = {}  # anchor -> set of modules defining it
+    for mod, funcs in calls.items():
+        for func in funcs:
+            if func in anchors:
+                anchor_modules.setdefault(func, set()).add(mod)
+    if not anchor_modules:
+        return task_relevance(files, root, task, top)  # no anchors found in code
+    # walk the call graph from each anchor module, both directions
+    # distance 0 = the anchor module itself, 1 = direct callers/callees, 2 = transitive
+    module_dist = {}  # module -> min distance from any anchor
+    for anchor, mods in anchor_modules.items():
+        for m in mods:
+            module_dist[m] = min(module_dist.get(m, 99), 0)
+            # callees (what the anchor calls) — depth 1-2
+            for caller, callees in calls.get(m, {}).items():
+                for callee in callees:
+                    # find modules defining callee
+                    for cm, funcs in calls.items():
+                        if callee in funcs:
+                            module_dist[cm] = min(module_dist.get(cm, 99), 1)
+            # callers (what calls the anchor) — depth 1-2
+            for cm, funcs in calls.items():
+                for caller, callees in funcs.items():
+                    if any(anchor in callees for anchor in anchors):
+                        module_dist[cm] = min(module_dist.get(cm, 99), 1)
+    # score: anchor_distance dominant, keyword_hits tiebreaker, centrality bonus
+    task_tokens = _tokenize(task)
+    scored = []
+    for f in files:
+        ext = os.path.splitext(f)[1].lower()
+        if ext not in LANG_RULES and ext not in IMPORT_LANG_RULES:
+            continue
+        mod = module_name_of(f, root)
+        dist = module_dist.get(mod, 99)
+        if dist == 99:
+            continue  # not on any anchor's call path
+        toks = _module_tokens(f)
+        overlap = len(task_tokens & toks)
+        # distance is dominant: 0 -> 100, 1 -> 60, 2 -> 30
+        dist_score = {0: 100, 1: 60, 2: 30}.get(dist, 10)
+        score = dist_score + overlap * 2 + min(len(reachable(build_graph_multi(files, root), mod, "in")), 10)
+        scored.append({"module": mod, "path": f, "score": score,
+                       "overlap": overlap, "centrality": dist, "anchor_dist": dist})
+    scored.sort(key=lambda s: (-s["score"], s["module"]))
+    return scored[:top]
+
 def _module_preview(path: str, max_chars: int = 200) -> str:
     """Return a short preview of a module's content for embedding."""
     try:
@@ -2666,16 +2752,17 @@ def _module_preview(path: str, max_chars: int = 200) -> str:
         return ""
 
 def render_task(files: List[str], root: str, task: str, top: int = 10) -> str:
-    results = task_relevance(files, root, task, top)
+    results = edit_relevance(files, root, task, top)
     buf = io.StringIO()
     buf.write(f"# task: {task}\n")
     if not results:
         buf.write("No modules matched the task. Try different keywords.\n")
         return buf.getvalue()
-    buf.write(f"Top {len(results)} relevant modules (by token overlap + graph centrality):\n\n")
+    buf.write(f"Top {len(results)} relevant modules (by edit relevance — anchor distance + call path):\n\n")
     for i, r in enumerate(results, 1):
+        dist = r.get("anchor_dist", "?")
         buf.write(f"{i}. {r['module']}  (score {r['score']}, {r['overlap']} keyword hits, "
-                  f"{r['centrality']} dependents)\n")
+                  f"anchor distance {dist})\n")
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
@@ -2684,7 +2771,7 @@ def render_task(files: List[str], root: str, task: str, top: int = 10) -> str:
 
 def build_plan(files: List[str], root: str, task: str, top: int = 8) -> str:
     """Emit a prioritized 'read these files, in this order' plan for a task."""
-    results = task_relevance(files, root, task, top)
+    results = edit_relevance(files, root, task, top)
     buf = io.StringIO()
     buf.write(f"# plan: {task}\n\n")
     if not results:
@@ -2692,8 +2779,10 @@ def build_plan(files: List[str], root: str, task: str, top: int = 8) -> str:
         return buf.getvalue()
     buf.write("Read these files, in this order, to understand the task:\n\n")
     for i, r in enumerate(results, 1):
+        dist = r.get("anchor_dist", "?")
         buf.write(f"{i}. {r['path']}\n")
-        buf.write(f"   why: {r['overlap']} keyword match(es), {r['centrality']} module(s) depend on it\n")
+        buf.write(f"   why: on the task's call path (anchor distance {dist}), "
+                  f"{r['overlap']} keyword match(es)\n")
     buf.write("\nThen run `codeloom --impact <file>` on the file you plan to change.\n")
     return buf.getvalue()
 
@@ -2703,36 +2792,80 @@ def build_plan(files: List[str], root: str, task: str, top: int = 8) -> str:
 
 def render_pack(files: List[str], root: str, task: str, top: int = 8,
                 include_symbols: bool = True) -> str:
-    """Emit a single compact context file for a task: the modules that matter,
-    in reading order, with impact analysis and a symbol index — all pre-computed
-    in one shot. An agent pastes this once and has everything it needs, with
-    zero per-query retrieval during the session.
+    """Emit a single-shot, code-embedded task brief for a task. This is the
+    moat feature: a self-contained, context-window-sized brief with the ACTUAL
+    code embedded — not a ranked list. An agent pastes this once and completes
+    the task with zero per-query retrieval.
 
-    This is the feature jcodemunch can't do: it's retrieval-only, so it can't
-    prioritize. codeloom turns a query tool into a context engine."""
-    results = task_relevance(files, root, task, top)
+    Output contract (2-4k tokens for a normal task):
+      # TASK: <task>
+      ## 1. READ THESE, IN ORDER
+      ## 2. THE RELEVANT CODE (byte-precise, embedded, capped ~40 lines/symbol)
+      ## 3. IMPACT — what breaks if you change each
+      ## 4. CALL PATH — how the task flows
+      ## 5. SAFE TO TOUCH (deadcode filtered to this task's modules)
+
+    This is the feature jcodemunch can't do: it's retrieval-shaped, so its
+    assemble_task_context returns names, not code. codeloom embeds the code."""
+    results = edit_relevance(files, root, task, top)
     buf = io.StringIO()
-    buf.write(f"# codeloom --pack: {task}\n")
-    buf.write(f"# Single-shot context for the agent. {len(results)} relevant module(s).\n\n")
+    buf.write(f"# TASK: {task}\n")
+    buf.write(f"# Single-shot, code-embedded task brief. {len(results)} relevant module(s).\n\n")
 
     if not results:
         buf.write("No modules matched the task. Refine the task description.\n")
         return buf.getvalue()
 
-    # 1. Reading order (the plan)
-    buf.write("## Reading order (most relevant first)\n")
+    # 1. Reading order (the plan) — edit-relevance ranked
+    buf.write("## 1. READ THESE, IN ORDER\n")
     for i, r in enumerate(results, 1):
-        buf.write(f"{i}. {r['path']}  (score {r['score']}, {r['overlap']} keyword hits, "
-                  f"{r['centrality']} dependents)\n")
+        dist = r.get("anchor_dist", "?")
+        buf.write(f"  {i}. {r['path']}  (anchor distance {dist}, {r['overlap']} keyword hits)\n")
     buf.write("\n")
 
-    # 2. Impact analysis for each relevant module
-    buf.write("## Impact (what breaks if you change each)\n")
+    # 2. THE RELEVANT CODE — byte-precise, embedded, capped
+    buf.write("## 2. THE RELEVANT CODE (byte-precise, embedded)\n")
+    for r in results:
+        path = r["path"]
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in CALL_LANG_RULES:
+            continue
+        mod = r["module"]
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        def_re, _ = CALL_LANG_RULES.get(ext, (None, None))
+        if def_re is None:
+            continue
+        # embed each top-level symbol, capped at ~40 lines / ~200 tokens
+        for m in re.finditer(def_re, text, re.MULTILINE):
+            name = next((g for g in m.groups() if g), None)
+            if not name:
+                continue
+            line = text[:m.start()].count("\n") + 1
+            # extract the symbol body (up to ~40 lines)
+            lines = text[m.start():].splitlines()
+            body = "\n".join(lines[:40])
+            if estimate_tokens(body) > 200:
+                # too big — signature + docstring + pointer
+                sig = lines[0][:80] if lines else name
+                buf.write(f"  {mod}.{name}  [{ext[1:]} :{line}]  (~{estimate_tokens(body)} tokens, too big to embed)\n")
+                buf.write(f"    {sig}\n")
+                buf.write(f"    -> run `codeloom --get-symbol {name} --full` for the full source\n")
+            else:
+                buf.write(f"  {mod}.{name}  [{ext[1:]} :{line}]\n")
+                buf.write(f"  ```\n{body}\n  ```\n")
+        buf.write("\n")
+
+    # 3. IMPACT — what breaks if you change each
+    buf.write("## 3. IMPACT (what breaks if you change each)\n")
+    graph = build_graph_multi(files, root)
     for r in results:
         mod = r["module"]
         try:
-            impact = render_impact(build_graph_multi(files, root), root, mod)
-            # extract just the risk + dependents lines
+            impact = render_impact(graph, root, mod)
             for line in impact.splitlines():
                 if line.startswith("risk:") or line.startswith("  src") or line.startswith("  tests"):
                     buf.write(f"  {mod}: {line.strip()}\n")
@@ -2740,33 +2873,30 @@ def render_pack(files: List[str], root: str, task: str, top: int = 8,
             pass
     buf.write("\n")
 
-    # 3. Symbol index for the relevant modules (definitions + snippets)
-    if include_symbols:
-        buf.write("## Symbols in the relevant modules\n")
-        for r in results:
-            path = r["path"]
-            ext = os.path.splitext(path)[1].lower()
-            if ext not in LANG_RULES:
-                continue
-            mod = r["module"]
-            try:
-                with open(path, "r", encoding="utf-8", errors="replace") as fh:
-                    text = fh.read()
-            except OSError:
-                continue
-            # find top-level defs/classes via the language rules
-            def_re, _ = CALL_LANG_RULES.get(ext, (None, None))
-            if def_re is None:
-                continue
-            for m in re.finditer(def_re, text, re.MULTILINE):
-                name = next((g for g in m.groups() if g), None)
-                if name:
-                    line = text[:m.start()].count("\n") + 1
-                    buf.write(f"  {mod}.{name}  [{ext[1:]} :{line}]\n")
-        buf.write("\n")
+    # 4. CALL PATH — how the task flows
+    buf.write("## 4. CALL PATH (how the task flows)\n")
+    calls = build_call_graph_multi(files, root)
+    for r in results[:3]:
+        mod = r["module"]
+        if mod in calls:
+            for caller, callees in list(calls[mod].items())[:5]:
+                buf.write(f"  {mod}.{caller} -> {', '.join(sorted(callees))}\n")
+    buf.write("\n")
+
+    # 5. SAFE TO TOUCH — deadcode filtered to this task's modules
+    buf.write("## 5. SAFE TO TOUCH (deadcode in the task's modules)\n")
+    try:
+        dead = dead_code(files, root)
+        task_mods = {r["module"] for r in results}
+        for d in dead:
+            if d["symbol"].split(".")[0] in task_mods:
+                buf.write(f"  {d['symbol']}\n")
+    except Exception:
+        pass
+    buf.write("\n")
 
     buf.write("## How to use\n")
-    buf.write("This file is the complete context for the task. Read it once, then work.\n")
+    buf.write("This brief is the complete context for the task. Read it once, then work.\n")
     buf.write("For the full source of any symbol, run `codeloom --get-symbol <name> --full`.\n")
     return buf.getvalue()
 
