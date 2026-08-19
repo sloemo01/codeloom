@@ -135,6 +135,34 @@ class TestCodemap(unittest.TestCase):
         # builtins like len/str should NOT appear (filtered out)
         self.assertNotIn("len", calls.get("src.cli", {}).get("main", set()))
 
+    def test_multi_lang_call_graph(self):
+        # JS + Go fixture
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, "app.js"), "w") as f:
+                f.write("function greet(n) { return n; }\nfunction main() { greet('x'); }\n")
+            with open(os.path.join(tmp, "main.go"), "w") as f:
+                f.write("package main\nfunc helper() int { return 1 }\nfunc main() { helper() }\n")
+            files = [os.path.join(tmp, "app.js"), os.path.join(tmp, "main.go")]
+            calls = codemap.build_call_graph_multi(files, tmp)
+            self.assertIn("greet", calls.get("app.js", {}).get("main", set()))
+            self.assertIn("helper", calls.get("main.go", {}).get("main", set()))
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_install_agents(self):
+        # creates AGENTS.md
+        msg = codemap.install_agents(self.repo)
+        self.assertIn("AGENTS.md", msg)
+        self.assertTrue(os.path.isfile(os.path.join(self.repo, "AGENTS.md")))
+        # updates on second call
+        msg2 = codemap.install_agents(self.repo)
+        self.assertIn("updated", msg2)
+
+    def test_token_estimate(self):
+        self.assertGreater(codemap.estimate_tokens("hello world"), 0)
+        self.assertEqual(codemap.estimate_tokens(""), 1)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

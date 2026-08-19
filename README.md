@@ -50,8 +50,11 @@ That's it. Under a second, zero setup, works offline.
 | `codemap` | "What's in this repo, and where?" — tree + one-liners + entry points |
 | `codemap --graph` | "What touches what?" — full import dependency graph |
 | `codemap --graph --focus X` | "What does X need, and what breaks if I change it?" |
-| `codemap --calls` | "What calls what?" — function-level execution flow |
+| `codemap --calls` | "What calls what?" — function-level execution flow (multi-language) |
 | `codemap --calls --focus X` | "What does this one module's code actually do?" |
+| `codemap --diff` | "What changed, and what's relevant to my current task?" |
+| `codemap --install-agents` | "Make every future agent session auto-load the map" |
+| `codemap --cost` | "How many tokens is this saving me?" |
 
 ## Usage
 
@@ -62,8 +65,11 @@ codemap --write MAP.md       # also write to MAP.md
 codemap --json               # machine-readable JSON for tooling
 codemap --graph              # Python import dependency graph
 codemap --graph --focus X    # deps + dependents of module X
-codemap --calls              # function-level call graph (Python)
+codemap --calls              # function-level call graph (multi-language)
 codemap --calls --focus X    # calls inside one module
+codemap --diff               # structure of files changed vs HEAD (git)
+codemap --install-agents     # write/update AGENTS.md with a codemap block
+codemap --cost               # append token-cost estimate to output
 codemap --no-outline         # skip per-file one-liners (faster)
 codemap --max-files 2000     # cap traversal (default 5000)
 ```
@@ -95,6 +101,45 @@ codemap --calls --focus browser_use/agent/service .
 answers the two questions agents burn the most tokens on: *"what does this
 code need?"* and *"what else breaks if I change it?"*
 
+## Git-aware `--diff` (the one competitors don't have)
+
+Agents almost always work on a *specific change*, not a whole repo. `--diff`
+shows the structure of **only the files changed vs `git HEAD`** — so the agent
+knows exactly what's relevant to the current task, and it's *always fresh*
+(no stale index):
+
+```bash
+codemap --diff .
+# codemap --diff — 2 changed file(s)
+# ## Changed files
+#   src/core/engine.py
+#   tests/test_engine.py
+# ## Structure of changes
+#   src/core/engine.py
+#     class Engine:
+#     def run(self, fn):
+```
+
+## One-command agent setup (`--install-agents`)
+
+```bash
+codemap --install-agents .
+# created /path/to/AGENTS.md
+```
+
+Writes (or updates) an `AGENTS.md` with a codemap instruction block, so every
+future agent session auto-loads the map before touching anything. Set and forget.
+
+## Token-cost reporting (`--cost`)
+
+```bash
+codemap --cost .
+# ## Cost
+#   ~308 tokens (~1234 bytes) — vs ~40k+ tokens for grep+read on a large repo
+```
+
+Quantify the win. Numbers beat claims.
+
 ## MCP server (agents call codemap natively)
 
 `codemap-mcp.py` is a **zero-dependency MCP server** (stdlib JSON-RPC over
@@ -110,9 +155,9 @@ stdio — no `mcp` package, no daemon). Register it with any MCP-capable agent:
 }
 ```
 
-Exposes four tools: `codemap_map`, `codemap_graph`, `codemap_focus`,
-`codemap_calls`. Your agent can now build a mental model of any repo and trace
-execution flow natively — no install, no index.
+Exposes five tools: `codemap_map`, `codemap_graph`, `codemap_focus`,
+`codemap_calls`, `codemap_diff`. Your agent can now build a mental model of any
+repo, trace execution flow, and see what's changed — natively, no install, no index.
 
 ## How it works
 
@@ -138,7 +183,9 @@ computes the structure, prints it, and exits.
 | Setup | none | indexing daemon, MCP server, build step |
 | Runs on | stdlib only | heavy runtime |
 | Import graph | **yes — `--graph`, <1s** | yes, but after indexing |
-| Function call graph | **yes — `--calls`** | partial |
+| Function call graph | **yes — `--calls`, multi-lang** | partial |
+| Git-aware `--diff` | **yes — always fresh** | no |
+| `--install-agents` | **yes — one command** | manual setup |
 | MCP server | **yes — zero-dep `codemap-mcp.py`** | yes |
 | Offline | yes | varies |
 | Speed | < 1s | indexing can take minutes |
@@ -160,10 +207,13 @@ the fastest way to answer "what is this project, actually?"
 - [x] `.gitignore`-aware traversal
 - [x] JSON output for tooling
 - [x] Import dependency graph + `--focus` (Python, via `ast`)
-- [x] Function-level call graph (`--calls`)
+- [x] Function-level call graph (`--calls`, multi-language)
 - [x] Zero-dependency MCP server (`codemap-mcp.py`)
+- [x] Git-aware `--diff` (structure of changed files)
+- [x] `--install-agents` (auto-write AGENTS.md)
+- [x] Token-cost reporting (`--cost`)
 - [ ] Incremental mode (only re-emit changed modules)
-- [ ] Multi-language call graph (beyond Python)
+- [ ] Multi-language import graph (beyond Python)
 
 ## Contributing
 

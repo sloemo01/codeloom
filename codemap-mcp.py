@@ -32,7 +32,7 @@ import codemap  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codemap-mcp"
-SERVER_VERSION = "0.3.0"
+SERVER_VERSION = "0.4.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -102,6 +102,21 @@ TOOLS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "codemap_diff",
+        "description": (
+            "Show the structure of only the files changed vs git HEAD. Use when "
+            "the agent is working on a specific change — tells it what's relevant "
+            "to the current task, always fresh."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+        },
+    },
 ]
 
 
@@ -160,7 +175,7 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             return {"isError": True, "content": [{"type": "text", "text": f"module not found: {module}"}]}
         text = codemap.render_graph(graph, root, start=resolved)
     elif name == "codemap_calls":
-        calls = codemap.build_call_graph(files, root)
+        calls = codemap.build_call_graph_multi(files, root)
         module = args.get("module")
         start = None
         if module:
@@ -169,6 +184,8 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
                 return {"isError": True, "content": [{"type": "text", "text": f"module not found: {module}"}]}
             start = resolved
         text = codemap.render_calls(calls, root, start=start)
+    elif name == "codemap_diff":
+        text = codemap.render_diff(root, max_files)
     else:
         return {"isError": True, "content": [{"type": "text", "text": f"unknown tool: {name}"}]}
 

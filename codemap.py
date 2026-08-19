@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 # --------------------------------------------------------------------------- #
 # Language / structure detection
@@ -481,6 +481,201 @@ def render_calls(calls: dict, root: str, start: Optional[str] = None) -> str:
                 buf.write(f"  {mod}.{caller}() -> {', '.join(sorted(callees))}\n")
     return buf.getvalue()
 
+# --------------------------------------------------------------------------- #
+# --diff: git-aware, structure of changed files
+# --------------------------------------------------------------------------- #
+
+def git_changed_files(root: str) -> List[str]:
+    """Return paths of files changed vs HEAD (tracked + untracked), root-relative."""
+    changed: List[str] = []
+    try:
+        import subprocess
+        # tracked changes (staged + unstaged) vs HEAD
+        r = subprocess.run(
+            ["git", "-C", root, "diff", "--name-only", "HEAD"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode == 0:
+            changed += [l for l in r.stdout.splitlines() if l.strip()]
+        # untracked files
+        r2 = subprocess.run(
+            ["git", "-C", root, "ls-files", "--others", "--exclude-standard"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r2.returncode == 0:
+            changed += [l for l in r2.stdout.splitlines() if l.strip()]
+    except Exception:
+        pass
+    # dedupe, keep only existing files
+    seen = set()
+    out = []
+    for c in changed:
+        c = c.strip()
+        if c and c not in seen and os.path.isfile(os.path.join(root, c)):
+            seen.add(c)
+            out.append(c)
+    return out
+
+def render_diff(root: str, max_files: int) -> str:
+    """Show the structure of only the files changed vs HEAD."""
+    changed = git_changed_files(root)
+    if not changed:
+        return "# codemap --diff\nNo changes vs HEAD.\n"
+    # build a tree from just the changed files
+    files = [os.path.join(root, c) for c in changed]
+    tree = build_tree(files, root, want_outline=True)
+    buf = io.StringIO()
+    buf.write(f"# codemap --diff — {len(changed)} changed file(s)\n")
+    buf.write("## Changed files\n")
+    for c in sorted(changed):
+        buf.write(f"  {c}\n")
+    buf.write("\n## Structure of changes\n")
+    for line in render_tree(tree):
+        buf.write(line + "\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
+# Multi-language call graph (lightweight, zero-dep)
+# --------------------------------------------------------------------------- #
+
+# regex-based function definition + call detection per language.
+# Less precise than tree-sitter, but zero-dependency and good enough for
+# structural understanding. Keys are file extensions.
+CALL_LANG_RULES: dict = {
+    ".py":   (r"^\s*(?:async\s+)?def\s+(\w+)", r"\b(\w+)\s*\("),
+    ".js":   (r"^\s*(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\()", r"\b(\w+)\s*\("),
+    ".ts":   (r"^\s*(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\()", r"\b(\w+)\s*\("),
+    ".jsx":  (r"^\s*(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\()", r"\b(\w+)\s*\("),
+    ".tsx":  (r"^\s*(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\()", r"\b(\w+)\s*\("),
+    ".go":   (r"^\s*func\s+(?:\([^)]*\)\s*)?(\w+)", r"\b(\w+)\s*\("),
+    ".rs":   (r"^\s*(?:pub\s+)?fn\s+(\w+)", r"\b(\w+)\s*\("),
+    ".java": (r"^\s*(?:public|private|protected|static|final|synchronized|abstract|native|transient|volatile|default|strictfp|)\s+[\w<>\[\],\s]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".c":    (r"^\s*(?:static\s+)?[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".h":    (r"^\s*(?:static\s+)?[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".cpp":  (r"^\s*(?:static\s+)?[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".hpp":  (r"^\s*(?:static\s+)?[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".cs":   (r"^\s*(?:public|private|protected|internal|static|async|virtual|override|sealed|abstract|readonly|)\s+[\w<>\[\],\s]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".rb":   (r"^\s*def\s+(\w+)", r"\b(\w+)\s*\("),
+    ".php":  (r"^\s*(?:public|private|protected|static|function)\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".swift":(r"^\s*(?:public|private|internal|fileprivate|static|func)\s+func\s+(\w+)", r"\b(\w+)\s*\("),
+    ".kt":   (r"^\s*(?:public|private|internal|protected|fun)\s+fun\s+(\w+)", r"\b(\w+)\s*\("),
+    ".sh":   (r"^\s*(\w+)\s*\(\)\s*\{", r"\b(\w+)\s*\("),
+    ".lua":  (r"^\s*(?:local\s+)?function\s+(\w+)", r"\b(\w+)\s*\("),
+    ".dart": (r"^\s*(?:void|int|String|bool|double|List|Map|dynamic|Future|Stream|final|var|const|)\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+}
+
+def build_call_graph_multi(files: List[str], root: str) -> dict:
+    """Multi-language call graph via regex. {module: {func: set(called_funcs)}}.
+    Only reports calls to functions defined in the codebase (builtins filtered)."""
+    # First pass: collect defined function names per module.
+    defined: dict = {}
+    for f in files:
+        ext = os.path.splitext(f)[1].lower()
+        if ext not in CALL_LANG_RULES:
+            continue
+        mod = module_name_of(f, root)
+        defined[mod] = set()
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        def_re, _ = CALL_LANG_RULES[ext]
+        for m in re.finditer(def_re, text, re.MULTILINE):
+            name = next((g for g in m.groups() if g), None)
+            if name:
+                defined[mod].add(name)
+
+    all_defined: set = set()
+    for s in defined.values():
+        all_defined |= s
+
+    # Second pass: find calls, keep only repo-defined callees.
+    calls: dict = {}
+    for f in files:
+        ext = os.path.splitext(f)[1].lower()
+        if ext not in CALL_LANG_RULES:
+            continue
+        mod = module_name_of(f, root)
+        calls[mod] = {}
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        def_re, call_re = CALL_LANG_RULES[ext]
+        # find each function body and the calls within it
+        lines = text.splitlines()
+        current_func = None
+        for line in lines:
+            dm = re.match(def_re, line)
+            if dm:
+                name = next((g for g in dm.groups() if g), None)
+                current_func = name
+                calls[mod].setdefault(current_func, set())
+                # also scan the def line itself for calls (e.g. one-liners)
+                for cm in re.finditer(call_re, line):
+                    callee = cm.group(1)
+                    if callee in all_defined and callee != current_func:
+                        calls[mod][current_func].add(callee)
+                continue
+            if current_func:
+                for cm in re.finditer(call_re, line):
+                    callee = cm.group(1)
+                    if callee in all_defined and callee != current_func:
+                        calls[mod][current_func].add(callee)
+    # drop empty callers
+    for mod in list(calls):
+        calls[mod] = {k: v for k, v in calls[mod].items() if v}
+    return calls
+
+# --------------------------------------------------------------------------- #
+# --install-agents: write/update AGENTS.md
+# --------------------------------------------------------------------------- #
+
+AGENTS_BLOCK = """<!-- codemap: auto-generated. Run `codemap` to refresh. -->
+Before editing anything, run `codemap` and read the output to build a mental model of the repo.
+"""
+
+def install_agents(root: str) -> str:
+    """Write or update AGENTS.md with a codemap instruction block."""
+    path = os.path.join(root, "AGENTS.md")
+    block = AGENTS_BLOCK
+    if os.path.isfile(path):
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        if "codemap: auto-generated" in content:
+            # replace existing block
+            import re as _re
+            content = _re.sub(r"<!-- codemap: auto-generated.*?-->\n.*?\n", block, content, flags=_re.DOTALL)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            return f"updated {path}"
+        else:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write("\n" + block)
+            return f"appended to {path}"
+    else:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(block)
+        return f"created {path}"
+
+# --------------------------------------------------------------------------- #
+# Token-cost reporting
+# --------------------------------------------------------------------------- #
+
+def estimate_tokens(text: str) -> int:
+    """Rough token estimate: ~4 chars/token for code, ~4.5 for prose."""
+    return max(1, len(text) // 4)
+
+def render_token_report(m: dict, text: str) -> str:
+    """Append a token-cost line to the map output."""
+    tokens = estimate_tokens(text)
+    buf = io.StringIO()
+    buf.write(f"\n## Cost\n")
+    buf.write(f"  ~{tokens} tokens (~{len(text)} bytes) — vs ~40k+ tokens for grep+read on a large repo\n")
+    return buf.getvalue()
+
 def render_text(m: dict) -> str:
     ep = m["entry_points"]
     buf = io.StringIO()
@@ -516,19 +711,33 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--max-files", type=int, default=5000, help="cap traversal (default 5000)")
     p.add_argument("--graph", action="store_true", help="show Python import dependency graph")
     p.add_argument("--focus", metavar="MODULE", help="show deps/dependents of one module (with --graph)")
-    p.add_argument("--calls", action="store_true", help="show function-level call graph (Python)")
+    p.add_argument("--calls", action="store_true", help="show function-level call graph (multi-language)")
+    p.add_argument("--diff", action="store_true", help="show structure of files changed vs HEAD (git)")
+    p.add_argument("--install-agents", action="store_true", help="write/update AGENTS.md with a codemap block")
+    p.add_argument("--cost", action="store_true", help="append token-cost estimate to output")
     p.add_argument("--version", action="version", version=f"codemap {VERSION}")
     args = p.parse_args(argv)
 
-    # Call-graph mode (Python only)
+    root = os.path.abspath(args.root)
+
+    # --install-agents: write/update AGENTS.md
+    if args.install_agents:
+        print(install_agents(root))
+        return 0
+
+    # --diff: git-aware, structure of changed files
+    if args.diff:
+        print(render_diff(root, args.max_files))
+        return 0
+
+    # Call-graph mode (multi-language)
     if args.graph or args.calls:
-        root = os.path.abspath(args.root)
         gi = os.path.join(root, ".gitignore")
         globs, ignore_dirs = parse_gitignore(gi) if os.path.isfile(gi) else ([], [])
         files: List[str] = []
         _walk(root, globs, ignore_dirs, args.max_files, files)
         if args.calls:
-            calls = build_call_graph(files, root)
+            calls = build_call_graph_multi(files, root)
             focus = None
             if args.focus:
                 focus = args.focus
@@ -551,7 +760,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     else:
                         print(f"module not found: {args.focus}", file=sys.stderr)
                         return 1
-            print(render_calls(calls, root, start=focus))
+            text = render_calls(calls, root, start=focus)
+            if args.cost:
+                text += render_token_report({}, text)
+            print(text)
             return 0
         graph = build_graph(files, root)
         if args.focus:
@@ -579,6 +791,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             text = render_graph(graph, root, start=focus)
         else:
             text = render_graph(graph, root)
+        if args.cost:
+            text += render_token_report({}, text)
         print(text)
         return 0
 
@@ -595,6 +809,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(json.dumps(payload, indent=2))
     else:
         text = render_text(m)
+        if args.cost:
+            text += render_token_report(m, text)
         print(text)
         if args.write:
             with open(args.write, "w", encoding="utf-8") as f:
