@@ -2656,6 +2656,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(render_index(files, root, args.max_files))
         return 0
 
+    # --get-symbol / --search: fast-path from the persistent index (no walk)
+    if (args.get_symbol or args.search) and not args.full:
+        pidx = load_persistent_index(root)
+        if pidx is not None:
+            if args.get_symbol:
+                locs = pidx.get("symbols", {}).get(args.get_symbol)
+                if locs:
+                    loc = locs[0]
+                    # render summary directly from the index loc (no re-parse)
+                    sig = loc.get("source", "").split("\n")[0][:60] or args.get_symbol
+                    print(f"# get_symbol: {args.get_symbol}\n"
+                          f"{loc['module']}:{loc['line']}  [{loc['kind']}]  ~10 tokens (summary)\n\n"
+                          f"Signature: {sig}\n"
+                          f"Use `--get-symbol {args.get_symbol} --full` for the full source.\n")
+                    return 0
+            if args.search:
+                print(render_search(pidx.get("symbols", {}), args.search))
+                return 0
+
     # --trace: runtime call edges (static blind spots)
     if args.trace:
         if not args.force:
