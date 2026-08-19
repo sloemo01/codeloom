@@ -1,7 +1,7 @@
 <h1 align="center">codemap</h1>
 <p align="center">
   <b>Give your AI coding agent a map of the repo in one second.</b><br/>
-  Single-file · zero-dependency · no daemon · 100% local · <b>import graph + call graph + MCP</b>
+  Single-file · zero-dependency · no daemon · 100% local · <b>import graph + call graph + MCP + skill</b>
 </p>
 
 <p align="center">
