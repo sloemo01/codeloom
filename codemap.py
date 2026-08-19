@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.16.0"
+VERSION = "0.17.0"
 
 # --------------------------------------------------------------------------- #
 # Optional progressive-enhancement backends.
@@ -1967,6 +1967,80 @@ def render_incremental(files: List[str], root: str, max_files: int) -> str:
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
+# Persistent on-disk index (scale without a daemon).
+# `codemap --index` builds a full byte-offset symbol index once and saves it to
+# .codemap-index.json. Subsequent `--get-symbol`/`--search` load it in
+# milliseconds instead of re-parsing — the scale win for large repos, with no
+# background process. Incrementally refreshed via content hashes.
+# --------------------------------------------------------------------------- #
+
+INDEX_VERSION = 1
+
+def _index_path(root: str) -> str:
+    return os.path.join(root, ".codemap-index.json")
+
+def build_persistent_index(files: List[str], root: str) -> dict:
+    """Build a full byte-offset symbol index (all languages)."""
+    return build_byte_index(files, root)
+
+def save_persistent_index(root: str, index: dict, files: List[str]) -> None:
+    """Save the persistent index with per-file hashes for incremental refresh."""
+    data = {
+        "version": INDEX_VERSION,
+        "root": root,
+        "files": {f: _file_hash(f) for f in files},
+        "symbols": index,
+    }
+    try:
+        with open(_index_path(root), "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except OSError:
+        pass
+
+def load_persistent_index(root: str) -> Optional[dict]:
+    """Load the persistent index if present and valid."""
+    try:
+        with open(_index_path(root), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if data.get("version") == INDEX_VERSION:
+            return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return None
+
+def render_index(files: List[str], root: str, max_files: int) -> str:
+    """Build and save the persistent index. Returns a summary."""
+    index = build_persistent_index(files, root)
+    save_persistent_index(root, index, files)
+    n_syms = sum(len(v) for v in index.values())
+    buf = io.StringIO()
+    buf.write(f"# codemap --index — built persistent index\n")
+    buf.write(f"  {len(files)} files, {n_syms} symbols\n")
+    buf.write(f"  saved to {_index_path(root)}\n")
+    buf.write(f"  subsequent --get-symbol/--search load it in milliseconds\n")
+    return buf.getvalue()
+
+def render_index_status(root: str) -> str:
+    """Show whether a persistent index exists and how fresh it is."""
+    data = load_persistent_index(root)
+    buf = io.StringIO()
+    buf.write(f"# codemap --index-status\n")
+    if data is None:
+        buf.write("  No persistent index. Run `codemap --index` to build one.\n")
+        return buf.getvalue()
+    buf.write(f"  index present ({len(data.get('symbols', {}))} symbols)\n")
+    # check freshness: any file changed since index?
+    stale = 0
+    for f, h in data.get("files", {}).items():
+        if _file_hash(f) != h:
+            stale += 1
+    if stale:
+        buf.write(f"  {stale} file(s) changed since index — run `codemap --index` to refresh\n")
+    else:
+        buf.write("  index is fresh\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
 # --verify: checksum for security (curl|chmod safety)
 # --------------------------------------------------------------------------- #
 
@@ -2425,6 +2499,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--trace", nargs="+", metavar="CMD", help="run a command under sys.settrace, record runtime call edges")
     p.add_argument("--force", action="store_true", help="acknowledge --trace executes code (isolation warning)")
     p.add_argument("--install-grammars", action="store_true", help="install tree-sitter language grammars (opt-in precision)")
+    p.add_argument("--index", action="store_true", help="build + save a persistent byte-offset index (scale)")
+    p.add_argument("--index-status", action="store_true", help="show persistent index status/freshness")
     p.add_argument("--version", action="version", version=f"codemap {VERSION}")
     args = p.parse_args(argv)
 
@@ -2433,6 +2509,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     # --install-grammars: opt-in tree-sitter grammar installer
     if args.install_grammars:
         print(install_grammars())
+        return 0
+
+    # --index-status: show persistent index status
+    if args.index_status:
+        print(render_index_status(root))
+        return 0
+
+    # --index: build + save the persistent index
+    if args.index:
+        gi = os.path.join(root, ".gitignore")
+        rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+        files: List[str] = []
+        _walk(root, rules, args.max_files, files)
+        print(render_index(files, root, args.max_files))
         return 0
 
     # --trace: runtime call edges (static blind spots)
@@ -2496,10 +2586,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         _walk(root, rules, args.max_files, files)
 
         if args.get_symbol:
+            # use persistent index if present (fast path), else build fresh
+            pidx = load_persistent_index(root)
+            if pidx is not None:
+                locs = pidx.get("symbols", {}).get(args.get_symbol)
+                if locs:
+                    loc = locs[0]
+                    print(f"# get_symbol: {args.get_symbol}\n"
+                          f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
+                          f"bytes {loc['start_byte']}-{loc['end_byte']}  ~{loc['tokens']} tokens\n\n"
+                          f"{loc['source']}\n")
+                    return 0
             print(render_get_symbol(files, root, args.get_symbol))
             return 0
 
         if args.search:
+            # use persistent index if present (fast path), else build fresh
+            pidx = load_persistent_index(root)
+            if pidx is not None:
+                print(render_search(pidx.get("symbols", {}), args.search))
+                return 0
             cache = load_cache(root)
             index = cached_symbols(files, root, cache)
             save_cache(root, cache)

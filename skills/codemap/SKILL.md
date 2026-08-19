@@ -107,6 +107,12 @@ python3 codemap.py --trace tests.py /path/to/repo --force
 
 # Install tree-sitter grammars (opt-in precision)
 python3 codemap.py --install-grammars
+
+# Build a persistent byte-offset index (scale without a daemon)
+python3 codemap.py --index /path/to/repo
+
+# Check index freshness
+python3 codemap.py --index-status /path/to/repo
 ```
 
 ## Quick Reference
@@ -139,6 +145,8 @@ python3 codemap.py --install-grammars
 | `--trace CMD` | run a command, record runtime call edges (needs --force) |
 | `--force` | acknowledge --trace executes code (isolation warning) |
 | `--install-grammars` | install tree-sitter grammars (opt-in precision) |
+| `--index` | build + save a persistent byte-offset index (scale) |
+| `--index-status` | show persistent index status/freshness |
 | `--json` | machine-readable JSON |
 | `--write FILE` | write map to FILE |
 | `--no-outline` | skip per-file one-liners (faster) |
@@ -212,7 +220,7 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (37 tests).
+- `python3 tests.py` → `OK` (38 tests).
 - `codemap --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codemap --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codemap --task "text" <root>` returns a ranked module list.

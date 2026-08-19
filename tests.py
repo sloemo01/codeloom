@@ -507,6 +507,25 @@ class TestCodemap(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
+    def test_persistent_index(self):
+        # build + save a persistent index, then load it
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, "a.py"), "w") as f:
+                f.write("class Foo:\n    def bar(self):\n        return 1\n")
+            files = [os.path.join(tmp, "a.py")]
+            index = codemap.build_persistent_index(files, tmp)
+            self.assertIn("Foo", index)
+            codemap.save_persistent_index(tmp, index, files)
+            loaded = codemap.load_persistent_index(tmp)
+            self.assertIsNotNone(loaded)
+            self.assertIn("Foo", loaded["symbols"])
+            # status should report fresh
+            status = codemap.render_index_status(tmp)
+            self.assertIn("fresh", status)
+        finally:
+            shutil.rmtree(tmp)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -116,6 +116,8 @@ codemap --verify FILE        # print SHA-256 of a file (security check)
 codemap --trace CMD          # run a command, record runtime call edges (needs --force)
 codemap --force              # acknowledge --trace executes code (isolation warning)
 codemap --install-grammars   # install tree-sitter grammars (opt-in precision)
+codemap --index              # build + save a persistent byte-offset index (scale)
+codemap --index-status       # show persistent index status/freshness
 codemap --no-outline         # skip per-file one-liners (faster)
 codemap --max-files 2000     # cap traversal (default 5000)
 ```
@@ -385,6 +387,22 @@ That's the honest tradeoff: a daemon is faster for *thousands of queries per
 second on a 28M-LOC monorepo*. For an AI agent working on a repo, the MCP
 server delivers the same in-memory speed with none of the daemon's costs.
 
+## Scale without a daemon (`--index`)
+
+For large repos, `codemap --index` builds a **persistent on-disk byte-offset
+index** once, then `--get-symbol`/`--search` load it in milliseconds instead of
+re-parsing everything:
+
+```bash
+codemap --index .            # build + save the index (469 files, 4538 symbols in ~1s)
+codemap --get-symbol Agent . # loads from the index in ~0.4s
+codemap --index-status .     # is the index fresh?
+```
+
+The index survives across invocations (no daemon, no background process) and is
+incrementally refreshed via content hashes. This is the scale win for large
+repos — the persistent-index benefit without the operational surface.
+
 ## MCP server (agents call codemap natively)
 
 `codemap-mcp.py` is a **zero-dependency MCP server** (stdlib JSON-RPC over
@@ -549,6 +567,7 @@ the fastest way to answer "what is this project, actually?"
 - [x] Workspace-root import resolution (pyproject/package.json/go.mod)
 - [x] `--trace` isolation warning (`--force` required)
 - [x] `--install-grammars` (one-command opt-in tree-sitter installer)
+- [x] Persistent on-disk index (`--index`, scale without a daemon)
 - [x] Persistent parsed cache (repeated runs skip re-parsing)
 - [x] Benchmark harness + CI + release script (trust/credibility)
 - [x] Incremental mode (`--incremental`, hash-based cache)
