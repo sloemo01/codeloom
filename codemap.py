@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 
 # --------------------------------------------------------------------------- #
 # Language / structure detection
@@ -482,6 +482,121 @@ def render_calls(calls: dict, root: str, start: Optional[str] = None) -> str:
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
+# --impact: blast-radius prediction (graph reachability)
+# --------------------------------------------------------------------------- #
+
+def impact_analysis(graph: dict, start: str) -> dict:
+    """Predict the blast radius of changing a module: what depends on it
+    (direct + transitive) and what it depends on. Uses graph reachability."""
+    dependents = sorted(reachable(graph, start, "in"))
+    deps = sorted(reachable(graph, start, "out"))
+    # direct dependents (one hop) are the most likely to break
+    direct_dependents = sorted(_dependents(graph, start))
+    return {
+        "module": start,
+        "direct_dependents": direct_dependents,
+        "all_dependents": dependents,
+        "depends_on": deps,
+        "risk": "high" if len(direct_dependents) > 5 else ("medium" if direct_dependents else "low"),
+    }
+
+def render_impact(graph: dict, root: str, start: str) -> str:
+    imp = impact_analysis(graph, start)
+    buf = io.StringIO()
+    buf.write(f"# impact: {start}\n")
+    buf.write(f"risk: {imp['risk']}\n")
+    buf.write(f"\n## Direct dependents ({len(imp['direct_dependents'])}) — most likely to break\n")
+    for d in imp["direct_dependents"]:
+        buf.write(f"  {d}\n")
+    buf.write(f"\n## All dependents ({len(imp['all_dependents'])}) — transitive blast radius\n")
+    for d in imp["all_dependents"]:
+        buf.write(f"  {d}\n")
+    buf.write(f"\n## Depends on ({len(imp['depends_on'])})\n")
+    for d in imp["depends_on"]:
+        buf.write(f"  {d}\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
+# --task: task-aware relevance ranking
+# --------------------------------------------------------------------------- #
+
+def _tokenize(text: str) -> set:
+    """Lowercase, split on non-alphanumerics, drop stopwords/short tokens."""
+    stop = {"the", "and", "for", "with", "this", "that", "from", "into", "are",
+            "was", "were", "have", "has", "had", "not", "but", "its", "it's",
+            "you", "your", "our", "their", "them", "they", "will", "would",
+            "should", "could", "can", "do", "does", "did", "is", "am", "are",
+            "a", "an", "to", "of", "in", "on", "at", "by", "be", "been", "being"}
+    words = re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", text.lower())
+    return {w for w in words if len(w) > 2 and w not in stop}
+
+def _module_tokens(path: str) -> set:
+    """Extract identifier tokens from a source file (function/class/var names)."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return set()
+    return _tokenize(text)
+
+def task_relevance(files: List[str], root: str, task: str, top: int = 10) -> List[dict]:
+    """Rank modules by relevance to a task string. Score = token overlap +
+    graph centrality bonus (modules with more dependents are more impactful)."""
+    task_tokens = _tokenize(task)
+    if not task_tokens:
+        return []
+    # build import graph for centrality
+    graph = build_graph(files, root)
+    scored = []
+    for f in files:
+        if not f.endswith(".py"):
+            continue
+        mod = module_name_of(f, root)
+        toks = _module_tokens(f)
+        overlap = len(task_tokens & toks)
+        if overlap == 0:
+            continue
+        # centrality: how many modules depend on this one (transitively)
+        centrality = len(reachable(graph, mod, "in"))
+        score = overlap * 2 + min(centrality, 10)  # overlap dominates, centrality breaks ties
+        scored.append({"module": mod, "path": f, "score": score,
+                       "overlap": overlap, "centrality": centrality})
+    scored.sort(key=lambda s: (-s["score"], s["module"]))
+    return scored[:top]
+
+def render_task(files: List[str], root: str, task: str, top: int = 10) -> str:
+    results = task_relevance(files, root, task, top)
+    buf = io.StringIO()
+    buf.write(f"# task: {task}\n")
+    if not results:
+        buf.write("No modules matched the task. Try different keywords.\n")
+        return buf.getvalue()
+    buf.write(f"Top {len(results)} relevant modules (by token overlap + graph centrality):\n\n")
+    for i, r in enumerate(results, 1):
+        buf.write(f"{i}. {r['module']}  (score {r['score']}, {r['overlap']} keyword hits, "
+                  f"{r['centrality']} dependents)\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
+# --plan: agent-native prioritized reading plan
+# --------------------------------------------------------------------------- #
+
+def build_plan(files: List[str], root: str, task: str, top: int = 8) -> str:
+    """Emit a prioritized 'read these files, in this order' plan for a task."""
+    results = task_relevance(files, root, task, top)
+    buf = io.StringIO()
+    buf.write(f"# plan: {task}\n\n")
+    if not results:
+        buf.write("No relevant modules found. Refine the task description.\n")
+        return buf.getvalue()
+    buf.write("Read these files, in this order, to understand the task:\n\n")
+    for i, r in enumerate(results, 1):
+        buf.write(f"{i}. {r['path']}\n")
+        buf.write(f"   why: {r['overlap']} keyword match(es), {r['centrality']} module(s) depend on it\n")
+    buf.write("\nThen run `codemap --impact <file>` on the file you plan to change.\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
 # --diff: git-aware, structure of changed files
 # --------------------------------------------------------------------------- #
 
@@ -715,6 +830,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--diff", action="store_true", help="show structure of files changed vs HEAD (git)")
     p.add_argument("--install-agents", action="store_true", help="write/update AGENTS.md with a codemap block")
     p.add_argument("--cost", action="store_true", help="append token-cost estimate to output")
+    p.add_argument("--impact", metavar="MODULE", help="predict blast radius of changing a module")
+    p.add_argument("--task", metavar="TEXT", help="rank modules relevant to a task description")
+    p.add_argument("--plan", metavar="TEXT", help="emit a prioritized reading plan for a task")
     p.add_argument("--version", action="version", version=f"codemap {VERSION}")
     args = p.parse_args(argv)
 
@@ -729,6 +847,46 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.diff:
         print(render_diff(root, args.max_files))
         return 0
+
+    # --impact / --task / --plan: task-aware intelligence
+    if args.impact or args.task or args.plan:
+        gi = os.path.join(root, ".gitignore")
+        globs, ignore_dirs = parse_gitignore(gi) if os.path.isfile(gi) else ([], [])
+        files: List[str] = []
+        _walk(root, globs, ignore_dirs, args.max_files, files)
+
+        if args.impact:
+            graph = build_graph(files, root)
+            target = args.impact
+            target_path = os.path.join(root, target) if not os.path.isabs(target) else target
+            if os.path.isdir(target_path):
+                target = module_name_of(target_path, root)
+            elif target.endswith(".py") or os.path.isfile(target_path) or os.path.isfile(target_path + ".py"):
+                target = module_name_of(target_path + (".py" if os.path.isfile(target_path + ".py") else ""), root)
+            if target not in graph:
+                # suffix match
+                fsegs = target.split(".")
+                match = None
+                for mod in graph:
+                    msegs = mod.split(".")
+                    if len(msegs) >= len(fsegs) and msegs[-len(fsegs):] == fsegs:
+                        if match is None or len(msegs) < len(match.split(".")):
+                            match = mod
+                if match is not None:
+                    target = match
+                else:
+                    print(f"module not found: {args.impact}", file=sys.stderr)
+                    return 1
+            print(render_impact(graph, root, target))
+            return 0
+
+        if args.task:
+            print(render_task(files, root, args.task))
+            return 0
+
+        if args.plan:
+            print(build_plan(files, root, args.plan))
+            return 0
 
     # Call-graph mode (multi-language)
     if args.graph or args.calls:

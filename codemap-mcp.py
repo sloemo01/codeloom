@@ -32,7 +32,7 @@ import codemap  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codemap-mcp"
-SERVER_VERSION = "0.4.0"
+SERVER_VERSION = "0.5.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -117,6 +117,57 @@ TOOLS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "codemap_impact",
+        "description": (
+            "Predict the blast radius of changing a module: which modules depend "
+            "on it (direct + transitive) and what it depends on. Answers 'what "
+            "breaks if I change this?' before the agent edits."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "module": {"type": "string", "description": "Module to analyze, e.g. 'core.engine' or 'src/core/engine.py'"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["module"],
+        },
+    },
+    {
+        "name": "codemap_task",
+        "description": (
+            "Rank modules relevant to a task description, by token overlap + "
+            "graph centrality. Use to find which files matter for a specific task "
+            "before reading the whole repo."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "task": {"type": "string", "description": "Task description, e.g. 'fix the login bug'"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["task"],
+        },
+    },
+    {
+        "name": "codemap_plan",
+        "description": (
+            "Emit a prioritized 'read these files, in this order' plan for a task. "
+            "The agent-native format: tells the agent exactly what to read to "
+            "understand a task before editing."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "task": {"type": "string", "description": "Task description"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["task"],
+        },
+    },
 ]
 
 
@@ -186,6 +237,25 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         text = codemap.render_calls(calls, root, start=start)
     elif name == "codemap_diff":
         text = codemap.render_diff(root, max_files)
+    elif name == "codemap_impact":
+        module = args.get("module")
+        if not module:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'module' argument"}]}
+        graph = codemap.build_graph(files, root)
+        resolved = _resolve_focus(graph, module, root)
+        if resolved is None:
+            return {"isError": True, "content": [{"type": "text", "text": f"module not found: {module}"}]}
+        text = codemap.render_impact(graph, root, resolved)
+    elif name == "codemap_task":
+        task = args.get("task")
+        if not task:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'task' argument"}]}
+        text = codemap.render_task(files, root, task)
+    elif name == "codemap_plan":
+        task = args.get("task")
+        if not task:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'task' argument"}]}
+        text = codemap.build_plan(files, root, task)
     else:
         return {"isError": True, "content": [{"type": "text", "text": f"unknown tool: {name}"}]}
 

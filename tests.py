@@ -163,6 +163,41 @@ class TestCodemap(unittest.TestCase):
         self.assertGreater(codemap.estimate_tokens("hello world"), 0)
         self.assertEqual(codemap.estimate_tokens(""), 1)
 
+    def test_impact_analysis(self):
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        graph = codemap.build_graph(files, self.repo)
+        imp = codemap.impact_analysis(graph, "src.core.engine")
+        # src.cli and tests.test_cli depend on engine
+        self.assertIn("src.cli", imp["direct_dependents"])
+        self.assertIn("tests.test_cli", imp["direct_dependents"])
+        # engine depends on retry
+        self.assertIn("src.utils.retry", imp["depends_on"])
+
+    def test_task_relevance(self):
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        results = codemap.task_relevance(files, self.repo, "retry logic")
+        self.assertTrue(results)
+        # retry module should rank first for 'retry' task
+        self.assertEqual(results[0]["module"], "src.utils.retry")
+
+    def test_build_plan(self):
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        plan = codemap.build_plan(files, self.repo, "add retry to engine")
+        self.assertIn("Read these files", plan)
+        self.assertIn("src/core/engine.py", plan)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

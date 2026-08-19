@@ -68,6 +68,9 @@ That's it. Under a second, zero setup, works offline. Cross-platform — macOS, 
 | `codemap --diff` | "What changed, and what's relevant to my current task?" |
 | `codemap --install-agents` | "Make every future agent session auto-load the map" |
 | `codemap --cost` | "How many tokens is this saving me?" |
+| `codemap --task "X"` | "Which files matter for task X?" |
+| `codemap --impact X` | "What breaks if I change X?" |
+| `codemap --plan "X"` | "Read these files, in this order, to do task X" |
 
 ## Usage
 
@@ -83,9 +86,41 @@ codemap --calls --focus X    # calls inside one module
 codemap --diff               # structure of files changed vs HEAD (git)
 codemap --install-agents     # write/update AGENTS.md with a codemap block
 codemap --cost               # append token-cost estimate to output
+codemap --impact X           # predict blast radius of changing module X
+codemap --task "text"        # rank modules relevant to a task
+codemap --plan "text"        # prioritized reading plan for a task
 codemap --no-outline         # skip per-file one-liners (faster)
 codemap --max-files 2000     # cap traversal (default 5000)
 ```
+
+## Task-aware intelligence (`--task`, `--impact`, `--plan`)
+
+The competitors are all *retrieval* tools — they help an agent **find** things.
+codemap is a *reasoning* tool: it connects structure to the **actual task** the
+agent is working on. No competitor does this.
+
+```bash
+# Rank modules relevant to a task (token overlap + graph centrality)
+codemap --task "fix the login bug" .
+# 1. src/auth/login.py  (score 8, 3 keyword hits, 12 dependents)
+# 2. src/auth/session.py (score 6, 2 keyword hits, 8 dependents)
+
+# Predict the blast radius of changing a module
+codemap --impact core/engine.py .
+# risk: high
+# ## Direct dependents (34) — most likely to break
+#   src.main, tests.test_engine, ...
+
+# Agent-native prioritized reading plan
+codemap --plan "add retry to engine" .
+# Read these files, in this order, to understand the task:
+# 1. src/core/engine.py  (why: 2 keyword matches, 2 modules depend on it)
+# 2. src/utils/retry.py  (why: 1 keyword match, 3 modules depend on it)
+```
+
+`--impact` answers *"what breaks if I change this?"* before the agent edits.
+`--task` and `--plan` turn codemap from a passive map into a **task-orientation
+engine** — the agent gets a prioritized reading list instead of a 468-file tree.
 
 ## Structural intelligence (`--graph`, `--focus`, `--calls`)
 
@@ -169,9 +204,11 @@ stdio — no `mcp` package, no daemon). Register it with any MCP-capable agent:
 }
 ```
 
-Exposes five tools: `codemap_map`, `codemap_graph`, `codemap_focus`,
-`codemap_calls`, `codemap_diff`. Your agent can now build a mental model of any
-repo, trace execution flow, and see what's changed — natively, no install, no index.
+Exposes eight tools: `codemap_map`, `codemap_graph`, `codemap_focus`,
+`codemap_calls`, `codemap_diff`, `codemap_impact`, `codemap_task`,
+`codemap_plan`. Your agent can build a mental model, trace execution flow, see
+what changed, predict blast radius, and get a task-oriented reading plan —
+natively, no install, no index.
 
 ## How it works
 
@@ -199,6 +236,9 @@ computes the structure, prints it, and exits.
 | Import graph | **yes — `--graph`, <1s** | yes, but after indexing |
 | Function call graph | **yes — `--calls`, multi-lang** | partial |
 | Git-aware `--diff` | **yes — always fresh** | no |
+| **Task relevance (`--task`)** | **yes** | **no** |
+| **Change impact (`--impact`)** | **yes** | **no** |
+| **Reading plan (`--plan`)** | **yes** | **no** |
 | `--install-agents` | **yes — one command** | manual setup |
 | MCP server | **yes — zero-dep `codemap-mcp.py`** | yes |
 | Offline | yes | varies |
@@ -226,8 +266,17 @@ the fastest way to answer "what is this project, actually?"
 - [x] Git-aware `--diff` (structure of changed files)
 - [x] `--install-agents` (auto-write AGENTS.md)
 - [x] Token-cost reporting (`--cost`)
+- [x] Task-aware relevance (`--task`)
+- [x] Change-impact prediction (`--impact`)
+- [x] Agent-native reading plan (`--plan`)
 - [ ] Incremental mode (only re-emit changed modules)
 - [ ] Multi-language import graph (beyond Python)
+
+## Benchmarks
+
+Honest, reproducible numbers vs the competitors live in
+[`benchmarks/`](benchmarks/README.md) — including the caveat that codemap is a
+complement, not a replacement, for the heavy tools.
 
 ## Contributing
 
