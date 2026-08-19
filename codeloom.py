@@ -2356,6 +2356,9 @@ INDEX_VERSION = 1
 def _index_path(root: str) -> str:
     return os.path.join(root, ".codeloom-index.json")
 
+def _index_bin_path(root: str) -> str:
+    return os.path.join(root, ".codeloom-index.bin")
+
 def build_persistent_index(files: List[str], root: str) -> dict:
     """Build a full byte-offset symbol index (all languages)."""
     return build_byte_index(files, root)
@@ -2375,7 +2378,8 @@ def save_persistent_index(root: str, index: dict, files: List[str], kg: Optional
     """Save the persistent index with per-file (mtime, size) for incremental
     refresh. Size is tracked because Windows mtime has ~2s resolution, so a
     quick append may not change mtime — but it always changes size.
-    `kg` is the optional knowledge-graph edges (call + import)."""
+    `kg` is the optional knowledge-graph edges (call + import).
+    Writes a binary (marshal) copy for fast load at scale."""
     data = {
         "version": INDEX_VERSION,
         "root": root,
@@ -2390,9 +2394,26 @@ def save_persistent_index(root: str, index: dict, files: List[str], kg: Optional
             json.dump(data, f)
     except OSError:
         pass
+    # binary copy for fast load (marshal is stdlib, ~10x faster than json)
+    try:
+        import marshal
+        with open(_index_bin_path(root), "wb") as f:
+            marshal.dump(data, f)
+    except OSError:
+        pass
 
 def load_persistent_index(root: str) -> Optional[dict]:
-    """Load the persistent index if present and valid."""
+    """Load the persistent index if present and valid. Prefers the binary
+    (marshal) copy for speed; falls back to JSON."""
+    import marshal
+    # binary first — much faster at scale
+    try:
+        with open(_index_bin_path(root), "rb") as f:
+            data = marshal.load(f)
+        if data.get("version") == INDEX_VERSION:
+            return data
+    except (OSError, ValueError, EOFError):
+        pass
     try:
         with open(_index_path(root), "r", encoding="utf-8") as f:
             data = json.load(f)
