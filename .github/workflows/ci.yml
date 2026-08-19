@@ -22,4 +22,4 @@ jobs:
       - name: Verify CLI works
         run: |
           python codemap.py --version
-          python codemap.py --help > /dev/null
+          python codemap.py --help
