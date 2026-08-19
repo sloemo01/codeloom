@@ -6,7 +6,7 @@ Set Padding 24
 Set Theme "Dracula"
 Set Framerate 24
 
-Type "cd ~/Desktop/codeloom/demo-repo"
+Type "cd ~/Desktop/codemap/demo-repo"
 Enter
 Sleep 300ms
 
