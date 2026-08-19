@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 # --------------------------------------------------------------------------- #
 # Language / structure detection
@@ -406,6 +406,81 @@ def render_graph(graph: dict, root: str, start: Optional[str] = None) -> str:
         buf.write(f"  {m} -> {d}\n")
     return buf.getvalue()
 
+# --------------------------------------------------------------------------- #
+# Function-level call graph (Python `ast`)
+# --------------------------------------------------------------------------- #
+
+def build_call_graph(files: List[str], root: str) -> dict:
+    """Build function-level call graph: {module: {func: set(called_funcs)}}.
+    Only reports calls to functions DEFINED within the codebase (across all
+    modules) — builtins and stdlib calls are noise for structural understanding.
+    Best-effort static analysis via `ast`."""
+    # First pass: collect all defined functions per module.
+    defined: dict = {}  # module -> set of function names
+    for f in files:
+        if not f.endswith(".py"):
+            continue
+        mod = module_name_of(f, root)
+        defined[mod] = set()
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                tree = ast.parse(fh.read())
+        except (SyntaxError, OSError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                defined[mod].add(node.name)
+
+    # All function names defined anywhere in the codebase.
+    all_defined: set = set()
+    for s in defined.values():
+        all_defined |= s
+
+    # Second pass: find calls, keeping only callees defined in the codebase.
+    calls: dict = {}  # module -> {caller: set(callee)}
+    for f in files:
+        if not f.endswith(".py"):
+            continue
+        mod = module_name_of(f, root)
+        calls[mod] = {}
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                tree = ast.parse(fh.read())
+        except (SyntaxError, OSError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                caller = node.name
+                callees = set()
+                for sub in ast.walk(node):
+                    if isinstance(sub, ast.Call):
+                        fn = sub.func
+                        if isinstance(fn, ast.Name) and fn.id in all_defined:
+                            callees.add(fn.id)
+                        elif isinstance(fn, ast.Attribute) and fn.attr in all_defined:
+                            callees.add(fn.attr)
+                if callees:
+                    calls[mod][caller] = callees
+    return calls
+
+def render_calls(calls: dict, root: str, start: Optional[str] = None) -> str:
+    buf = io.StringIO()
+    if start:
+        # focus: show calls in one module
+        buf.write(f"# function calls in {start}\n")
+        for caller, callees in sorted(calls.get(start, {}).items()):
+            if callees:
+                buf.write(f"  {caller}() -> {', '.join(sorted(callees))}\n")
+        return buf.getvalue()
+    buf.write("# function call graph\n")
+    total = sum(len(c) for c in calls.values())
+    buf.write(f"{len(calls)} modules, {total} callers\n\n")
+    for mod, funcs in sorted(calls.items()):
+        for caller, callees in sorted(funcs.items()):
+            if callees:
+                buf.write(f"  {mod}.{caller}() -> {', '.join(sorted(callees))}\n")
+    return buf.getvalue()
+
 def render_text(m: dict) -> str:
     ep = m["entry_points"]
     buf = io.StringIO()
@@ -441,16 +516,43 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--max-files", type=int, default=5000, help="cap traversal (default 5000)")
     p.add_argument("--graph", action="store_true", help="show Python import dependency graph")
     p.add_argument("--focus", metavar="MODULE", help="show deps/dependents of one module (with --graph)")
+    p.add_argument("--calls", action="store_true", help="show function-level call graph (Python)")
     p.add_argument("--version", action="version", version=f"codemap {VERSION}")
     args = p.parse_args(argv)
 
     # Call-graph mode (Python only)
-    if args.graph:
+    if args.graph or args.calls:
         root = os.path.abspath(args.root)
         gi = os.path.join(root, ".gitignore")
         globs, ignore_dirs = parse_gitignore(gi) if os.path.isfile(gi) else ([], [])
         files: List[str] = []
         _walk(root, globs, ignore_dirs, args.max_files, files)
+        if args.calls:
+            calls = build_call_graph(files, root)
+            focus = None
+            if args.focus:
+                focus = args.focus
+                focus_path = os.path.join(root, focus) if not os.path.isabs(focus) else focus
+                if os.path.isdir(focus_path):
+                    focus = module_name_of(focus_path, root)
+                elif focus.endswith(".py") or os.path.isfile(focus_path) or os.path.isfile(focus_path + ".py"):
+                    focus = module_name_of(focus_path + (".py" if os.path.isfile(focus_path + ".py") else ""), root)
+                if focus not in calls:
+                    # suffix match (e.g. 'core.engine' matches 'src.core.engine')
+                    fsegs = focus.split(".")
+                    match = None
+                    for mod in calls:
+                        msegs = mod.split(".")
+                        if len(msegs) >= len(fsegs) and msegs[-len(fsegs):] == fsegs:
+                            if match is None or len(msegs) < len(match.split(".")):
+                                match = mod
+                    if match is not None:
+                        focus = match
+                    else:
+                        print(f"module not found: {args.focus}", file=sys.stderr)
+                        return 1
+            print(render_calls(calls, root, start=focus))
+            return 0
         graph = build_graph(files, root)
         if args.focus:
             # accept file path, directory (package), or dotted module name

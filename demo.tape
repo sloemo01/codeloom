@@ -13,9 +13,14 @@ Sleep 300ms
 Type "codemap ."
 Enter
 Sleep 1s
-Sleep 600ms
+Sleep 500ms
 
-Type "codemap --json . | head -20"
+Type "codemap --graph ."
 Enter
-Sleep 900ms
-Sleep 400ms
+Sleep 1s
+Sleep 500ms
+
+Type "codemap --graph --focus core.engine ."
+Enter
+Sleep 1s
+Sleep 500ms

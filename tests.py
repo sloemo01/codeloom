@@ -121,6 +121,20 @@ class TestCodemap(unittest.TestCase):
         self.assertIn("tests.test_cli", fs["depended_on_by"])
         self.assertIn("src.utils.retry", fs["depends_on"])
 
+    def test_call_graph(self):
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        calls = codemap.build_call_graph(files, self.repo)
+        # src.cli.main calls retry (function defined in src.utils.retry)
+        self.assertIn("retry", calls.get("src.cli", {}).get("main", set()))
+        # src.core.engine.run calls retry
+        self.assertIn("retry", calls.get("src.core.engine", {}).get("run", set()))
+        # builtins like len/str should NOT appear (filtered out)
+        self.assertNotIn("len", calls.get("src.cli", {}).get("main", set()))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
