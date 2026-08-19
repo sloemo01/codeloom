@@ -411,6 +411,40 @@ class TestCodemap(unittest.TestCase):
         dead = codemap.dead_code(files, self.repo)
         self.assertIsInstance(dead, list)
 
+    def test_byte_index(self):
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        index = codemap.build_byte_index(files, self.repo)
+        self.assertIn("Engine", index)
+        loc = index["Engine"][0]
+        self.assertIn("start_byte", loc)
+        self.assertIn("end_byte", loc)
+        self.assertGreater(loc["end_byte"], loc["start_byte"])
+        self.assertIn("tokens", loc)
+        self.assertGreater(loc["tokens"], 0)
+
+    def test_get_symbol(self):
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        loc = codemap.get_symbol(files, self.repo, "Engine")
+        self.assertIsNotNone(loc)
+        self.assertIn("class Engine", loc["source"])
+        self.assertIn("tokens", loc)
+
+    def test_get_snippet_by_offset(self):
+        path = os.path.join(self.repo, "src", "core", "engine.py")
+        s = codemap.get_snippet_by_offset(path, 0, 30)
+        self.assertIsNotNone(s)
+        self.assertIn("tokens", s)
+        self.assertIn("bytes", s)
+        self.assertGreater(s["bytes"], 0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

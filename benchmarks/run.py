@@ -36,10 +36,50 @@ def time_op(cmd, cwd, runs):
     return min(times), sum(times) / len(times)
 
 
+def token_consumption(repo, queries):
+    """Measure tokens sent to the LLM for each retrieval strategy.
+    Baseline: grep-and-read (open whole files). codemap: --get-symbol.
+    Returns (baseline_tokens, codemap_tokens) per query."""
+    import re
+    results = []
+    for q in queries:
+        # baseline: grep for the query, open matching files whole
+        # (use a Python fallback so rg isn't required)
+        matching = []
+        for root, _, fs in os.walk(repo):
+            if ".git" in root or "node_modules" in root or ".venv" in root:
+                continue
+            for fn in fs:
+                if fn.endswith((".py", ".js", ".ts", ".go", ".rs", ".java")):
+                    p = os.path.join(root, fn)
+                    try:
+                        with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                            if q.lower() in fh.read().lower():
+                                matching.append(p)
+                    except OSError:
+                        pass
+        baseline_tokens = 0
+        for f in matching[:3]:
+            try:
+                with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                    baseline_tokens += len(fh.read()) // 4
+            except OSError:
+                pass
+        # codemap: --get-symbol returns just the symbol + token count
+        cmd = [sys.executable, CODEmap, "--get-symbol", q, "."]
+        r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
+        m = re.search(r"~(\d+) tokens", r.stdout)
+        codemap_tokens = int(m.group(1)) if m else 0
+        results.append({"query": q, "baseline_tokens": baseline_tokens,
+                        "codemap_tokens": codemap_tokens})
+    return results
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=None, help="path to an existing repo (else clone browser-use)")
     ap.add_argument("--runs", type=int, default=3)
+    ap.add_argument("--tokens", action="store_true", help="also run the token-consumption benchmark")
     args = ap.parse_args()
 
     if args.repo:
@@ -58,6 +98,18 @@ def main():
         cmd = [sys.executable, CODEmap] + args_list
         best, avg = time_op(cmd, repo, args.runs)
         print(f"{name:<10} {best:<10.3f} {avg:<10.3f}")
+
+    if args.tokens:
+        print("\n=== Token consumption (vs grep-and-read baseline) ===")
+        queries = ["Agent", "click", "extract"]
+        results = token_consumption(repo, queries)
+        print(f"{'query':<10} {'baseline':<12} {'codemap':<12} {'savings':<10}")
+        print("-" * 44)
+        for r in results:
+            savings = 0
+            if r["baseline_tokens"] > 0:
+                savings = (1 - r["codemap_tokens"] / r["baseline_tokens"]) * 100
+            print(f"{r['query']:<10} {r['baseline_tokens']:<12} {r['codemap_tokens']:<12} {savings:<10.1f}%")
 
 
 if __name__ == "__main__":

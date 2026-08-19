@@ -32,7 +32,7 @@ import codemap  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codemap-mcp"
-SERVER_VERSION = "0.13.0"
+SERVER_VERSION = "0.14.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -299,6 +299,40 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "codemap_get_symbol",
+        "description": (
+            "Token-counted symbol retrieval: return the smallest snippet needed to "
+            "understand a symbol, with exact byte offsets + token estimate. This is "
+            "the token-shaving primitive — agents request only what they need."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "symbol": {"type": "string", "description": "Symbol name to retrieve"},
+                "context_lines": {"type": "integer", "description": "Surrounding lines to include (default 2)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["symbol"],
+        },
+    },
+    {
+        "name": "codemap_snippet",
+        "description": (
+            "Extract a byte-range snippet from a file. Returns the text + token "
+            "estimate + byte count. Use for precise, token-efficient retrieval."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path to the file"},
+                "start_byte": {"type": "integer", "description": "Start byte offset"},
+                "end_byte": {"type": "integer", "description": "End byte offset"},
+            },
+            "required": ["path", "start_byte", "end_byte"],
+        },
+    },
+    {
         "name": "codemap_incremental",
         "description": (
             "Show which files changed since the last run, using a hash-based "
@@ -475,6 +509,22 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         text = codemap.render_similar(files, root, symbol)
     elif name == "codemap_deadcode":
         text = codemap.render_deadcode(files, root)
+    elif name == "codemap_get_symbol":
+        symbol = args.get("symbol")
+        if not symbol:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
+        ctx = args.get("context_lines", 2)
+        text = codemap.render_get_symbol(files, root, symbol, ctx)
+    elif name == "codemap_snippet":
+        path = args.get("path")
+        start = args.get("start_byte")
+        end = args.get("end_byte")
+        if not path or start is None or end is None:
+            return {"isError": True, "content": [{"type": "text", "text": "missing path/start_byte/end_byte"}]}
+        s = codemap.get_snippet_by_offset(path, int(start), int(end))
+        if s is None:
+            return {"isError": True, "content": [{"type": "text", "text": f"cannot read {path}"}]}
+        text = f"# snippet: {path} bytes {start}-{end}  ~{s['tokens']} tokens  {s['bytes']} bytes\n\n{s['text']}"
     elif name == "codemap_incremental":
         text = codemap.render_incremental(files, root, max_files)
     elif name == "codemap_verify":

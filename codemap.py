@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.13.0"
+VERSION = "0.14.0"
 
 # --------------------------------------------------------------------------- #
 # Optional progressive-enhancement backends.
@@ -1427,6 +1427,180 @@ def render_read(files: List[str], root: str, symbol: str) -> str:
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
+# Byte-offset symbol index + token-counted snippet API (token shaving)
+# This is the "match jcodemunch's token-shaving retrieval" layer. Returns
+# exact byte ranges + token estimates so agents request only what they need.
+# --------------------------------------------------------------------------- #
+
+def build_byte_index(files, root):
+    """Build a symbol index with precise byte offsets + token estimates.
+    Returns {symbol: [{module, kind, line, start_byte, end_byte, tokens,
+    source}]}. Python uses ast (precise byte offsets); other languages use
+    tree-sitter or brace-matching."""
+    index = {}
+    for f in files:
+        ext = os.path.splitext(f)[1].lower()
+        mod = module_name_of(f, root)
+        if ext == ".py":
+            _index_python_bytes(f, mod, index)
+        elif ext in CALL_LANG_RULES:
+            _index_other_bytes(f, mod, ext, index)
+    return index
+
+def _index_python_bytes(path, mod, index):
+    """Index Python symbols with byte offsets via ast."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        tree = ast.parse(text)
+    except (SyntaxError, OSError):
+        return
+    lines = text.splitlines(keepends=True)
+    # build line -> byte offset map
+    offsets = [0]
+    for ln in lines:
+        offsets.append(offsets[-1] + len(ln.encode("utf-8")))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            start_line = node.lineno - 1
+            end_line = getattr(node, "end_lineno", node.lineno) - 1
+            start_byte = offsets[start_line]
+            end_byte = offsets[end_line] + len(lines[end_line].encode("utf-8"))
+            source = "".join(lines[start_line:end_line + 1])
+            kind = "class" if isinstance(node, ast.ClassDef) else "function"
+            index.setdefault(node.name, []).append({
+                "module": mod, "path": path, "kind": kind, "line": node.lineno,
+                "start_byte": start_byte, "end_byte": end_byte,
+                "tokens": estimate_tokens(source), "source": source,
+            })
+
+def _index_other_bytes(path, mod, ext, index):
+    """Index non-Python symbols with byte offsets (tree-sitter or brace-match)."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return
+    lines = text.splitlines(keepends=True)
+    offsets = [0]
+    for ln in lines:
+        offsets.append(offsets[-1] + len(ln.encode("utf-8")))
+    # tree-sitter fast-path
+    ts_root = _ts_parse(path, ext)
+    if ts_root is not None:
+        def walk(node):
+            if node.type in ("function_definition", "function_declaration",
+                             "method_definition", "class_declaration",
+                             "struct_item", "impl_item", "func_declaration",
+                             "method_declaration", "type_declaration"):
+                for child in node.children:
+                    if child.type in ("identifier", "name", "type_identifier",
+                                      "field_identifier"):
+                        name = child.text.decode("utf-8", "replace")
+                        start_byte = node.start_byte
+                        end_byte = node.end_byte
+                        source = text[start_byte:end_byte]
+                        kind = "class" if "class" in node.type or "struct" in node.type else "function"
+                        index.setdefault(name, []).append({
+                            "module": mod, "kind": kind, "line": node.start_point[0] + 1,
+                            "start_byte": start_byte, "end_byte": end_byte,
+                            "tokens": estimate_tokens(source), "source": source,
+                        })
+                        break
+            for child in node.children:
+                walk(child)
+        walk(ts_root)
+        return
+    # brace-matching fallback
+    import re as _re
+    def_re, _ = CALL_LANG_RULES[ext]
+    for i, line in enumerate(lines):
+        m = _re.match(def_re, line)
+        if not m:
+            continue
+        name = next((g for g in m.groups() if g), None)
+        if not name:
+            continue
+        start_byte = offsets[i]
+        depth = 0
+        opened = False
+        end_byte = offsets[i] + len(lines[i].encode("utf-8"))
+        for j in range(i, len(lines)):
+            for ch in lines[j]:
+                if ch == "{":
+                    depth += 1
+                    opened = True
+                elif ch == "}":
+                    depth -= 1
+            if opened and depth == 0:
+                end_byte = offsets[j] + len(lines[j].encode("utf-8"))
+                break
+        source = text[start_byte:end_byte]
+        index.setdefault(name, []).append({
+            "module": mod, "kind": "function", "line": i + 1,
+            "start_byte": start_byte, "end_byte": end_byte,
+            "tokens": estimate_tokens(source), "source": source,
+        })
+
+def get_symbol(files, root, symbol, context_lines=2):
+    """Return the smallest snippet needed to understand a symbol, with byte
+    offsets + token estimate. context_lines adds surrounding lines."""
+    index = build_byte_index(files, root)
+    locs = index.get(symbol)
+    if not locs:
+        return None
+    loc = locs[0]
+    if context_lines > 0:
+        # expand the byte range to include surrounding lines
+        try:
+            with open(loc["path"], "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+            lines = text.splitlines(keepends=True)
+            offsets = [0]
+            for ln in lines:
+                offsets.append(offsets[-1] + len(ln.encode("utf-8")))
+            # find the line index of start_byte
+            start_line = 0
+            for i, off in enumerate(offsets):
+                if off <= loc["start_byte"]:
+                    start_line = i
+            end_line = start_line
+            for i, off in enumerate(offsets):
+                if off <= loc["end_byte"]:
+                    end_line = i
+            new_start = max(0, start_line - context_lines)
+            new_end = min(len(lines), end_line + context_lines + 1)
+            loc["start_byte"] = offsets[new_start]
+            loc["end_byte"] = offsets[new_end - 1] + len(lines[new_end - 1].encode("utf-8"))
+            loc["source"] = "".join(lines[new_start:new_end])
+            loc["tokens"] = estimate_tokens(loc["source"])
+        except OSError:
+            pass
+    return loc
+
+def get_snippet_by_offset(path, start_byte, end_byte):
+    """Extract a byte-range snippet from a file. Returns {text, tokens, bytes}."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    snippet = text[start_byte:end_byte]
+    return {"text": snippet, "tokens": estimate_tokens(snippet), "bytes": len(snippet.encode("utf-8"))}
+
+def render_get_symbol(files, root, symbol, context_lines=2):
+    loc = get_symbol(files, root, symbol, context_lines)
+    buf = io.StringIO()
+    buf.write(f"# get_symbol: {symbol}\n")
+    if loc is None:
+        buf.write("Symbol not found.\n")
+        return buf.getvalue()
+    buf.write(f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
+              f"bytes {loc['start_byte']}-{loc['end_byte']}  ~{loc['tokens']} tokens\n\n")
+    buf.write(loc["source"] + "\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
 # --explain: plain-English explanation of a symbol (AST + call graph, no LLM)
 # --------------------------------------------------------------------------- #
 
@@ -2136,6 +2310,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--explain", metavar="SYMBOL", help="plain-English explanation of a symbol (AST + call graph)")
     p.add_argument("--similar", metavar="SYMBOL", help="find structurally similar functions/classes (refactoring)")
     p.add_argument("--deadcode", action="store_true", help="find functions defined but never called")
+    p.add_argument("--get-symbol", metavar="SYMBOL", help="token-counted symbol snippet (byte offsets + token estimate)")
+    p.add_argument("--snippet", nargs=3, metavar=("PATH", "START", "END"), help="extract a byte-range snippet from a file")
     p.add_argument("--incremental", action="store_true", help="show files changed since last run (hash-based cache)")
     p.add_argument("--verify", metavar="FILE", help="print SHA-256 of a file (security check)")
     p.add_argument("--trace", nargs="+", metavar="CMD", help="run a command under sys.settrace, record runtime call edges")
@@ -2152,6 +2328,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     # --verify: checksum for security
     if args.verify:
         print(render_verify(args.verify))
+        return 0
+
+    # --snippet: byte-range extraction
+    if args.snippet:
+        path, start, end = args.snippet
+        path = os.path.join(root, path) if not os.path.isabs(path) else path
+        try:
+            s = get_snippet_by_offset(path, int(start), int(end))
+        except ValueError:
+            print("Error: START and END must be integers.")
+            return 1
+        if s is None:
+            print(f"Error: cannot read {path}")
+            return 1
+        print(f"# snippet: {path} bytes {start}-{end}  ~{s['tokens']} tokens  {s['bytes']} bytes\n")
+        print(s["text"])
         return 0
 
     # --install-agents: write/update AGENTS.md
@@ -2173,13 +2365,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(render_incremental(files, root, args.max_files))
         return 0
 
-    # --cross / --search / --usages / --grep / --read / --explain / --similar / --deadcode
+    # --cross / --search / --usages / --grep / --read / --explain / --similar / --deadcode / --get-symbol
     if args.cross or args.search or args.usages or args.grep or args.read \
-       or args.explain or args.similar or args.deadcode:
+       or args.explain or args.similar or args.deadcode or args.get_symbol:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
+
+        if args.get_symbol:
+            print(render_get_symbol(files, root, args.get_symbol))
+            return 0
 
         if args.search:
             cache = load_cache(root)

@@ -79,6 +79,8 @@ That's it. Under a second, zero setup, works offline. Cross-platform — macOS, 
 | `codemap --explain X` | "What does symbol X do?" (plain-English, no LLM) |
 | `codemap --similar X` | "What's structurally similar to X?" (refactoring) |
 | `codemap --deadcode` | "What's defined but never called?" (dead code) |
+| `codemap --get-symbol X` | "Smallest snippet for X, with token count" (token-shaving) |
+| `codemap --snippet P S E` | "Extract bytes S-E from file P" (byte-range) |
 | `codemap --incremental` | "What changed since last run?" (hash-based cache) |
 | `codemap --verify FILE` | "Is this file the official codemap?" (SHA-256) |
 
@@ -107,6 +109,8 @@ codemap --read SYMBOL        # extract exact source of a function/class/method
 codemap --explain SYMBOL     # plain-English explanation of a symbol (no LLM)
 codemap --similar SYMBOL     # find structurally similar functions/classes
 codemap --deadcode           # find functions defined but never called
+codemap --get-symbol X       # token-counted symbol snippet (byte offsets + tokens)
+codemap --snippet P S E      # extract bytes S-E from file P
 codemap --incremental        # show files changed since last run (hash-based cache)
 codemap --verify FILE        # print SHA-256 of a file (security check)
 codemap --trace CMD          # run a command, record runtime call edges
@@ -215,6 +219,30 @@ codemap --deadcode .
 AST + call graph — no LLM, no tokens. `--similar` finds refactoring candidates
 with the same signature shape. `--deadcode` surfaces unused symbols so the agent
 knows what's safe to remove.
+
+## Token-shaving retrieval (`--get-symbol`, `--snippet`)
+
+The "match jcodemunch's token-shaving" layer. `--get-symbol` returns the
+smallest snippet needed to understand a symbol, with exact byte offsets and a
+token estimate — so the agent requests only what it needs:
+
+```bash
+codemap --get-symbol Engine .
+# src.core.engine:4  [class]  bytes 30-170  ~35 tokens
+# class Engine:
+#     def __init__(self):
+#         self.cfg = Config()
+#     def run(self, fn):
+#         retry(fn)
+```
+
+`--snippet` extracts an exact byte range from a file, returning the text +
+token estimate + byte count. Both are the precise-retrieval primitives that
+let agents budget their context window — the same token-shaving jcodemunch is
+famous for, in one stdlib file.
+
+The benchmark harness (`benchmarks/run.py --tokens`) measures this honestly:
+token consumption for `--get-symbol` vs a grep-and-read baseline, per query.
 
 ## Task-aware intelligence (`--task`, `--impact`, `--plan`)
 
@@ -351,16 +379,18 @@ stdio — no `mcp` package, no daemon). Register it with any MCP-capable agent:
 }
 ```
 
-Exposes nineteen tools: `codemap_map`, `codemap_graph`, `codemap_focus`,
+Exposes twenty-one tools: `codemap_map`, `codemap_graph`, `codemap_focus`,
 `codemap_calls`, `codemap_diff`, `codemap_impact`, `codemap_task`,
 `codemap_plan`, `codemap_cross`, `codemap_search`, `codemap_usages`,
 `codemap_grep`, `codemap_read`, `codemap_explain`, `codemap_similar`,
-`codemap_deadcode`, `codemap_incremental`, `codemap_verify`, `codemap_trace`.
-Your agent can build a mental model, trace execution flow across files, see
-what changed, predict blast radius, get a task-oriented reading plan, search
-any symbol, find where it's used, grep for snippets, read exact symbol source,
-explain a symbol, find refactoring candidates, detect dead code, verify a
-download, and capture runtime call edges — natively, no install, no index.
+`codemap_deadcode`, `codemap_get_symbol`, `codemap_snippet`,
+`codemap_incremental`, `codemap_verify`, `codemap_trace`. Your agent can build
+a mental model, trace execution flow across files, see what changed, predict
+blast radius, get a task-oriented reading plan, search any symbol, find where
+it's used, grep for snippets, read exact symbol source, explain a symbol, find
+refactoring candidates, detect dead code, retrieve token-counted snippets,
+extract byte ranges, verify a download, and capture runtime call edges —
+natively, no install, no index.
 
 ## How it works
 
@@ -471,6 +501,9 @@ the fastest way to answer "what is this project, actually?"
 - [x] Symbol explanation (`--explain`, AST + call graph, no LLM)
 - [x] Similar-symbol search (`--similar`, refactoring)
 - [x] Dead-code detection (`--deadcode`)
+- [x] Token-counted symbol retrieval (`--get-symbol`, byte offsets + tokens)
+- [x] Byte-range snippet extraction (`--snippet`)
+- [x] Token-consumption benchmark (`benchmarks/run.py --tokens`)
 - [x] Persistent parsed cache (repeated runs skip re-parsing)
 - [x] Benchmark harness + CI + release script (trust/credibility)
 - [x] Incremental mode (`--incremental`, hash-based cache)

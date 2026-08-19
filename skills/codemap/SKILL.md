@@ -90,6 +90,12 @@ python3 codemap.py --similar run /path/to/repo
 # Find dead code (defined but never called)
 python3 codemap.py --deadcode /path/to/repo
 
+# Token-counted symbol snippet (byte offsets + token estimate)
+python3 codemap.py --get-symbol Engine /path/to/repo
+
+# Byte-range snippet extraction
+python3 codemap.py --snippet src/core/engine.py 0 60 /path/to/repo
+
 # Incremental mode (hash-based cache, no daemon)
 python3 codemap.py --incremental /path/to/repo
 
@@ -123,6 +129,8 @@ python3 codemap.py --trace tests.py /path/to/repo
 | `--explain X` | plain-English explanation of a symbol (no LLM) |
 | `--similar X` | find structurally similar functions/classes (refactoring) |
 | `--deadcode` | find functions defined but never called |
+| `--get-symbol X` | token-counted symbol snippet (byte offsets + tokens) |
+| `--snippet P S E` | extract bytes S-E from file P |
 | `--incremental` | files changed since last run (hash cache) |
 | `--verify FILE` | print SHA-256 of a file |
 | `--trace CMD` | run a command, record runtime call edges |
@@ -162,7 +170,8 @@ python3 codemap.py --trace tests.py /path/to/repo
    `codemap_calls`, `codemap_diff`, `codemap_impact`, `codemap_task`,
    `codemap_plan`, `codemap_cross`, `codemap_search`, `codemap_usages`,
    `codemap_grep`, `codemap_read`, `codemap_explain`, `codemap_similar`,
-   `codemap_deadcode`, `codemap_incremental`, `codemap_verify`, `codemap_trace`.
+   `codemap_deadcode`, `codemap_get_symbol`, `codemap_snippet`,
+   `codemap_incremental`, `codemap_verify`, `codemap_trace`.
 
 ### 3. Run the test suite
 ```bash
@@ -198,7 +207,7 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (31 tests).
+- `python3 tests.py` → `OK` (34 tests).
 - `codemap --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codemap --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codemap --task "text" <root>` returns a ranked module list.
@@ -210,6 +219,8 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 - `codemap --explain <symbol> <root>` returns a summary + call graph.
 - `codemap --similar <symbol> <root>` returns refactoring candidates.
 - `codemap --deadcode <root>` returns unused symbols.
+- `codemap --get-symbol <symbol> <root>` returns byte offsets + token count.
+- `codemap --snippet <path> <start> <end> <root>` returns a byte-range snippet.
 - `codemap --incremental <root>` returns changed files (hash cache).
 - `codemap --trace <cmd> <root>` returns runtime call edges (or none).
 - MCP smoke test returns `serverInfo` name `codemap-mcp`.
