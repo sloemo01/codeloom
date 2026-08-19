@@ -5,7 +5,7 @@ so it renders inline on both platforms.
 
 - Demo GIF: `https://raw.githubusercontent.com/sloemo01/codemap/main/demo.gif`
 - Repo: `https://github.com/sloemo01/codemap`
-- Latest release: `https://github.com/sloemo01/codemap/releases/tag/v0.14.0`
+- Latest release: `https://github.com/sloemo01/codemap/releases/tag/v0.16.0`
 
 ---
 
@@ -30,6 +30,8 @@ What it does:
 - **Change-aware** — `--diff` (structure of changed files), `--incremental` (hash-based cache)
 - **Runtime truth** — `--trace CMD` (captures dynamic imports/monkeypatching static analysis misses)
 - **MCP server** — `codemap-mcp.py` is a zero-dep MCP server with 21 tools, so agents call it natively
+- **No daemon** — the MCP server keeps an in-memory index (incremental, always fresh), so you get daemon-speed queries without a background process, staleness, or anything to crash
+- **Correctness** — nested `.gitignore` merging, cache invalidation on `.gitignore` change, workspace-root import resolution (pyproject/package.json/go.mod), `--trace` isolation warning
 
 The whole thing is Python stdlib only. No `pip install`, no indexing daemon, no GPU. Copy one file into your repo, point your agent at it, done.
 
@@ -64,6 +66,6 @@ So I built codemap: a map of your repo for agents. One file, zero deps, no daemo
 • `--plan "task"` → read these files, in this order
 • `--cross` → the real call path across files
 
-**5/6** The MCP server is zero-dependency too — pure stdlib JSON-RPC over stdio, 21 tools. Register it in Claude Code / Cursor / Codex and your agent calls codemap natively. No `pip install`, no index, always fresh.
+**5/6** The MCP server is zero-dependency too — pure stdlib JSON-RPC over stdio, 21 tools, with an in-memory index that's always fresh. Register it in Claude Code / Cursor / Codex and your agent calls codemap natively. No `pip install`, no daemon, no stale index.
 
-**6/6** Repo: https://github.com/sloemo01/codemap — MIT, one file, CI-verified on Linux/macOS/Windows, v0.14.0 released. Go use it. Feedback welcome, especially on the task-relevance ranking and token-shaving retrieval.
+**6/6** Repo: https://github.com/sloemo01/codemap — MIT, one file, CI-verified on Linux/macOS/Windows, v0.16.0 released. Nested .gitignore, cache invalidation, workspace roots, trace safety — all handled. Go use it. Feedback welcome, especially on the task-relevance ranking and token-shaving retrieval.
