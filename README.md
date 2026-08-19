@@ -540,9 +540,10 @@ ceiling rises when you opt in:
   matching, so it doesn't false-positive on `helper()` inside a string or
   comment. *Removed by:* `codeloom --install-grammars --yes` (or `pip install
   tree-sitter tree-sitter-python ...`). codeloom then uses real AST parsing for
-  **17 languages** (Python, JS/TS, Go, Rust, Java, C/C++, C#, Ruby, PHP, Swift,
-  Kotlin, Dart, Lua, bash) instead of regex. Verified: `export function helper`
-  (missed by regex) is caught by tree-sitter.
+  **25 languages** (Python, JS/TS, Go, Rust, Java, C/C++, C#, Ruby, PHP, Swift,
+  Kotlin, Dart, Lua, bash, Elixir, OCaml, Scala, Haskell, Zig, Perl, F#, PowerShell)
+  instead of regex. Verified: `export function helper` (missed by regex) is
+  caught by tree-sitter.
 - **Static analysis misses runtime wiring.** *Removed by:* `codeloom --trace CMD
   --force` runs a command (e.g. your test suite) under `sys.settrace` and
   records the ACTUAL call edges — capturing dynamic imports and monkeypatching

@@ -106,6 +106,30 @@ def _ts_grammar_for(ext: str):
         if ext == ".sh":
             import tree_sitter_bash
             return Language(tree_sitter_bash.language())
+        if ext in (".ex", ".exs"):
+            import tree_sitter_elixir
+            return Language(tree_sitter_elixir.language())
+        if ext == ".ml":
+            import tree_sitter_ocaml
+            return Language(tree_sitter_ocaml.language())
+        if ext == ".scala":
+            import tree_sitter_scala
+            return Language(tree_sitter_scala.language())
+        if ext == ".hs":
+            import tree_sitter_haskell
+            return Language(tree_sitter_haskell.language())
+        if ext == ".zig":
+            import tree_sitter_zig
+            return Language(tree_sitter_zig.language())
+        if ext == ".pl":
+            import tree_sitter_perl
+            return Language(tree_sitter_perl.language())
+        if ext == ".fs":
+            import tree_sitter_fsharp
+            return Language(tree_sitter_fsharp.language())
+        if ext == ".ps1":
+            import tree_sitter_powershell
+            return Language(tree_sitter_powershell.language())
     except Exception:
         return None
     return None
@@ -145,6 +169,14 @@ def install_grammars(do_install: bool = False) -> str:
         "tree-sitter-dart",
         "tree-sitter-lua",
         "tree-sitter-bash",
+        "tree-sitter-elixir",
+        "tree-sitter-ocaml",
+        "tree-sitter-scala",
+        "tree-sitter-haskell",
+        "tree-sitter-zig",
+        "tree-sitter-perl",
+        "tree-sitter-fsharp",
+        "tree-sitter-powershell",
     ]
     cmd = "pip install " + " ".join(pkgs)
     if do_install:
