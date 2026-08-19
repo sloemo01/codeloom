@@ -15,17 +15,17 @@ Enter
 Sleep 1s
 Sleep 500ms
 
-Type "codemap --graph --focus core.engine ."
+Type "codemap --task 'add retry logic' ."
 Enter
 Sleep 1s
 Sleep 500ms
 
-Type "codemap --calls --focus core.engine ."
+Type "codemap --impact core.engine ."
 Enter
 Sleep 1s
 Sleep 500ms
 
-Type "codemap --diff ."
+Type "codemap --plan 'add retry to engine' ."
 Enter
 Sleep 1s
 Sleep 500ms

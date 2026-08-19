@@ -56,6 +56,15 @@ python3 codemap.py --install-agents /path/to/repo
 
 # Token-cost estimate
 python3 codemap.py --cost /path/to/repo
+
+# Task-aware: rank modules relevant to a task
+python3 codemap.py --task "fix the login bug" /path/to/repo
+
+# Change-impact: predict blast radius of changing a module
+python3 codemap.py --impact core/engine.py /path/to/repo
+
+# Agent-native reading plan for a task
+python3 codemap.py --plan "add retry to engine" /path/to/repo
 ```
 
 ## Quick Reference
@@ -70,6 +79,9 @@ python3 codemap.py --cost /path/to/repo
 | `--diff` | structure of files changed vs git HEAD |
 | `--install-agents` | write/update AGENTS.md with a codemap block |
 | `--cost` | append token-cost estimate |
+| `--task "text"` | rank modules relevant to a task |
+| `--impact X` | predict blast radius of changing module X |
+| `--plan "text"` | prioritized reading plan for a task |
 | `--json` | machine-readable JSON |
 | `--write FILE` | write map to FILE |
 | `--no-outline` | skip per-file one-liners (faster) |
@@ -98,7 +110,8 @@ python3 codemap.py --cost /path/to/repo
    ```
    Expect `serverInfo` with name `codemap-mcp`.
 3. Tools exposed: `codemap_map`, `codemap_graph`, `codemap_focus`,
-   `codemap_calls`, `codemap_diff`.
+   `codemap_calls`, `codemap_diff`, `codemap_impact`, `codemap_task`,
+   `codemap_plan`.
 
 ### 3. Run the test suite
 ```bash
@@ -134,7 +147,9 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (11 tests).
+- `python3 tests.py` → `OK` (14 tests).
 - `codemap --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
+- `codemap --impact <module> <root>` returns `risk` + `Direct dependents`.
+- `codemap --task "text" <root>` returns a ranked module list.
 - MCP smoke test returns `serverInfo` name `codemap-mcp`.
 - `demo.gif` exists and a late frame shows the intended feature output.
