@@ -15,12 +15,17 @@ Enter
 Sleep 1s
 Sleep 500ms
 
-Type "codemap --graph ."
+Type "codemap --graph --focus core.engine ."
 Enter
 Sleep 1s
 Sleep 500ms
 
-Type "codemap --graph --focus core.engine ."
+Type "codemap --calls --focus core.engine ."
+Enter
+Sleep 1s
+Sleep 500ms
+
+Type "codemap --diff ."
 Enter
 Sleep 1s
 Sleep 500ms
