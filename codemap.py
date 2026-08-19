@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.9.0"
+VERSION = "0.10.0"
 
 # --------------------------------------------------------------------------- #
 # Optional progressive-enhancement backends.
@@ -1256,10 +1256,65 @@ def render_usages(files: List[str], root: str, symbol: str, limit: int = 20) -> 
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
+# Snippet-level code search (--grep): find exact code, ranked + context
+# --------------------------------------------------------------------------- #
+
+def grep_search(files: List[str], root: str, query: str, limit: int = 20) -> List[dict]:
+    """Search file contents for a query string. Returns ranked matches with
+    context lines. Ranking: exact-word matches > substring > case-insensitive.
+    This is the 'find the exact snippet' capability (semble's core job)."""
+    q = query.lower()
+    # tokenize query for word-boundary ranking
+    q_words = [w for w in re.findall(r"[a-zA-Z0-9_]+", q) if len(w) > 1]
+    results = []
+    for f in files:
+        ext = os.path.splitext(f)[1].lower()
+        if ext not in LANG_RULES and ext not in IMPORT_LANG_RULES:
+            continue
+        mod = module_name_of(f, root)
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                lines = fh.readlines()
+        except OSError:
+            continue
+        for i, line in enumerate(lines):
+            low = line.lower()
+            if q not in low:
+                continue
+            # rank: exact word match > substring; more query words present = higher
+            word_hits = sum(1 for w in q_words if w in low)
+            exact = q in low
+            score = word_hits * 10 + (5 if exact else 0)
+            # context: 1 line before + the match + 1 after
+            start = max(0, i - 1)
+            end = min(len(lines), i + 2)
+            snippet = "".join(lines[start:end]).rstrip()
+            results.append({
+                "module": mod, "path": f, "line": i + 1,
+                "score": score, "snippet": snippet,
+            })
+    results.sort(key=lambda r: (-r["score"], r["module"], r["line"]))
+    return results[:limit]
+
+def render_grep(files: List[str], root: str, query: str, limit: int = 20) -> str:
+    results = grep_search(files, root, query, limit)
+    buf = io.StringIO()
+    buf.write(f"# grep: {query}\n")
+    if not results:
+        buf.write("No matches found.\n")
+        return buf.getvalue()
+    buf.write(f"{len(results)} match(es):\n\n")
+    for r in results:
+        buf.write(f"  {r['module']}:{r['line']}\n")
+        if r.get("snippet"):
+            buf.write(f"    {r['snippet']}\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
 # Incremental / indexed mode (hash-based cache, no daemon)
 # --------------------------------------------------------------------------- #
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 
 def _file_hash(path: str) -> str:
     """Return a content hash for a file (mtime + size + quick hash)."""
@@ -1303,14 +1358,43 @@ def changed_files(files: List[str], cache: dict) -> List[str]:
     changed = []
     for f in files:
         h = _file_hash(f)
-        if cache.get("files", {}).get(f) != h:
+        if cache.get("files", {}).get(f, {}).get("hash") != h:
             changed.append(f)
     return changed
 
 def update_cache(files: List[str], cache: dict) -> None:
     """Update the cache with current file hashes."""
     for f in files:
-        cache.setdefault("files", {})[f] = _file_hash(f)
+        cache.setdefault("files", {})[f] = {"hash": _file_hash(f)}
+
+def cached_symbols(files: List[str], root: str, cache: dict) -> dict:
+    """Build a symbol index, reusing cached parsed data for unchanged files.
+    This is the real scale win: repeated runs on large repos skip re-parsing
+    files that haven't changed."""
+    index: dict = {}
+    for f in files:
+        ext = os.path.splitext(f)[1].lower()
+        mod = module_name_of(f, root)
+        h = _file_hash(f)
+        entry = cache.get("files", {}).get(f)
+        # reuse cached symbols if unchanged
+        if entry and entry.get("hash") == h and "symbols" in entry:
+            for name, locs in entry["symbols"].items():
+                index.setdefault(name, []).extend(locs)
+            continue
+        # parse fresh
+        if ext == ".py":
+            _index_python(f, mod, index)
+        elif ext in CALL_LANG_RULES:
+            _index_regex(f, mod, ext, index)
+        # store per-file symbols in cache
+        file_symbols = {}
+        for name, locs in index.items():
+            for loc in locs:
+                if loc.get("module") == mod:
+                    file_symbols.setdefault(name, []).append(loc)
+        cache.setdefault("files", {})[f] = {"hash": h, "symbols": file_symbols}
+    return index
 
 def render_incremental(files: List[str], root: str, max_files: int) -> str:
     """Show which files changed since the last run (incremental mode)."""
@@ -1776,6 +1860,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--cross", action="store_true", help="show cross-file call graph (resolved across modules)")
     p.add_argument("--search", metavar="SYMBOL", help="search the symbol index for a function/class/method")
     p.add_argument("--usages", metavar="SYMBOL", help="find where a symbol is used (not just defined)")
+    p.add_argument("--grep", metavar="QUERY", help="search file contents for a snippet (ranked + context)")
     p.add_argument("--incremental", action="store_true", help="show files changed since last run (hash-based cache)")
     p.add_argument("--verify", metavar="FILE", help="print SHA-256 of a file (security check)")
     p.add_argument("--trace", nargs="+", metavar="CMD", help="run a command under sys.settrace, record runtime call edges")
@@ -1813,20 +1898,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(render_incremental(files, root, args.max_files))
         return 0
 
-    # --cross / --search / --usages: deep structural intelligence
-    if args.cross or args.search or args.usages:
+    # --cross / --search / --usages / --grep: deep structural intelligence
+    if args.cross or args.search or args.usages or args.grep:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
 
         if args.search:
-            index = build_symbol_index(files, root)
+            cache = load_cache(root)
+            index = cached_symbols(files, root, cache)
+            save_cache(root, cache)
             print(render_search(index, args.search))
             return 0
 
         if args.usages:
             print(render_usages(files, root, args.usages))
+            return 0
+
+        if args.grep:
+            print(render_grep(files, root, args.grep))
             return 0
 
         if args.cross:

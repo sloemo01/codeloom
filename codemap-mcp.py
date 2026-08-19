@@ -32,7 +32,7 @@ import codemap  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codemap-mcp"
-SERVER_VERSION = "0.9.0"
+SERVER_VERSION = "0.10.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -218,6 +218,23 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "codemap_grep",
+        "description": (
+            "Search file contents for a snippet (the 'find the exact code' "
+            "capability). Returns ranked matches with context lines. Use to find "
+            "where a specific code pattern or string appears."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "query": {"type": "string", "description": "Text to search for, e.g. 'retry' or 'class Engine'"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "codemap_incremental",
         "description": (
             "Show which files changed since the last run, using a hash-based "
@@ -372,6 +389,11 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if not symbol:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
         text = codemap.render_usages(files, root, symbol)
+    elif name == "codemap_grep":
+        query = args.get("query")
+        if not query:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'query' argument"}]}
+        text = codemap.render_grep(files, root, query)
     elif name == "codemap_incremental":
         text = codemap.render_incremental(files, root, max_files)
     elif name == "codemap_verify":

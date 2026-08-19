@@ -319,6 +319,32 @@ class TestCodemap(unittest.TestCase):
         self.assertTrue(results)
         self.assertEqual(results[0]["module"], "src.utils.retry")
 
+    def test_grep_search(self):
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        results = codemap.grep_search(files, self.repo, "retry")
+        self.assertTrue(results)
+        # retry appears in src.utils.retry and src.core.engine
+        mods = {r["module"] for r in results}
+        self.assertIn("src.utils.retry", mods)
+        self.assertIn("src.core.engine", mods)
+
+    def test_cached_symbols(self):
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        cache = codemap.load_cache(self.repo)
+        index1 = codemap.cached_symbols(files, self.repo, cache)
+        self.assertIn("Engine", index1)
+        # second call reuses cache
+        index2 = codemap.cached_symbols(files, self.repo, cache)
+        self.assertIn("Engine", index2)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

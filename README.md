@@ -74,6 +74,7 @@ That's it. Under a second, zero setup, works offline. Cross-platform — macOS, 
 | `codemap --cross` | "What calls what, across files?" (resolved call graph) |
 | `codemap --search X` | "Where is symbol X defined?" (symbol index + snippet) |
 | `codemap --usages X` | "Where is symbol X used?" (call sites + snippet) |
+| `codemap --grep X` | "Where does this code pattern appear?" (snippet search) |
 | `codemap --incremental` | "What changed since last run?" (hash-based cache) |
 | `codemap --verify FILE` | "Is this file the official codemap?" (SHA-256) |
 
@@ -97,6 +98,7 @@ codemap --plan "text"        # prioritized reading plan for a task
 codemap --cross              # cross-file call graph (resolved across modules)
 codemap --search SYMBOL      # search the symbol index (definitions + snippet)
 codemap --usages SYMBOL      # find where a symbol is used (call sites + snippet)
+codemap --grep QUERY         # search file contents for a snippet (ranked + context)
 codemap --incremental        # show files changed since last run (hash-based cache)
 codemap --verify FILE        # print SHA-256 of a file (security check)
 codemap --trace CMD          # run a command, record runtime call edges
@@ -135,6 +137,25 @@ agent sees the *real* execution flow across files, not just per-module noise.
 context snippet, across Python and other languages. `--usages` answers "where
 is this called?" — the question agents ask before editing — with call sites
 and snippets, so the agent doesn't have to open files to see context.
+
+## Snippet search (`--grep`)
+
+Find the exact code, not just symbols. `--grep` searches file contents and
+returns ranked matches with context lines — the "find this snippet" capability:
+
+```bash
+codemap --grep "retry" .
+#   src.core.engine:8
+#     def run(self, fn):
+#         retry(fn)
+#   src.main:7
+#     eng = Engine()
+#     eng.run(retry)
+```
+
+Ranking: exact-word matches first, then substring, then case-insensitive.
+This closes the snippet-search gap — the one thing semble does that codemap
+previously didn't.
 
 ## Task-aware intelligence (`--task`, `--impact`, `--plan`)
 
@@ -271,14 +292,14 @@ stdio — no `mcp` package, no daemon). Register it with any MCP-capable agent:
 }
 ```
 
-Exposes fourteen tools: `codemap_map`, `codemap_graph`, `codemap_focus`,
+Exposes fifteen tools: `codemap_map`, `codemap_graph`, `codemap_focus`,
 `codemap_calls`, `codemap_diff`, `codemap_impact`, `codemap_task`,
 `codemap_plan`, `codemap_cross`, `codemap_search`, `codemap_usages`,
-`codemap_incremental`, `codemap_verify`, `codemap_trace`. Your agent can build
-a mental model, trace execution flow across files, see what changed, predict
-blast radius, get a task-oriented reading plan, search any symbol, find where
-it's used, verify a download, and capture runtime call edges — natively, no
-install, no index.
+`codemap_grep`, `codemap_incremental`, `codemap_verify`, `codemap_trace`. Your
+agent can build a mental model, trace execution flow across files, see what
+changed, predict blast radius, get a task-oriented reading plan, search any
+symbol, find where it's used, grep for snippets, verify a download, and capture
+runtime call edges — natively, no install, no index.
 
 ## How it works
 
@@ -384,6 +405,9 @@ the fastest way to answer "what is this project, actually?"
 - [x] Cross-file call graph (`--cross`, AST-resolved)
 - [x] Symbol index + search (`--search`, with snippets)
 - [x] Usage search (`--usages`, call sites + snippets)
+- [x] Snippet search (`--grep`, ranked + context)
+- [x] Persistent parsed cache (repeated runs skip re-parsing)
+- [x] Benchmark harness + CI + release script (trust/credibility)
 - [x] Incremental mode (`--incremental`, hash-based cache)
 - [x] Multi-language import graph (JS/TS, Go, Rust, Java, C/C++, C#, Ruby, PHP, Swift, Kotlin, Dart, Lua)
 - [x] Full `.gitignore` support (negation, anchoring, `**`, dir-only)
@@ -398,7 +422,22 @@ the fastest way to answer "what is this project, actually?"
 
 Honest, reproducible numbers vs the competitors live in
 [`benchmarks/`](benchmarks/README.md) — including the caveat that codemap is a
-complement, not a replacement, for the heavy tools.
+complement, not a replacement, for the heavy tools. Run them yourself:
+
+```bash
+python3 benchmarks/run.py --repo /path/to/repo
+```
+
+## Trust & verification
+
+- **CI** — the test suite runs on Linux, macOS, and Windows (Python 3.8–3.12)
+  via GitHub Actions (`.github/workflows/ci.yml`).
+- **Checksums** — every release ships the SHA-256 of `codemap.py`; verify a
+  downloaded copy with `codemap --verify codemap.py`.
+- **Releases** — tagged, versioned releases with the demo GIF and checksum via
+  `scripts/release.sh`.
+- **One file, readable** — the whole tool is a single stdlib file you can audit
+  before running. No hidden deps, no network calls, no telemetry.
 
 ## Contributing
 
