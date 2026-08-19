@@ -596,7 +596,7 @@ task-awareness** — the 80% case for everyday agent use.
 | **Dead code (`--deadcode`)** | **yes** | **no** | **no** |
 | **Runtime trace (`--trace`)** | **yes** | **no** | **no** |
 | Git-aware `--diff` | **yes — always fresh** | partial (`get_changed_symbols`) | no |
-| MCP server | **yes — zero-dep, 21 tools** | yes | yes |
+| MCP server | **yes — zero-dep, 24 tools** | yes | yes |
 | Offline | yes | yes | varies |
 
 The heavyweight tools are great at retrieval — but they're *search engines*,
@@ -604,6 +604,25 @@ not *task-orientation engines*. codeloom does retrieval (token-shaving, byte
 offsets) *and* tells the agent what matters, what breaks, and what to read
 first — the reasoning the search tools don't do. And it's the fastest possible
 structural context, in one file, in under a second, always fresh.
+
+## What jcodemunch users asked for — and codeloom delivers
+
+From jcodemunch's own issue tracker, the pain points users raised, and how
+codeloom's design answers them:
+
+| User pain (jcodemunch issue) | codeloom |
+|---|---|
+| **Too many tools** (#297: 109 tools across jMunch, over the 50 limit) | **24 tools + 1 entry point** (`codeloom_ask`) |
+| **Token overhead on grep tasks** (#142: 1.31x more tokens, 2.43x cache reads) | **summary-first `--get-symbol` + `--pack`** (token-minimal by design) |
+| **Framework-aware intelligence** (#201: Laravel/Next.js conventions) | **`--framework`** (detects framework + routes/models/config/conventions) |
+| **Install friction** (#308, #273: PyPI unavailable, hook support) | **one file, copy it** + `pip install codeloom` |
+| **Indexing hangs / daemon CPU** (#375, #275, #68, #356) | **no daemon**, `--index` builds in ~1s |
+| **Config bugs** (#300, #416: config ignored) | **zero config** — no config file to break |
+
+**The honest scope note:** codeloom is a *code* intelligence tool. It matches
+jcodemunch (code) and beats it on these pain points. jdocmunch (documentation)
+and jdatamunch (data/schema) are separate domains codeloom doesn't target —
+claiming to replace all three would be an overclaim.
 
 ## For humans too
 
