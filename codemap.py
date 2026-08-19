@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 
 # --------------------------------------------------------------------------- #
 # Language / structure detection
@@ -839,9 +839,97 @@ def render_cross_calls(calls: dict, root: str, start: Optional[str] = None) -> s
 # --------------------------------------------------------------------------- #
 
 def build_symbol_index(files: List[str], root: str) -> dict:
-    """Build an inverted index: symbol_name -> list of {module, kind, line}.
-    Indexes functions, classes, and methods across all Python files."""
+    """Build an inverted index: symbol_name -> list of {module, kind, line, snippet}.
+    Indexes functions, classes, and methods across Python (via `ast`) and other
+    languages (via regex). Each entry carries a context snippet so the agent
+    doesn't have to open the file to see what the symbol does."""
     index: dict = {}
+    for f in files:
+        ext = os.path.splitext(f)[1].lower()
+        mod = module_name_of(f, root)
+        if ext == ".py":
+            _index_python(f, mod, index)
+        elif ext in CALL_LANG_RULES:
+            _index_regex(f, mod, ext, index)
+    return index
+
+def _read_snippet(path: str, line: int, context: int = 1) -> str:
+    """Read a few lines around `line` for context."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()
+        start = max(0, line - 1 - context)
+        end = min(len(lines), line + context)
+        return "".join(lines[start:end]).strip()
+    except OSError:
+        return ""
+
+def _index_python(path: str, mod: str, index: dict) -> None:
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            tree = ast.parse(fh.read())
+    except (SyntaxError, OSError):
+        return
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            index.setdefault(node.name, []).append(
+                {"module": mod, "kind": "function", "line": node.lineno,
+                 "snippet": _read_snippet(path, node.lineno)})
+        elif isinstance(node, ast.ClassDef):
+            index.setdefault(node.name, []).append(
+                {"module": mod, "kind": "class", "line": node.lineno,
+                 "snippet": _read_snippet(path, node.lineno)})
+            for sub in node.body:
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    index.setdefault(sub.name, []).append(
+                        {"module": mod, "kind": "method", "line": sub.lineno,
+                         "class": node.name, "snippet": _read_snippet(path, sub.lineno)})
+
+def _index_regex(path: str, mod: str, ext: str, index: dict) -> None:
+    """Index non-Python symbols via regex (best-effort)."""
+    if ext not in CALL_LANG_RULES:
+        return
+    def_re, _ = CALL_LANG_RULES[ext]
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return
+    for i, line in enumerate(text.splitlines(), 1):
+        m = re.match(def_re, line)
+        if m:
+            name = next((g for g in m.groups() if g), None)
+            if name:
+                index.setdefault(name, []).append(
+                    {"module": mod, "kind": "function", "line": i,
+                     "snippet": line.strip()})
+
+def search_symbols(index: dict, query: str, limit: int = 20) -> List[dict]:
+    """Search the symbol index. Exact match first, then prefix, then substring.
+    Returns definitions with context snippets."""
+    q = query.lower()
+    exact, prefix, sub = [], [], []
+    for name, locs in index.items():
+        nl = name.lower()
+        if nl == q:
+            exact.append((name, locs))
+        elif nl.startswith(q):
+            prefix.append((name, locs))
+        elif q in nl:
+            sub.append((name, locs))
+    ranked = exact + prefix + sub
+    out = []
+    for name, locs in ranked:
+        for loc in locs:
+            out.append({"name": name, **loc})
+            if len(out) >= limit:
+                return out
+    return out
+
+def find_usages(files: List[str], root: str, symbol: str, limit: int = 20) -> List[dict]:
+    """Find where a symbol is USED (not just defined), across Python files.
+    Uses `ast` to find Name/Attribute references to the symbol."""
+    usages = []
     for f in files:
         if not f.endswith(".py"):
             continue
@@ -852,39 +940,19 @@ def build_symbol_index(files: List[str], root: str) -> dict:
         except (SyntaxError, OSError):
             continue
         for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                index.setdefault(node.name, []).append(
-                    {"module": mod, "kind": "function", "line": node.lineno})
-            elif isinstance(node, ast.ClassDef):
-                index.setdefault(node.name, []).append(
-                    {"module": mod, "kind": "class", "line": node.lineno})
-                for sub in node.body:
-                    if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        index.setdefault(sub.name, []).append(
-                            {"module": mod, "kind": "method", "line": sub.lineno,
-                             "class": node.name})
-    return index
-
-def search_symbols(index: dict, query: str, limit: int = 20) -> List[dict]:
-    """Search the symbol index. Exact match first, then substring, then prefix."""
-    q = query.lower()
-    exact, sub, prefix = [], [], []
-    for name, locs in index.items():
-        nl = name.lower()
-        if nl == q:
-            exact.append((name, locs))
-        elif q in nl:
-            sub.append((name, locs))
-        elif nl.startswith(q):
-            prefix.append((name, locs))
-    ranked = exact + prefix + sub
-    out = []
-    for name, locs in ranked:
-        for loc in locs:
-            out.append({"name": name, **loc})
-            if len(out) >= limit:
-                return out
-    return out
+            # skip the definition itself
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) \
+               and node.name == symbol:
+                continue
+            if isinstance(node, ast.Name) and node.id == symbol:
+                usages.append({"module": mod, "line": node.lineno,
+                               "snippet": _read_snippet(f, node.lineno)})
+            elif isinstance(node, ast.Attribute) and node.attr == symbol:
+                usages.append({"module": mod, "line": node.lineno,
+                               "snippet": _read_snippet(f, node.lineno)})
+            if len(usages) >= limit:
+                return usages
+    return usages
 
 def render_search(index: dict, query: str, limit: int = 20) -> str:
     results = search_symbols(index, query, limit)
@@ -893,10 +961,26 @@ def render_search(index: dict, query: str, limit: int = 20) -> str:
     if not results:
         buf.write("No symbols found.\n")
         return buf.getvalue()
-    buf.write(f"{len(results)} result(s):\n\n")
+    buf.write(f"{len(results)} definition(s):\n\n")
     for r in results:
         cls = f" ({r['class']})" if r.get("class") else ""
         buf.write(f"  {r['name']}  [{r['kind']}{cls}]  {r['module']}:{r['line']}\n")
+        if r.get("snippet"):
+            buf.write(f"    {r['snippet']}\n")
+    return buf.getvalue()
+
+def render_usages(files: List[str], root: str, symbol: str, limit: int = 20) -> str:
+    usages = find_usages(files, root, symbol, limit)
+    buf = io.StringIO()
+    buf.write(f"# usages: {symbol}\n")
+    if not usages:
+        buf.write("No usages found (only the definition).\n")
+        return buf.getvalue()
+    buf.write(f"{len(usages)} usage(s):\n\n")
+    for u in usages:
+        buf.write(f"  {u['module']}:{u['line']}\n")
+        if u.get("snippet"):
+            buf.write(f"    {u['snippet']}\n")
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
@@ -1372,6 +1456,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--plan", metavar="TEXT", help="emit a prioritized reading plan for a task")
     p.add_argument("--cross", action="store_true", help="show cross-file call graph (resolved across modules)")
     p.add_argument("--search", metavar="SYMBOL", help="search the symbol index for a function/class/method")
+    p.add_argument("--usages", metavar="SYMBOL", help="find where a symbol is used (not just defined)")
     p.add_argument("--incremental", action="store_true", help="show files changed since last run (hash-based cache)")
     p.add_argument("--verify", metavar="FILE", help="print SHA-256 of a file (security check)")
     p.add_argument("--version", action="version", version=f"codemap {VERSION}")
@@ -1403,8 +1488,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(render_incremental(files, root, args.max_files))
         return 0
 
-    # --cross / --search: deep structural intelligence
-    if args.cross or args.search:
+    # --cross / --search / --usages: deep structural intelligence
+    if args.cross or args.search or args.usages:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
@@ -1413,6 +1498,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.search:
             index = build_symbol_index(files, root)
             print(render_search(index, args.search))
+            return 0
+
+        if args.usages:
+            print(render_usages(files, root, args.usages))
             return 0
 
         if args.cross:

@@ -72,7 +72,8 @@ That's it. Under a second, zero setup, works offline. Cross-platform — macOS, 
 | `codemap --impact X` | "What breaks if I change X?" |
 | `codemap --plan "X"` | "Read these files, in this order, to do task X" |
 | `codemap --cross` | "What calls what, across files?" (resolved call graph) |
-| `codemap --search X` | "Where is symbol X defined?" (symbol index) |
+| `codemap --search X` | "Where is symbol X defined?" (symbol index + snippet) |
+| `codemap --usages X` | "Where is symbol X used?" (call sites + snippet) |
 | `codemap --incremental` | "What changed since last run?" (hash-based cache) |
 | `codemap --verify FILE` | "Is this file the official codemap?" (SHA-256) |
 
@@ -94,7 +95,8 @@ codemap --impact X           # predict blast radius of changing module X
 codemap --task "text"        # rank modules relevant to a task
 codemap --plan "text"        # prioritized reading plan for a task
 codemap --cross              # cross-file call graph (resolved across modules)
-codemap --search SYMBOL      # search the symbol index for a function/class/method
+codemap --search SYMBOL      # search the symbol index (definitions + snippet)
+codemap --usages SYMBOL      # find where a symbol is used (call sites + snippet)
 codemap --incremental        # show files changed since last run (hash-based cache)
 codemap --verify FILE        # print SHA-256 of a file (security check)
 codemap --no-outline         # skip per-file one-liners (faster)
@@ -116,12 +118,22 @@ codemap --cross .
 # Search the symbol index (functions, classes, methods + where they're defined)
 codemap --search Engine .
 #   Engine  [class]  src.core.engine:4
+#     class Engine:
+#     def __init__(self):
+
+# Find where a symbol is USED (call sites, not just the definition)
+codemap --usages retry .
+#   src.core.engine:8
+#     def run(self, fn):
+#         retry(fn)
 ```
 
 `--cross` resolves calls to their defining module via Python `ast` — so an
 agent sees the *real* execution flow across files, not just per-module noise.
-`--search` is a true inverted index of every symbol, with module + line, so the
-agent can find any function/class/method in the whole codebase instantly.
+`--search` is a true inverted index of every symbol, with module + line + a
+context snippet, across Python and other languages. `--usages` answers "where
+is this called?" — the question agents ask before editing — with call sites
+and snippets, so the agent doesn't have to open files to see context.
 
 ## Task-aware intelligence (`--task`, `--impact`, `--plan`)
 
@@ -258,13 +270,13 @@ stdio — no `mcp` package, no daemon). Register it with any MCP-capable agent:
 }
 ```
 
-Exposes twelve tools: `codemap_map`, `codemap_graph`, `codemap_focus`,
+Exposes thirteen tools: `codemap_map`, `codemap_graph`, `codemap_focus`,
 `codemap_calls`, `codemap_diff`, `codemap_impact`, `codemap_task`,
-`codemap_plan`, `codemap_cross`, `codemap_search`, `codemap_incremental`,
-`codemap_verify`. Your agent can build a mental model, trace execution flow
-across files, see what changed, predict blast radius, get a task-oriented
-reading plan, search any symbol, and verify a download — natively, no install,
-no index.
+`codemap_plan`, `codemap_cross`, `codemap_search`, `codemap_usages`,
+`codemap_incremental`, `codemap_verify`. Your agent can build a mental model,
+trace execution flow across files, see what changed, predict blast radius, get
+a task-oriented reading plan, search any symbol, find where it's used, and
+verify a download — natively, no install, no index.
 
 ## How it works
 
@@ -282,7 +294,7 @@ codemap is a single Python file using only the standard library:
 - **Cross-file call graph** — resolves calls to their defining module via
   `ast` + import maps, so `A.main() -> B.engine.run()` works across files.
 - **Symbol index** — a true inverted index of every function, class, and method
-  with module + line, searchable via `--search`.
+  with module + line + context snippet, searchable via `--search` and `--usages`.
 - **Incremental cache** — a hash-based `.codemap-cache.json` (no daemon) so
   repeated runs only re-parse changed files.
 - **MCP server** — a minimal JSON-RPC 2.0 stdio transport, so any MCP client
@@ -363,7 +375,8 @@ the fastest way to answer "what is this project, actually?"
 - [x] Change-impact prediction (`--impact`)
 - [x] Agent-native reading plan (`--plan`)
 - [x] Cross-file call graph (`--cross`, AST-resolved)
-- [x] Symbol index + search (`--search`)
+- [x] Symbol index + search (`--search`, with snippets)
+- [x] Usage search (`--usages`, call sites + snippets)
 - [x] Incremental mode (`--incremental`, hash-based cache)
 - [x] Multi-language import graph (JS/TS, Go, Rust, Java, C/C++, C#, Ruby, PHP, Swift, Kotlin, Dart, Lua)
 - [x] Full `.gitignore` support (negation, anchoring, `**`, dir-only)

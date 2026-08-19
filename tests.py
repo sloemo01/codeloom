@@ -270,6 +270,30 @@ class TestCodemap(unittest.TestCase):
         digest = codemap.sha256_file(path)
         self.assertEqual(len(digest), 64)  # sha256 hex is 64 chars
 
+    def test_search_snippet(self):
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        index = codemap.build_symbol_index(files, self.repo)
+        results = codemap.search_symbols(index, "Engine")
+        self.assertTrue(results)
+        self.assertIn("snippet", results[0])
+        self.assertTrue(results[0]["snippet"])
+
+    def test_find_usages(self):
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        usages = codemap.find_usages(files, self.repo, "retry")
+        # retry is used in src.cli.main and src.core.engine.run
+        mods = {u["module"] for u in usages}
+        self.assertIn("src.cli", mods)
+        self.assertIn("src.core.engine", mods)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

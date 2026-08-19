@@ -32,7 +32,7 @@ import codemap  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codemap-mcp"
-SERVER_VERSION = "0.7.0"
+SERVER_VERSION = "0.8.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -188,14 +188,30 @@ TOOLS: List[Dict[str, Any]] = [
         "name": "codemap_search",
         "description": (
             "Search the symbol index for a function, class, or method. Returns "
-            "where each symbol is defined (module + line). Use to find a symbol "
-            "across the whole codebase."
+            "where each symbol is defined (module + line) with a context snippet. "
+            "Works across Python and other languages."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "symbol": {"type": "string", "description": "Symbol name to search, e.g. 'Engine' or 'run'"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["symbol"],
+        },
+    },
+    {
+        "name": "codemap_usages",
+        "description": (
+            "Find where a symbol is USED (not just defined) across the codebase. "
+            "Answers 'where is this function/class called?' with context snippets."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "symbol": {"type": "string", "description": "Symbol name to find usages of"},
                 "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
             },
             "required": ["symbol"],
@@ -334,6 +350,11 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
         index = codemap.build_symbol_index(files, root)
         text = codemap.render_search(index, symbol)
+    elif name == "codemap_usages":
+        symbol = args.get("symbol")
+        if not symbol:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
+        text = codemap.render_usages(files, root, symbol)
     elif name == "codemap_incremental":
         text = codemap.render_incremental(files, root, max_files)
     elif name == "codemap_verify":
