@@ -5,3 +5,4 @@ __pycache__/
 venv/
 demo-repo/
 .DS_Store
+frames_*.png
