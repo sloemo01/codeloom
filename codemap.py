@@ -20,6 +20,7 @@ Runs 100% locally. No network, no API keys, no GPU.
 from __future__ import annotations
 
 import argparse
+import ast
 import io
 import json
 import os
@@ -28,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 # --------------------------------------------------------------------------- #
 # Language / structure detection
@@ -256,6 +257,155 @@ def build_map(root: str, want_outline: bool, max_files: int) -> dict:
         "tree": tree,
     }
 
+# --------------------------------------------------------------------------- #
+# Call-graph intelligence (Python stdlib `ast`, zero deps)
+# --------------------------------------------------------------------------- #
+
+def module_name_of(path: str, root: str) -> str:
+    """Map a file path to its dotted module name, e.g. src/core/engine.py -> src.core.engine."""
+    rel = os.path.relpath(path, root)
+    if rel.endswith(".py"):
+        rel = rel[:-3]
+    elif rel.endswith("/__init__"):
+        rel = rel[:-9]
+    if rel.endswith("__init__"):
+        rel = rel[:-9]
+    return rel.replace(os.sep, ".")
+
+def _resolve_import(target: str, importer_mod: str, root: str, module_map: dict) -> Optional[str]:
+    """Resolve an imported module name to an existing local module, or None.
+    Handles absolute, relative (from .x / from ..x), and the common case where
+    the import is relative to the source root (e.g. 'core.engine' -> 'src.core.engine').
+    Strategy:
+      1. exact match
+      2. drop trailing segments (pkg.module -> pkg)
+      3. suffix match against known modules (core.engine matches src.core.engine)
+    """
+    if target.startswith("."):
+        # relative import — handled by caller via parse_module; skip here
+        return None
+    cands = [target]
+    parts = target.split(".")
+    for i in range(len(parts) - 1, 0, -1):
+        cands.append(".".join(parts[:i]))
+    for c in cands:
+        if c in module_map:
+            return c
+    # suffix match: does any local module end with '.target' (or equal it)?
+    tgt_segs = target.split(".")
+    best = None
+    for mod in module_map:
+        msegs = mod.split(".")
+        if len(msegs) >= len(tgt_segs) and msegs[-len(tgt_segs):] == tgt_segs:
+            # prefer shallowest (fewest segments above the match)
+            if best is None or len(msegs) < len(best.split(".")):
+                best = mod
+    return best
+
+def parse_module(path: str, root: str, module_map: dict) -> dict:
+    """Return {defs, imports} for a single Python file."""
+    mod = module_name_of(path, root)
+    info = {"mod": mod, "defs": [], "imports": []}  # imports = resolved local module names
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            tree = ast.parse(f.read())
+    except (SyntaxError, OSError):
+        return info
+    package = ".".join(mod.split(".")[:-1]) if "." in mod else ""
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            # top-level only for the outline (walk already flattens, so dedupe by lineno depth)
+            info["defs"].append(node.name)
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                info["imports"].append(a.name)
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            if node.level:  # relative import
+                level = node.level
+                base_parts = package.split(".") if package else []
+                if level > 1:
+                    base_parts = base_parts[:-(level - 1)] if len(base_parts) >= level - 1 else []
+                target = ".".join(base_parts + ([base] if base else []))
+            else:
+                target = base
+            info["imports"].append(target)
+    return info
+
+def build_graph(files: List[str], root: str) -> dict:
+    """Build import dependency graph: {module: set(local_module_deps)}."""
+    module_map = {}
+    for f in files:
+        if f.endswith(".py"):
+            module_map[module_name_of(f, root)] = f
+
+    graph: dict = {}
+    for f in files:
+        if not f.endswith(".py"):
+            continue
+        mod = module_name_of(f, root)
+        info = parse_module(f, root, module_map)
+        deps: set = set()
+        for imp in info["imports"]:
+            resolved = _resolve_import(imp, mod, root, module_map)
+            if resolved and resolved != mod:
+                deps.add(resolved)
+        graph[mod] = deps
+    return graph
+
+def reachable(graph: dict, start: str, direction: str = "out") -> set:
+    """BFS over the graph. direction='out' = what start depends on; 'in' = what depends on start."""
+    seen: set = set()
+    stack = [start]
+    while stack:
+        cur = stack.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        nxt = graph[cur] if direction == "out" else _dependents(graph, cur)
+        for n in nxt:
+            if n not in seen:
+                stack.append(n)
+    seen.discard(start)
+    return seen
+
+def _dependents(graph: dict, mod: str) -> list:
+    return [m for m, deps in graph.items() if mod in deps]
+
+def focus_subgraph(graph: dict, start: str) -> dict:
+    """Deps (out) + dependents (in) of a module, for agent focus."""
+    return {
+        "module": start,
+        "depends_on": sorted(reachable(graph, start, "out")),
+        "depended_on_by": sorted(reachable(graph, start, "in")),
+    }
+
+def render_graph(graph: dict, root: str, start: Optional[str] = None) -> str:
+    buf = io.StringIO()
+    if start:
+        fs = focus_subgraph(graph, start)
+        buf.write(f"# focus: {start}\n")
+        buf.write(f"## depends_on ({len(fs['depends_on'])})\n")
+        for d in fs["depends_on"]:
+            buf.write(f"  {d}\n")
+        buf.write(f"## depended_on_by ({len(fs['depended_on_by'])})\n")
+        for d in fs["depended_on_by"]:
+            buf.write(f"  {d}\n")
+        buf.write("\n## import edges touching this module\n")
+        for mod, deps in sorted(graph.items()):
+            for d in sorted(deps):
+                if mod == start or d == start:
+                    buf.write(f"  {mod} -> {d}\n")
+        return buf.getvalue()
+    # full graph
+    buf.write("# import graph\n")
+    edges = [(m, d) for m, deps in sorted(graph.items()) for d in sorted(deps)]
+    buf.write(f"{len(graph)} modules, {len(edges)} edges\n\n")
+    for m, d in edges:
+        buf.write(f"  {m} -> {d}\n")
+    return buf.getvalue()
+
 def render_text(m: dict) -> str:
     ep = m["entry_points"]
     buf = io.StringIO()
@@ -289,8 +439,46 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--json", action="store_true", help="emit JSON")
     p.add_argument("--no-outline", action="store_true", help="skip per-file outlines (faster)")
     p.add_argument("--max-files", type=int, default=5000, help="cap traversal (default 5000)")
+    p.add_argument("--graph", action="store_true", help="show Python import dependency graph")
+    p.add_argument("--focus", metavar="MODULE", help="show deps/dependents of one module (with --graph)")
     p.add_argument("--version", action="version", version=f"codemap {VERSION}")
     args = p.parse_args(argv)
+
+    # Call-graph mode (Python only)
+    if args.graph:
+        root = os.path.abspath(args.root)
+        gi = os.path.join(root, ".gitignore")
+        globs, ignore_dirs = parse_gitignore(gi) if os.path.isfile(gi) else ([], [])
+        files: List[str] = []
+        _walk(root, globs, ignore_dirs, args.max_files, files)
+        graph = build_graph(files, root)
+        if args.focus:
+            # accept file path, directory (package), or dotted module name
+            focus = args.focus
+            focus_path = os.path.join(root, focus) if not os.path.isabs(focus) else focus
+            if os.path.isdir(focus_path):
+                focus = module_name_of(focus_path, root)
+            elif focus.endswith(".py") or os.path.isfile(focus_path):
+                focus = module_name_of(focus_path, root)
+            if focus not in graph:
+                # try suffix match (e.g. 'main' matches 'src.main')
+                fsegs = focus.split(".")
+                match = None
+                for mod in graph:
+                    msegs = mod.split(".")
+                    if len(msegs) >= len(fsegs) and msegs[-len(fsegs):] == fsegs:
+                        if match is None or len(msegs) < len(match.split(".")):
+                            match = mod
+                if match is not None:
+                    focus = match
+                else:
+                    print(f"module not found: {args.focus}", file=sys.stderr)
+                    return 1
+            text = render_graph(graph, root, start=focus)
+        else:
+            text = render_graph(graph, root)
+        print(text)
+        return 0
 
     m = build_map(args.root, not args.no_outline, args.max_files)
 

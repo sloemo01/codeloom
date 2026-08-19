@@ -1,7 +1,7 @@
 <h1 align="center">codemap</h1>
 <p align="center">
   <b>Give your AI coding agent a map of the repo in one second.</b><br/>
-  Single-file · zero-dependency · no daemon · 100% local
+  Single-file · zero-dependency · no daemon · 100% local · <b>import graph included</b>
 </p>
 
 <p align="center">
@@ -52,9 +52,33 @@ codemap                      # map current dir -> stdout
 codemap /path/to/repo        # map a specific repo
 codemap --write MAP.md       # also write to MAP.md
 codemap --json               # machine-readable JSON for tooling
+codemap --graph              # Python import dependency graph
+codemap --graph --focus X    # deps + dependents of module X
 codemap --no-outline         # skip per-file one-liners (faster)
 codemap --max-files 2000     # cap traversal (default 5000)
 ```
+
+## Structural intelligence (`--graph` & `--focus`)
+
+The map is the beginning. codemap also builds a **real import dependency graph**
+with Python's built-in `ast` module — no daemon, no index, no deps. Tell your
+agent "what touches what" in under a second:
+
+```bash
+# Full import graph (385 modules, 1126 edges in <1s on browser-use)
+codemap --graph .
+
+# Focus on ONE module: what it needs, and what needs it
+codemap --graph --focus browser_use/agent .
+# focus: browser_use.agent
+#   depends_on: browser_use.actor.*, browser_use.browser.*, ... (123 modules)
+#   depended_on_by: tests.ci.test_beta_agent
+```
+
+`--focus` accepts a file path, a package directory, or a dotted module name
+(`browser_use/agent`, `browser_use/agent/service.py`, `agent.service`). It
+answers the two questions agents burn the most tokens on: *"what does this
+code need?"* and *"what else breaks if I change it?"*
 
 ## Why it's different
 
@@ -63,9 +87,10 @@ codemap --max-files 2000     # cap traversal (default 5000)
 | Install | one file, copy it | `pip install` + deps |
 | Setup | none | indexing daemon, MCP server, build step |
 | Runs on | stdlib only | heavy runtime |
+| Import graph | **yes — `--graph`, <1s** | yes, but after indexing |
 | Offline | yes | varies |
 | Speed | < 1s | indexing can take minutes |
-| Cost | 0 tokens | still uses tokens to *query* it |
+| Cost | 0 tokens to query | still uses tokens to *query* it |
 
 The heavyweight tools are great — but they're *overkill* when all you need is
 a map. codemap is the 80/20: the fastest possible structural context.
@@ -75,9 +100,10 @@ a map. codemap is the 80/20: the fastest possible structural context.
 - [x] Multi-language outline extraction (Python, JS/TS, Go, Rust, Java, Ruby, PHP, C/C++, C#, Swift, Kotlin, shell, Lua, Elixir, Dart, OCaml, Scala, R)
 - [x] `.gitignore`-aware traversal
 - [x] JSON output for tooling
+- [x] Import dependency graph + `--focus` (Python, via `ast`)
 - [ ] MCP server wrapper (so agents can call `codemap` natively)
 - [ ] Incremental mode (only re-emit changed modules)
-- [ ] `--deps` flag to surface import/call relationships
+- [ ] Function-level call graph (beyond module-level imports)
 
 ## License
 

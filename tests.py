@@ -19,16 +19,27 @@ def make_repo(repo):
         with open(path, "w") as f:
             f.write(content)
     os.makedirs(j("src", "core"))
+    os.makedirs(j("src", "utils"))
     os.makedirs(j("tests"))
     w(j("src", "__init__.py"), "")
     w(j("src", "cli.py"),
-      "import os\n"
-      "def main():\n    pass\n"
+      "from core.engine import Engine\n"
+      "from utils.retry import retry\n"
+      "\n"
+      "def main():\n    eng = Engine()\n    retry(eng.run)\n"
       "\n"
       "class Parser:\n    pass\n")
+    w(j("src", "core", "__init__.py"), "")
     w(j("src", "core", "engine.py"),
-      "class Engine:\n    def run(self):\n        pass\n")
-    w(j("tests", "test_cli.py"), "def test_x():\n    pass\n")
+      "from utils.retry import retry\n"
+      "\n"
+      "class Engine:\n    def run(self):\n        retry(lambda: None)\n")
+    w(j("src", "utils", "__init__.py"), "")
+    w(j("src", "utils", "retry.py"),
+      "def retry(fn, tries=3):\n    return fn()\n")
+    w(j("tests", "test_cli.py"),
+      "from core.engine import Engine\n"
+      "def test_x():\n    Engine()\n")
     w(j("README.md"), "# demo\n")
     w(j(".gitignore"), "*.pyc\n.venv/\n__pycache__/\n")
     os.makedirs(j(".venv"))
@@ -48,8 +59,8 @@ class TestCodemap(unittest.TestCase):
 
     def test_file_count_and_gitignore(self):
         m = codemap.build_map(self.repo, True, 5000)
-        # .venv/junk.py and ignored.pyc excluded -> 6 files
-        self.assertEqual(m["file_count"], 6)
+        # .venv/junk.py and ignored.pyc excluded; 9 real files remain
+        self.assertEqual(m["file_count"], 9)
 
     def test_outline_python(self):
         m = codemap.build_map(self.repo, True, 5000)
@@ -81,6 +92,34 @@ class TestCodemap(unittest.TestCase):
         )
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("file_count", r.stdout)
+
+    def test_graph_import_edges(self):
+        m = codemap.build_map(self.repo, True, 5000)
+        files = []
+        # re-walk (build_map doesn't return files list)
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        graph = codemap.build_graph(files, self.repo)
+        # src.cli -> src.core.engine and src.utils.retry
+        self.assertIn("src.core.engine", graph.get("src.cli", set()))
+        self.assertIn("src.utils.retry", graph.get("src.cli", set()))
+        # tests.test_cli -> src.core.engine
+        self.assertIn("src.core.engine", graph.get("tests.test_cli", set()))
+
+    def test_graph_focus(self):
+        m = codemap.build_map(self.repo, True, 5000)
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        graph = codemap.build_graph(files, self.repo)
+        fs = codemap.focus_subgraph(graph, "src.core.engine")
+        self.assertIn("src.cli", fs["depended_on_by"])
+        self.assertIn("tests.test_cli", fs["depended_on_by"])
+        self.assertIn("src.utils.retry", fs["depends_on"])
 
 
 if __name__ == "__main__":
