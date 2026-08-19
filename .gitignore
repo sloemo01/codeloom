@@ -6,3 +6,4 @@ venv/
 demo-repo/
 .DS_Store
 frames_*.png
+build/
