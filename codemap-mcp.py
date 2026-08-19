@@ -32,7 +32,7 @@ import codemap  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codemap-mcp"
-SERVER_VERSION = "0.5.0"
+SERVER_VERSION = "0.6.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -168,6 +168,39 @@ TOOLS: List[Dict[str, Any]] = [
             "required": ["task"],
         },
     },
+    {
+        "name": "codemap_cross",
+        "description": (
+            "Cross-file call graph: resolve calls to their defining module, so "
+            "A.main() calling engine.run() (imported from B) yields "
+            "A.main -> B.engine.run. Deep AST analysis, codebase-defined symbols only."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "module": {"type": "string", "description": "Optional: restrict to one module's calls"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+        },
+    },
+    {
+        "name": "codemap_search",
+        "description": (
+            "Search the symbol index for a function, class, or method. Returns "
+            "where each symbol is defined (module + line). Use to find a symbol "
+            "across the whole codebase."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "symbol": {"type": "string", "description": "Symbol name to search, e.g. 'Engine' or 'run'"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["symbol"],
+        },
+    },
 ]
 
 
@@ -256,6 +289,22 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if not task:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'task' argument"}]}
         text = codemap.build_plan(files, root, task)
+    elif name == "codemap_cross":
+        calls = codemap.build_cross_call_graph(files, root)
+        module = args.get("module")
+        start = None
+        if module:
+            resolved = _resolve_focus(calls, module, root)
+            if resolved is None:
+                return {"isError": True, "content": [{"type": "text", "text": f"module not found: {module}"}]}
+            start = resolved
+        text = codemap.render_cross_calls(calls, root, start=start)
+    elif name == "codemap_search":
+        symbol = args.get("symbol")
+        if not symbol:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
+        index = codemap.build_symbol_index(files, root)
+        text = codemap.render_search(index, symbol)
     else:
         return {"isError": True, "content": [{"type": "text", "text": f"unknown tool: {name}"}]}
 

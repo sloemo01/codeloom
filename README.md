@@ -71,6 +71,8 @@ That's it. Under a second, zero setup, works offline. Cross-platform — macOS, 
 | `codemap --task "X"` | "Which files matter for task X?" |
 | `codemap --impact X` | "What breaks if I change X?" |
 | `codemap --plan "X"` | "Read these files, in this order, to do task X" |
+| `codemap --cross` | "What calls what, across files?" (resolved call graph) |
+| `codemap --search X` | "Where is symbol X defined?" (symbol index) |
 
 ## Usage
 
@@ -89,9 +91,33 @@ codemap --cost               # append token-cost estimate to output
 codemap --impact X           # predict blast radius of changing module X
 codemap --task "text"        # rank modules relevant to a task
 codemap --plan "text"        # prioritized reading plan for a task
+codemap --cross              # cross-file call graph (resolved across modules)
+codemap --search SYMBOL      # search the symbol index for a function/class/method
 codemap --no-outline         # skip per-file one-liners (faster)
 codemap --max-files 2000     # cap traversal (default 5000)
 ```
+
+## Deep structural intelligence (`--cross`, `--search`)
+
+The old weakness — "shallow/structural only, no cross-file call graphs, no
+semantic index" — is gone. codemap now does **deep AST analysis** and has a
+**real symbol index**, still in one stdlib file:
+
+```bash
+# Cross-file call graph: resolve A.main() -> B.engine.run() across modules
+codemap --cross .
+#   src.main.main() -> src.core.engine.Engine
+#   src.core.engine.run() -> src.utils.retry.retry
+
+# Search the symbol index (functions, classes, methods + where they're defined)
+codemap --search Engine .
+#   Engine  [class]  src.core.engine:4
+```
+
+`--cross` resolves calls to their defining module via Python `ast` — so an
+agent sees the *real* execution flow across files, not just per-module noise.
+`--search` is a true inverted index of every symbol, with module + line, so the
+agent can find any function/class/method in the whole codebase instantly.
 
 ## Task-aware intelligence (`--task`, `--impact`, `--plan`)
 
@@ -204,11 +230,12 @@ stdio — no `mcp` package, no daemon). Register it with any MCP-capable agent:
 }
 ```
 
-Exposes eight tools: `codemap_map`, `codemap_graph`, `codemap_focus`,
+Exposes ten tools: `codemap_map`, `codemap_graph`, `codemap_focus`,
 `codemap_calls`, `codemap_diff`, `codemap_impact`, `codemap_task`,
-`codemap_plan`. Your agent can build a mental model, trace execution flow, see
-what changed, predict blast radius, and get a task-oriented reading plan —
-natively, no install, no index.
+`codemap_plan`, `codemap_cross`, `codemap_search`. Your agent can build a mental
+model, trace execution flow across files, see what changed, predict blast radius,
+get a task-oriented reading plan, and search any symbol — natively, no install,
+no index.
 
 ## How it works
 
@@ -235,6 +262,8 @@ computes the structure, prints it, and exits.
 | Runs on | stdlib only | heavy runtime |
 | Import graph | **yes — `--graph`, <1s** | yes, but after indexing |
 | Function call graph | **yes — `--calls`, multi-lang** | partial |
+| **Cross-file call graph** | **yes — `--cross`, AST-resolved** | yes (tree-sitter) |
+| **Symbol index / search** | **yes — `--search`** | yes |
 | Git-aware `--diff` | **yes — always fresh** | no |
 | **Task relevance (`--task`)** | **yes** | **no** |
 | **Change impact (`--impact`)** | **yes** | **no** |
@@ -269,6 +298,8 @@ the fastest way to answer "what is this project, actually?"
 - [x] Task-aware relevance (`--task`)
 - [x] Change-impact prediction (`--impact`)
 - [x] Agent-native reading plan (`--plan`)
+- [x] Cross-file call graph (`--cross`, AST-resolved)
+- [x] Symbol index + search (`--search`)
 - [ ] Incremental mode (only re-emit changed modules)
 - [ ] Multi-language import graph (beyond Python)
 

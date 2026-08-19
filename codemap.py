@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 
 # --------------------------------------------------------------------------- #
 # Language / structure detection
@@ -482,6 +482,219 @@ def render_calls(calls: dict, root: str, start: Optional[str] = None) -> str:
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
+# Cross-file call graph (resolve A.main() -> B.engine.run() across modules)
+# --------------------------------------------------------------------------- #
+
+def build_cross_call_graph(files: List[str], root: str) -> dict:
+    """Build a cross-file call graph: {module: {func: set(qualified_callees)}}.
+    Resolves calls to their defining module, so `A.main()` calling `engine.run()`
+    (imported from B) yields `A.main -> B.engine.run`. Uses Python `ast` for
+    precise resolution; falls back to regex for non-Python files."""
+    # Pass 1: collect defined symbols per module (funcs + classes + methods).
+    symbols: dict = {}  # module -> {name: set(qualified_names)}
+    for f in files:
+        if not f.endswith(".py"):
+            continue
+        mod = module_name_of(f, root)
+        symbols[mod] = {}
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                tree = ast.parse(fh.read())
+        except (SyntaxError, OSError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                symbols[mod].setdefault(node.name, set()).add(f"{mod}.{node.name}")
+            elif isinstance(node, ast.ClassDef):
+                symbols[mod].setdefault(node.name, set()).add(f"{mod}.{node.name}")
+                # methods
+                for sub in node.body:
+                    if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        symbols[mod].setdefault(sub.name, set()).add(f"{mod}.{node.name}.{sub.name}")
+
+    # Pass 2: per-module import map: local_name -> (module, imported_name)
+    # Resolve import targets to actual module paths (suffix match) so
+    # `from utils.retry import retry` maps to `src.utils.retry.retry`.
+    module_names = set(symbols.keys())
+    def _resolve_mod(target: str) -> str:
+        """Resolve a dotted import target to an actual module name."""
+        if target in module_names:
+            return target
+        tsegs = target.split(".")
+        best = None
+        for mod in module_names:
+            msegs = mod.split(".")
+            if len(msegs) >= len(tsegs) and msegs[-len(tsegs):] == tsegs:
+                if best is None or len(msegs) < len(best.split(".")):
+                    best = mod
+        return best or target
+
+    import_maps: dict = {}  # module -> {local_name: qualified_target}
+    for f in files:
+        if not f.endswith(".py"):
+            continue
+        mod = module_name_of(f, root)
+        import_maps[mod] = {}
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                tree = ast.parse(fh.read())
+        except (SyntaxError, OSError):
+            continue
+        package = ".".join(mod.split(".")[:-1]) if "." in mod else ""
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    local = a.asname or a.name.split(".")[0]
+                    import_maps[mod][local] = _resolve_mod(a.name)
+            elif isinstance(node, ast.ImportFrom):
+                base = node.module or ""
+                if node.level:
+                    level = node.level
+                    base_parts = package.split(".") if package else []
+                    if level > 1:
+                        base_parts = base_parts[:-(level - 1)] if len(base_parts) >= level - 1 else []
+                    target = ".".join(base_parts + ([base] if base else []))
+                else:
+                    target = base
+                resolved_base = _resolve_mod(target)
+                for a in node.names:
+                    local = a.asname or a.name
+                    import_maps[mod][local] = f"{resolved_base}.{a.name}" if resolved_base else a.name
+
+    # Pass 3: find calls, resolve to qualified callee, keep only codebase-defined.
+    # Build the set of all qualified names defined in the codebase.
+    all_defined_q: set = set()
+    for mod_syms in symbols.values():
+        for qnames in mod_syms.values():
+            all_defined_q |= qnames
+
+    calls: dict = {}  # module -> {caller: set(qualified_callee)}
+    for f in files:
+        if not f.endswith(".py"):
+            continue
+        mod = module_name_of(f, root)
+        calls[mod] = {}
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                tree = ast.parse(fh.read())
+        except (SyntaxError, OSError):
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            caller = node.name
+            callees = set()
+            for sub in ast.walk(node):
+                if not isinstance(sub, ast.Call):
+                    continue
+                fn = sub.func
+                if isinstance(fn, ast.Name):
+                    # local function call
+                    if fn.id in symbols.get(mod, {}):
+                        callees |= symbols[mod][fn.id]
+                    # imported name
+                    elif fn.id in import_maps.get(mod, {}):
+                        target = import_maps[mod][fn.id]
+                        callees.add(target)
+                elif isinstance(fn, ast.Attribute):
+                    # obj.method() — resolve obj to its module
+                    obj = fn.value
+                    if isinstance(obj, ast.Name) and obj.id in import_maps.get(mod, {}):
+                        base = import_maps[mod][obj.id]
+                        callees.add(f"{base}.{fn.attr}")
+                    else:
+                        # method on a local class instance — best-effort
+                        if fn.attr in symbols.get(mod, {}):
+                            callees |= symbols[mod][fn.attr]
+            # filter to codebase-defined symbols only
+            callees = {c for c in callees if c in all_defined_q}
+            if callees:
+                calls[mod][caller] = callees
+    return calls
+
+def render_cross_calls(calls: dict, root: str, start: Optional[str] = None) -> str:
+    buf = io.StringIO()
+    if start:
+        buf.write(f"# cross-file calls in {start}\n")
+        for caller, callees in sorted(calls.get(start, {}).items()):
+            if callees:
+                buf.write(f"  {caller}() -> {', '.join(sorted(callees))}\n")
+        return buf.getvalue()
+    buf.write("# cross-file call graph\n")
+    total = sum(len(c) for c in calls.values())
+    buf.write(f"{len(calls)} modules, {total} callers\n\n")
+    for mod, funcs in sorted(calls.items()):
+        for caller, callees in sorted(funcs.items()):
+            if callees:
+                buf.write(f"  {mod}.{caller}() -> {', '.join(sorted(callees))}\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
+# Symbol index + --search (inverted index of all symbols)
+# --------------------------------------------------------------------------- #
+
+def build_symbol_index(files: List[str], root: str) -> dict:
+    """Build an inverted index: symbol_name -> list of {module, kind, line}.
+    Indexes functions, classes, and methods across all Python files."""
+    index: dict = {}
+    for f in files:
+        if not f.endswith(".py"):
+            continue
+        mod = module_name_of(f, root)
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                tree = ast.parse(fh.read())
+        except (SyntaxError, OSError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                index.setdefault(node.name, []).append(
+                    {"module": mod, "kind": "function", "line": node.lineno})
+            elif isinstance(node, ast.ClassDef):
+                index.setdefault(node.name, []).append(
+                    {"module": mod, "kind": "class", "line": node.lineno})
+                for sub in node.body:
+                    if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        index.setdefault(sub.name, []).append(
+                            {"module": mod, "kind": "method", "line": sub.lineno,
+                             "class": node.name})
+    return index
+
+def search_symbols(index: dict, query: str, limit: int = 20) -> List[dict]:
+    """Search the symbol index. Exact match first, then substring, then prefix."""
+    q = query.lower()
+    exact, sub, prefix = [], [], []
+    for name, locs in index.items():
+        nl = name.lower()
+        if nl == q:
+            exact.append((name, locs))
+        elif q in nl:
+            sub.append((name, locs))
+        elif nl.startswith(q):
+            prefix.append((name, locs))
+    ranked = exact + prefix + sub
+    out = []
+    for name, locs in ranked:
+        for loc in locs:
+            out.append({"name": name, **loc})
+            if len(out) >= limit:
+                return out
+    return out
+
+def render_search(index: dict, query: str, limit: int = 20) -> str:
+    results = search_symbols(index, query, limit)
+    buf = io.StringIO()
+    buf.write(f"# search: {query}\n")
+    if not results:
+        buf.write("No symbols found.\n")
+        return buf.getvalue()
+    buf.write(f"{len(results)} result(s):\n\n")
+    for r in results:
+        cls = f" ({r['class']})" if r.get("class") else ""
+        buf.write(f"  {r['name']}  [{r['kind']}{cls}]  {r['module']}:{r['line']}\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
 # --impact: blast-radius prediction (graph reachability)
 # --------------------------------------------------------------------------- #
 
@@ -833,6 +1046,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--impact", metavar="MODULE", help="predict blast radius of changing a module")
     p.add_argument("--task", metavar="TEXT", help="rank modules relevant to a task description")
     p.add_argument("--plan", metavar="TEXT", help="emit a prioritized reading plan for a task")
+    p.add_argument("--cross", action="store_true", help="show cross-file call graph (resolved across modules)")
+    p.add_argument("--search", metavar="SYMBOL", help="search the symbol index for a function/class/method")
     p.add_argument("--version", action="version", version=f"codemap {VERSION}")
     args = p.parse_args(argv)
 
@@ -847,6 +1062,44 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.diff:
         print(render_diff(root, args.max_files))
         return 0
+
+    # --cross / --search: deep structural intelligence
+    if args.cross or args.search:
+        gi = os.path.join(root, ".gitignore")
+        globs, ignore_dirs = parse_gitignore(gi) if os.path.isfile(gi) else ([], [])
+        files: List[str] = []
+        _walk(root, globs, ignore_dirs, args.max_files, files)
+
+        if args.search:
+            index = build_symbol_index(files, root)
+            print(render_search(index, args.search))
+            return 0
+
+        if args.cross:
+            calls = build_cross_call_graph(files, root)
+            focus = None
+            if args.focus:
+                focus = args.focus
+                focus_path = os.path.join(root, focus) if not os.path.isabs(focus) else focus
+                if os.path.isdir(focus_path):
+                    focus = module_name_of(focus_path, root)
+                elif focus.endswith(".py") or os.path.isfile(focus_path) or os.path.isfile(focus_path + ".py"):
+                    focus = module_name_of(focus_path + (".py" if os.path.isfile(focus_path + ".py") else ""), root)
+                if focus not in calls:
+                    fsegs = focus.split(".")
+                    match = None
+                    for mod in calls:
+                        msegs = mod.split(".")
+                        if len(msegs) >= len(fsegs) and msegs[-len(fsegs):] == fsegs:
+                            if match is None or len(msegs) < len(match.split(".")):
+                                match = mod
+                    if match is not None:
+                        focus = match
+                    else:
+                        print(f"module not found: {args.focus}", file=sys.stderr)
+                        return 1
+            print(render_cross_calls(calls, root, start=focus))
+            return 0
 
     # --impact / --task / --plan: task-aware intelligence
     if args.impact or args.task or args.plan:

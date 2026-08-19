@@ -198,6 +198,34 @@ class TestCodemap(unittest.TestCase):
         self.assertIn("Read these files", plan)
         self.assertIn("src/core/engine.py", plan)
 
+    def test_cross_call_graph(self):
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        calls = codemap.build_cross_call_graph(files, self.repo)
+        # src.cli.main calls Engine (class in src.core.engine) and retry
+        self.assertIn("src.core.engine.Engine", calls.get("src.cli", {}).get("main", set()))
+        self.assertIn("src.utils.retry.retry", calls.get("src.cli", {}).get("main", set()))
+        # src.core.engine.run calls retry
+        self.assertIn("src.utils.retry.retry", calls.get("src.core.engine", {}).get("run", set()))
+
+    def test_symbol_search(self):
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        index = codemap.build_symbol_index(files, self.repo)
+        results = codemap.search_symbols(index, "Engine")
+        self.assertTrue(results)
+        self.assertEqual(results[0]["name"], "Engine")
+        self.assertEqual(results[0]["kind"], "class")
+        # search for a method
+        results2 = codemap.search_symbols(index, "run")
+        self.assertTrue(results2)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
