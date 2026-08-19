@@ -2308,12 +2308,16 @@ def load_persistent_index(root: str) -> Optional[dict]:
         pass
     return None
 
-def index_is_fresh(root: str, pidx: dict) -> bool:
+def index_is_fresh(root: str, pidx: dict, sample: int = 0) -> bool:
     """Check whether the persistent index is fresh (no files changed since).
     Compares (mtime, size) — size catches quick appends that Windows mtime
-    (2s resolution) would miss. Cheap stat, doesn't defeat the fast-path."""
+    (2s resolution) would miss. `sample` bounds the check to N files so
+    monorepo queries stay fast (0 = check all, for --index-status)."""
     files = pidx.get("files", {})
-    for path, meta in files.items():
+    items = list(files.items())
+    if sample > 0:
+        items = items[:sample]
+    for path, meta in items:
         if not os.path.isfile(path):
             return False
         try:
@@ -2325,11 +2329,13 @@ def index_is_fresh(root: str, pidx: dict) -> bool:
     return True
 
 def ensure_fresh_index(root: str, max_files: int) -> Optional[dict]:
-    """Load the persistent index, rebuilding it if stale. Returns the index."""
+    """Load the persistent index, rebuilding it if stale. Returns the index.
+    Uses a bounded freshness sample (200 files) so monorepo queries are fast;
+    --index-status does the full check."""
     pidx = load_persistent_index(root)
     if pidx is None:
         return None
-    if index_is_fresh(root, pidx):
+    if index_is_fresh(root, pidx, sample=200):
         return pidx
     # stale — rebuild
     gi = os.path.join(root, ".gitignore")
@@ -3131,6 +3137,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                           f"Signature: {sig}\n"
                           f"Use `--get-symbol {args.get_symbol} --full` for the full source.\n")
                     return 0
+                # symbol not in index — return fast, don't scan the whole repo
+                print(f"# get_symbol: {args.get_symbol}\nSymbol not found in index. "
+                      f"Run `codeloom --index` to refresh, or use --full to scan.\n")
+                return 0
             if args.search:
                 print(render_search(pidx.get("symbols", {}), args.search))
                 return 0
