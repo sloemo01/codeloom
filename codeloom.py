@@ -3162,13 +3162,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     # --get-symbol / --search: fast-path from the persistent index (no walk)
-    if (args.get_symbol or args.search) and not args.full:
+    # --full also uses the index (it stores the full source) — no repo re-scan.
+    if (args.get_symbol or args.search):
         pidx = ensure_fresh_index(root, args.max_files)
         if pidx is not None:
             if args.get_symbol:
                 locs = pidx.get("symbols", {}).get(args.get_symbol)
                 if locs:
                     loc = locs[0]
+                    if args.full:
+                        # full source straight from the index — no re-parse
+                        print(f"# get_symbol: {args.get_symbol}\n"
+                              f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
+                              f"bytes {loc.get('start_byte',0)}-{loc.get('end_byte',0)}  "
+                              f"~{loc.get('tokens',0)} tokens\n\n"
+                              f"{loc.get('source','')}\n")
+                        return 0
                     # render summary directly from the index loc (no re-parse)
                     sig = loc.get("source", "").split("\n")[0][:60] or args.get_symbol
                     print(f"# get_symbol: {args.get_symbol}\n"
