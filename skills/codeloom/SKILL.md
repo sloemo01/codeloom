@@ -185,10 +185,12 @@ python3 codeloom.py --index-status /path/to/repo
    Expect `serverInfo` with name `codeloom-mcp`.
 3. Tools exposed: `codeloom_map`, `codeloom_graph`, `codeloom_focus`,
    `codeloom_calls`, `codeloom_diff`, `codeloom_impact`, `codeloom_task`,
-   `codeloom_plan`, `codeloom_cross`, `codeloom_search`, `codeloom_usages`,
-   `codeloom_grep`, `codeloom_read`, `codeloom_explain`, `codeloom_similar`,
-   `codeloom_deadcode`, `codeloom_get_symbol`, `codeloom_snippet`,
-   `codeloom_incremental`, `codeloom_verify`, `codeloom_trace`.
+   `codeloom_plan`, `codeloom_pack`, `codeloom_cross`, `codeloom_search`,
+   `codeloom_usages`, `codeloom_grep`, `codeloom_read`, `codeloom_explain`,
+   `codeloom_similar`, `codeloom_deadcode`, `codeloom_get_symbol`,
+   `codeloom_snippet`, `codeloom_incremental`, `codeloom_verify`,
+   `codeloom_trace`, and `codeloom_ask` (single natural-language entry point
+   that routes deterministically — the agent never picks among tools).
 
 ### 3. Run the test suite
 ```bash

@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.21.0"
+SERVER_VERSION = "0.22.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -399,6 +399,27 @@ TOOLS: List[Dict[str, Any]] = [
             "required": ["command"],
         },
     },
+    {
+        "name": "codeloom_ask",
+        "description": (
+            "Single natural-language entry point. Ask in plain English and "
+            "codeloom routes deterministically to the right tool — the agent "
+            "never has to pick among 22 tools. Examples: 'what matters for "
+            "fixing the login bug', 'what breaks if I change auth.py', 'where "
+            "is the Agent class', 'what calls what across files', 'give me the "
+            "whole context for adding retry'. This eliminates tool-routing "
+            "errors entirely."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "query": {"type": "string", "description": "Natural-language request"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["query"],
+        },
+    },
 ]
 
 
@@ -504,11 +525,87 @@ def _resolve_focus(graph: dict, module: str, root: str) -> Optional[str]:
     return match
 
 
+def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any]:
+    """Route a natural-language request to the right codeloom tool.
+
+    This is the answer to jcodemunch's 91-tool routing problem: instead of
+    making the agent pick among 22 tools (or 91), codeloom_ask takes plain
+    language and dispatches deterministically. The agent never misroutes
+    because it never routes."""
+    q = (args.get("query") or "").strip().lower()
+    if not q:
+        return {"isError": True, "content": [{"type": "text", "text": "missing 'query' argument"}]}
+    files = _collect_files(root, max_files)
+
+    # 1. Task-orientation (the moat) — "what matters / what breaks / read order / context"
+    if any(k in q for k in ["what matters", "relevant to", "which files", "for this task",
+                            "what breaks", "impact of", "blast radius", "if i change",
+                            "read order", "reading plan", "how to approach", "context for",
+                            "pack", "whole context", "understand this task"]):
+        if any(k in q for k in ["what breaks", "impact of", "blast radius", "if i change"]):
+            # extract a module name if present
+            import re
+            m = re.search(r"([\w/]+\.py|[\w.]+)", q.replace("impact of", "").replace("what breaks if i change", ""))
+            target = m.group(1) if m else None
+            if target:
+                graph = codeloom.build_graph(files, root)
+                resolved = _resolve_focus(graph, target, root)
+                if resolved:
+                    return {"content": [{"type": "text", "text": codeloom.render_impact(graph, root, resolved)}]}
+            return {"content": [{"type": "text", "text": codeloom.render_task(files, root, q)}]}
+        if any(k in q for k in ["pack", "whole context", "context for", "understand this task"]):
+            return {"content": [{"type": "text", "text": codeloom.render_pack(files, root, q)}]}
+        if any(k in q for k in ["read order", "reading plan", "how to approach"]):
+            return {"content": [{"type": "text", "text": codeloom.build_plan(files, root, q)}]}
+        return {"content": [{"type": "text", "text": codeloom.render_task(files, root, q)}]}
+
+    # 2. Symbol retrieval — "where is X / show me X / what does X do"
+    if any(k in q for k in ["where is", "find symbol", "search for", "show me", "what does",
+                            "explain", "source of", "definition of", "get symbol", "read "]):
+        import re
+        # extract the symbol, skipping stopwords and the query verbs
+        stop = {"where", "is", "the", "a", "an", "find", "symbol", "search", "for",
+                "show", "me", "what", "does", "explain", "source", "of", "definition",
+                "get", "read", "class", "function", "method", "in", "this", "repo"}
+        # find the first token that isn't a stopword (the actual symbol)
+        sym = None
+        for tok in re.findall(r"[A-Za-z_][\w.]*", q):
+            if tok.lower() not in stop:
+                sym = tok
+                break
+        if sym:
+            if any(k in q for k in ["explain", "what does"]):
+                return {"content": [{"type": "text", "text": codeloom.render_explain(files, root, sym)}]}
+            if any(k in q for k in ["source of", "definition of", "read ", "get symbol"]):
+                return {"content": [{"type": "text", "text": codeloom.render_read(files, root, sym)}]}
+            return {"content": [{"type": "text", "text": codeloom.render_search(codeloom.build_byte_index(files, root), sym)}]}
+        return {"content": [{"type": "text", "text": codeloom.render_task(files, root, q)}]}
+
+    # 3. Call graph / structure — "what calls what / dependencies / map"
+    if any(k in q for k in ["what calls", "call graph", "dependencies", "imports", "map the",
+                            "structure", "what touches", "cross-file", "call path"]):
+        if any(k in q for k in ["cross-file", "call path", "what calls what across"]):
+            return {"content": [{"type": "text", "text": codeloom.render_cross_calls(codeloom.build_cross_call_graph(files, root), root)}]}
+        if any(k in q for k in ["what calls", "call graph"]):
+            return {"content": [{"type": "text", "text": codeloom.render_calls(codeloom.build_call_graph_multi(files, root), root)}]}
+        if any(k in q for k in ["dependencies", "imports", "what touches"]):
+            return {"content": [{"type": "text", "text": codeloom.render_graph(codeloom.build_graph(files, root), root)}]}
+        return {"content": [{"type": "text", "text": codeloom.render_text(codeloom.build_map(root, True, max_files))}]}
+
+    # 4. Default — map the repo
+    return {"content": [{"type": "text", "text": codeloom.render_text(codeloom.build_map(root, True, max_files))}]}
+
+
 def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     """Execute a tool and return an MCP result (text content)."""
     root = os.path.abspath(args.get("root", "."))
     max_files = int(args.get("max_files", 5000))
     files = _collect_files(root, max_files)
+
+    # codeloom_ask: single natural-language entry point that routes
+    # deterministically — the agent never has to pick among 22 tools.
+    if name == "codeloom_ask":
+        return _route_ask(args, root, max_files)
 
     if name == "codeloom_map":
         m = codeloom.build_map(root, True, max_files)
