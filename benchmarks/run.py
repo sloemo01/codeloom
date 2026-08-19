@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""codemap benchmark harness — reproducible timing on a real repo.
+"""codeloom benchmark harness — reproducible timing on a real repo.
 
 Usage:
     python3 benchmarks/run.py [--repo /path/to/repo] [--runs 3]
 
-Clones browser-use (or uses a given repo), times each codemap operation, and
-prints a table. This is the honest, reproducible proof of codemap's speed.
+Clones browser-use (or uses a given repo), times each codeloom operation, and
+prints a table. This is the honest, reproducible proof of codeloom's speed.
 """
 import argparse
 import os
@@ -14,7 +14,7 @@ import sys
 import tempfile
 import time
 
-CODEmap = os.path.join(os.path.dirname(__file__), "..", "codemap.py")
+CodeLoom = os.path.join(os.path.dirname(__file__), "..", "codeloom.py")
 DEFAULT_REPO = "https://github.com/browser-use/browser-use.git"
 
 OPS = [
@@ -38,8 +38,8 @@ def time_op(cmd, cwd, runs):
 
 def token_consumption(repo, queries):
     """Measure tokens sent to the LLM for each retrieval strategy.
-    Baseline: grep-and-read (open whole files). codemap: --get-symbol.
-    Returns (baseline_tokens, codemap_tokens) per query."""
+    Baseline: grep-and-read (open whole files). codeloom: --get-symbol.
+    Returns (baseline_tokens, codeloom_tokens) per query."""
     import re
     results = []
     for q in queries:
@@ -65,13 +65,13 @@ def token_consumption(repo, queries):
                     baseline_tokens += len(fh.read()) // 4
             except OSError:
                 pass
-        # codemap: --get-symbol returns just the symbol + token count
-        cmd = [sys.executable, CODEmap, "--get-symbol", q, "."]
+        # codeloom: --get-symbol returns just the symbol + token count
+        cmd = [sys.executable, CodeLoom, "--get-symbol", q, "."]
         r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
         m = re.search(r"~(\d+) tokens", r.stdout)
-        codemap_tokens = int(m.group(1)) if m else 0
+        codeloom_tokens = int(m.group(1)) if m else 0
         results.append({"query": q, "baseline_tokens": baseline_tokens,
-                        "codemap_tokens": codemap_tokens})
+                        "codeloom_tokens": codeloom_tokens})
     return results
 
 
@@ -95,7 +95,7 @@ def main():
     print(f"{'op':<10} {'best (s)':<10} {'avg (s)':<10}")
     print("-" * 30)
     for name, args_list in OPS:
-        cmd = [sys.executable, CODEmap] + args_list
+        cmd = [sys.executable, CodeLoom] + args_list
         best, avg = time_op(cmd, repo, args.runs)
         print(f"{name:<10} {best:<10.3f} {avg:<10.3f}")
 
@@ -103,13 +103,13 @@ def main():
         print("\n=== Token consumption (vs grep-and-read baseline) ===")
         queries = ["Agent", "click", "extract"]
         results = token_consumption(repo, queries)
-        print(f"{'query':<10} {'baseline':<12} {'codemap':<12} {'savings':<10}")
+        print(f"{'query':<10} {'baseline':<12} {'codeloom':<12} {'savings':<10}")
         print("-" * 44)
         for r in results:
             savings = 0
             if r["baseline_tokens"] > 0:
-                savings = (1 - r["codemap_tokens"] / r["baseline_tokens"]) * 100
-            print(f"{r['query']:<10} {r['baseline_tokens']:<12} {r['codemap_tokens']:<12} {savings:<10.1f}%")
+                savings = (1 - r["codeloom_tokens"] / r["baseline_tokens"]) * 100
+            print(f"{r['query']:<10} {r['baseline_tokens']:<12} {r['codeloom_tokens']:<12} {savings:<10.1f}%")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for codemap. Run with: python3 tests.py"""
+"""Tests for codeloom. Run with: python3 tests.py"""
 import os
 import shutil
 import subprocess
@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(__file__))
-import codemap  # noqa: E402
+import codeloom  # noqa: E402
 
 
 def make_repo(repo):
@@ -47,7 +47,7 @@ def make_repo(repo):
     w(j("ignored.pyc"), "ignored")
 
 
-class TestCodemap(unittest.TestCase):
+class TestCodeLoom(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.repo = os.path.join(self.tmp, "repo")
@@ -58,35 +58,35 @@ class TestCodemap(unittest.TestCase):
         shutil.rmtree(self.tmp)
 
     def test_file_count_and_gitignore(self):
-        m = codemap.build_map(self.repo, True, 5000)
+        m = codeloom.build_map(self.repo, True, 5000)
         # .venv/junk.py and ignored.pyc excluded; 9 real files remain
         self.assertEqual(m["file_count"], 9)
 
     def test_outline_python(self):
-        m = codemap.build_map(self.repo, True, 5000)
-        text = codemap.render_text(m)
+        m = codeloom.build_map(self.repo, True, 5000)
+        text = codeloom.render_text(m)
         self.assertIn("def main():", text)
         self.assertIn("class Parser:", text)
         self.assertIn("class Engine:", text)
 
     def test_entry_points_prefer_root(self):
-        m = codemap.build_map(self.repo, True, 5000)
+        m = codeloom.build_map(self.repo, True, 5000)
         eps = [os.path.basename(e) for e in m["entry_points"]]
         self.assertIn("README.md", eps)
 
     def test_json_roundtrip(self):
-        m = codemap.build_map(self.repo, True, 5000)
+        m = codeloom.build_map(self.repo, True, 5000)
         payload = {
             "root": m["root"],
             "file_count": m["file_count"],
-            "tree": codemap.tree_to_json(m["tree"]),
+            "tree": codeloom.tree_to_json(m["tree"]),
         }
         import json
         json.dumps(payload)  # must not raise
 
     def test_cli_runs(self):
         r = subprocess.run(
-            [sys.executable, os.path.join(os.path.dirname(__file__), "codemap.py"),
+            [sys.executable, os.path.join(os.path.dirname(__file__), "codeloom.py"),
              "--json", self.repo],
             capture_output=True, text=True,
         )
@@ -94,14 +94,14 @@ class TestCodemap(unittest.TestCase):
         self.assertIn("file_count", r.stdout)
 
     def test_graph_import_edges(self):
-        m = codemap.build_map(self.repo, True, 5000)
+        m = codeloom.build_map(self.repo, True, 5000)
         files = []
         # re-walk (build_map doesn't return files list)
         for root, _, fs in os.walk(self.repo):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
-        graph = codemap.build_graph(files, self.repo)
+        graph = codeloom.build_graph(files, self.repo)
         # src.cli -> src.core.engine and src.utils.retry
         self.assertIn("src.core.engine", graph.get("src.cli", set()))
         self.assertIn("src.utils.retry", graph.get("src.cli", set()))
@@ -109,14 +109,14 @@ class TestCodemap(unittest.TestCase):
         self.assertIn("src.core.engine", graph.get("tests.test_cli", set()))
 
     def test_graph_focus(self):
-        m = codemap.build_map(self.repo, True, 5000)
+        m = codeloom.build_map(self.repo, True, 5000)
         files = []
         for root, _, fs in os.walk(self.repo):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
-        graph = codemap.build_graph(files, self.repo)
-        fs = codemap.focus_subgraph(graph, "src.core.engine")
+        graph = codeloom.build_graph(files, self.repo)
+        fs = codeloom.focus_subgraph(graph, "src.core.engine")
         self.assertIn("src.cli", fs["depended_on_by"])
         self.assertIn("tests.test_cli", fs["depended_on_by"])
         self.assertIn("src.utils.retry", fs["depends_on"])
@@ -127,7 +127,7 @@ class TestCodemap(unittest.TestCase):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
-        calls = codemap.build_call_graph(files, self.repo)
+        calls = codeloom.build_call_graph(files, self.repo)
         # src.cli.main calls retry (function defined in src.utils.retry)
         self.assertIn("retry", calls.get("src.cli", {}).get("main", set()))
         # src.core.engine.run calls retry
@@ -144,7 +144,7 @@ class TestCodemap(unittest.TestCase):
             with open(os.path.join(tmp, "main.go"), "w") as f:
                 f.write("package main\nfunc helper() int { return 1 }\nfunc main() { helper() }\n")
             files = [os.path.join(tmp, "app.js"), os.path.join(tmp, "main.go")]
-            calls = codemap.build_call_graph_multi(files, tmp)
+            calls = codeloom.build_call_graph_multi(files, tmp)
             self.assertIn("greet", calls.get("app", {}).get("main", set()))
             self.assertIn("helper", calls.get("main", {}).get("main", set()))
         finally:
@@ -152,16 +152,16 @@ class TestCodemap(unittest.TestCase):
 
     def test_install_agents(self):
         # creates AGENTS.md
-        msg = codemap.install_agents(self.repo)
+        msg = codeloom.install_agents(self.repo)
         self.assertIn("AGENTS.md", msg)
         self.assertTrue(os.path.isfile(os.path.join(self.repo, "AGENTS.md")))
         # updates on second call
-        msg2 = codemap.install_agents(self.repo)
+        msg2 = codeloom.install_agents(self.repo)
         self.assertIn("updated", msg2)
 
     def test_token_estimate(self):
-        self.assertGreater(codemap.estimate_tokens("hello world"), 0)
-        self.assertEqual(codemap.estimate_tokens(""), 1)
+        self.assertGreater(codeloom.estimate_tokens("hello world"), 0)
+        self.assertEqual(codeloom.estimate_tokens(""), 1)
 
     def test_impact_analysis(self):
         files = []
@@ -169,8 +169,8 @@ class TestCodemap(unittest.TestCase):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
-        graph = codemap.build_graph(files, self.repo)
-        imp = codemap.impact_analysis(graph, "src.core.engine")
+        graph = codeloom.build_graph(files, self.repo)
+        imp = codeloom.impact_analysis(graph, "src.core.engine")
         # src.cli and tests.test_cli depend on engine
         self.assertIn("src.cli", imp["direct_dependents"])
         self.assertIn("tests.test_cli", imp["direct_dependents"])
@@ -183,7 +183,7 @@ class TestCodemap(unittest.TestCase):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
-        results = codemap.task_relevance(files, self.repo, "retry logic")
+        results = codeloom.task_relevance(files, self.repo, "retry logic")
         self.assertTrue(results)
         # retry module should rank first for 'retry' task
         self.assertEqual(results[0]["module"], "src.utils.retry")
@@ -194,7 +194,7 @@ class TestCodemap(unittest.TestCase):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
-        plan = codemap.build_plan(files, self.repo, "add retry to engine")
+        plan = codeloom.build_plan(files, self.repo, "add retry to engine")
         self.assertIn("Read these files", plan)
         # cross-platform: check for the module name, not a hardcoded path separator
         self.assertIn("engine.py", plan)
@@ -205,7 +205,7 @@ class TestCodemap(unittest.TestCase):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
-        calls = codemap.build_cross_call_graph(files, self.repo)
+        calls = codeloom.build_cross_call_graph(files, self.repo)
         # src.cli.main calls Engine (class in src.core.engine) and retry
         self.assertIn("src.core.engine.Engine", calls.get("src.cli", {}).get("main", set()))
         self.assertIn("src.utils.retry.retry", calls.get("src.cli", {}).get("main", set()))
@@ -218,13 +218,13 @@ class TestCodemap(unittest.TestCase):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
-        index = codemap.build_symbol_index(files, self.repo)
-        results = codemap.search_symbols(index, "Engine")
+        index = codeloom.build_symbol_index(files, self.repo)
+        results = codeloom.search_symbols(index, "Engine")
         self.assertTrue(results)
         self.assertEqual(results[0]["name"], "Engine")
         self.assertEqual(results[0]["kind"], "class")
         # search for a method
-        results2 = codemap.search_symbols(index, "run")
+        results2 = codeloom.search_symbols(index, "run")
         self.assertTrue(results2)
 
     def test_gitignore_negation_and_anchoring(self):
@@ -232,25 +232,25 @@ class TestCodemap(unittest.TestCase):
         gi = os.path.join(self.repo, ".gitignore")
         with open(gi, "w") as f:
             f.write("*.pyc\n/build\n!keep.pyc\nnode_modules/\n")
-        rules = codemap.parse_gitignore(gi)
+        rules = codeloom.parse_gitignore(gi)
         # *.pyc ignored
-        self.assertTrue(codemap.is_ignored(os.path.join(self.repo, "a.pyc"), rules))
+        self.assertTrue(codeloom.is_ignored(os.path.join(self.repo, "a.pyc"), rules))
         # /build anchored ignores build/out.js
-        self.assertTrue(codemap.is_ignored(os.path.join(self.repo, "build", "out.js"), rules))
+        self.assertTrue(codeloom.is_ignored(os.path.join(self.repo, "build", "out.js"), rules))
         # node_modules/ dir-only ignores contents
-        self.assertTrue(codemap.is_ignored(os.path.join(self.repo, "node_modules", "x.js"), rules))
+        self.assertTrue(codeloom.is_ignored(os.path.join(self.repo, "node_modules", "x.js"), rules))
         # !keep.pyc negation keeps it
-        self.assertFalse(codemap.is_ignored(os.path.join(self.repo, "keep.pyc"), rules))
+        self.assertFalse(codeloom.is_ignored(os.path.join(self.repo, "keep.pyc"), rules))
 
     def test_incremental_cache(self):
         # first run: all files changed
         files = [os.path.join(self.repo, "src", "cli.py")]
-        cache = codemap.load_cache(self.repo)
-        changed = codemap.changed_files(files, cache)
+        cache = codeloom.load_cache(self.repo)
+        changed = codeloom.changed_files(files, cache)
         self.assertEqual(len(changed), 1)
         # update cache, second run: no changes
-        codemap.update_cache(files, cache)
-        changed2 = codemap.changed_files(files, cache)
+        codeloom.update_cache(files, cache)
+        changed2 = codeloom.changed_files(files, cache)
         self.assertEqual(len(changed2), 0)
 
     def test_multi_lang_import_graph(self):
@@ -261,14 +261,14 @@ class TestCodemap(unittest.TestCase):
             with open(os.path.join(tmp, "util.js"), "w") as f:
                 f.write("export function helper() { return 1; }\n")
             files = [os.path.join(tmp, "app.js"), os.path.join(tmp, "util.js")]
-            graph = codemap.build_graph_multi(files, tmp)
+            graph = codeloom.build_graph_multi(files, tmp)
             self.assertIn("util", graph.get("app", set()))
         finally:
             shutil.rmtree(tmp)
 
     def test_verify_sha256(self):
         path = os.path.join(self.repo, "src", "cli.py")
-        digest = codemap.sha256_file(path)
+        digest = codeloom.sha256_file(path)
         self.assertEqual(len(digest), 64)  # sha256 hex is 64 chars
 
     def test_search_snippet(self):
@@ -277,8 +277,8 @@ class TestCodemap(unittest.TestCase):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
-        index = codemap.build_symbol_index(files, self.repo)
-        results = codemap.search_symbols(index, "Engine")
+        index = codeloom.build_symbol_index(files, self.repo)
+        results = codeloom.search_symbols(index, "Engine")
         self.assertTrue(results)
         self.assertIn("snippet", results[0])
         self.assertTrue(results[0]["snippet"])
@@ -289,7 +289,7 @@ class TestCodemap(unittest.TestCase):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
-        usages = codemap.find_usages(files, self.repo, "retry")
+        usages = codeloom.find_usages(files, self.repo, "retry")
         # retry is used in src.cli.main and src.core.engine.run
         mods = {u["module"] for u in usages}
         self.assertIn("src.cli", mods)
@@ -302,9 +302,9 @@ class TestCodemap(unittest.TestCase):
             with open(os.path.join(tmp, "util.js"), "w") as f:
                 f.write("export function helper() { return 1; }\nfunction main() { helper(); }\n")
             files = [os.path.join(tmp, "util.js")]
-            calls = codemap.build_call_graph_multi(files, tmp)
+            calls = codeloom.build_call_graph_multi(files, tmp)
             # if tree-sitter is available, helper should be found
-            if codemap._TS_AVAILABLE:
+            if codeloom._TS_AVAILABLE:
                 self.assertIn("helper", calls.get("util", {}).get("main", set()))
         finally:
             shutil.rmtree(tmp)
@@ -316,7 +316,7 @@ class TestCodemap(unittest.TestCase):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
-        results = codemap.task_relevance(files, self.repo, "retry logic")
+        results = codeloom.task_relevance(files, self.repo, "retry logic")
         self.assertTrue(results)
         self.assertEqual(results[0]["module"], "src.utils.retry")
 
@@ -326,7 +326,7 @@ class TestCodemap(unittest.TestCase):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
-        results = codemap.grep_search(files, self.repo, "retry")
+        results = codeloom.grep_search(files, self.repo, "retry")
         self.assertTrue(results)
         # retry appears in src.utils.retry and src.core.engine
         mods = {r["module"] for r in results}
@@ -339,11 +339,11 @@ class TestCodemap(unittest.TestCase):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
-        cache = codemap.load_cache(self.repo)
-        index1 = codemap.cached_symbols(files, self.repo, cache)
+        cache = codeloom.load_cache(self.repo)
+        index1 = codeloom.cached_symbols(files, self.repo, cache)
         self.assertIn("Engine", index1)
         # second call reuses cache
-        index2 = codemap.cached_symbols(files, self.repo, cache)
+        index2 = codeloom.cached_symbols(files, self.repo, cache)
         self.assertIn("Engine", index2)
 
     def test_read_symbol(self):
@@ -352,12 +352,12 @@ class TestCodemap(unittest.TestCase):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
-        result = codemap.read_symbol(files, self.repo, "Engine")
+        result = codeloom.read_symbol(files, self.repo, "Engine")
         self.assertIsNotNone(result)
         self.assertEqual(result["kind"], "class")
         self.assertIn("class Engine", result["source"])
         # method
-        result2 = codemap.read_symbol(files, self.repo, "run")
+        result2 = codeloom.read_symbol(files, self.repo, "run")
         self.assertIsNotNone(result2)
         self.assertIn("def run", result2["source"])
 
@@ -371,11 +371,11 @@ class TestCodemap(unittest.TestCase):
                 f.write("public class App {\n    public int add(int a, int b) {\n        return a + b;\n    }\n}\n")
             files = [os.path.join(tmp, "main.go"), os.path.join(tmp, "App.java")]
             # Go (tree-sitter if available, else brace fallback)
-            r1 = codemap.read_symbol(files, tmp, "helper")
+            r1 = codeloom.read_symbol(files, tmp, "helper")
             self.assertIsNotNone(r1)
             self.assertIn("func helper", r1["source"])
             # Java (brace-matching fallback)
-            r2 = codemap.read_symbol(files, tmp, "add")
+            r2 = codeloom.read_symbol(files, tmp, "add")
             self.assertIsNotNone(r2)
             self.assertIn("public int add", r2["source"])
         finally:
@@ -387,7 +387,7 @@ class TestCodemap(unittest.TestCase):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
-        info = codemap.explain_symbol(files, self.repo, "Engine")
+        info = codeloom.explain_symbol(files, self.repo, "Engine")
         self.assertIsNotNone(info)
         self.assertEqual(info["kind"], "class")
         self.assertIn("module", info)
@@ -398,7 +398,7 @@ class TestCodemap(unittest.TestCase):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
-        results = codemap.similar_symbols(files, self.repo, "run")
+        results = codeloom.similar_symbols(files, self.repo, "run")
         # run has 1 param (self, fn) -> 1 non-self param; find others with 1 param
         self.assertIsInstance(results, list)
 
@@ -408,7 +408,7 @@ class TestCodemap(unittest.TestCase):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
-        dead = codemap.dead_code(files, self.repo)
+        dead = codeloom.dead_code(files, self.repo)
         self.assertIsInstance(dead, list)
 
     def test_byte_index(self):
@@ -417,7 +417,7 @@ class TestCodemap(unittest.TestCase):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
-        index = codemap.build_byte_index(files, self.repo)
+        index = codeloom.build_byte_index(files, self.repo)
         self.assertIn("Engine", index)
         loc = index["Engine"][0]
         self.assertIn("start_byte", loc)
@@ -432,14 +432,14 @@ class TestCodemap(unittest.TestCase):
             for f in fs:
                 if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
                     files.append(os.path.join(root, f))
-        loc = codemap.get_symbol(files, self.repo, "Engine")
+        loc = codeloom.get_symbol(files, self.repo, "Engine")
         self.assertIsNotNone(loc)
         self.assertIn("class Engine", loc["source"])
         self.assertIn("tokens", loc)
 
     def test_get_snippet_by_offset(self):
         path = os.path.join(self.repo, "src", "core", "engine.py")
-        s = codemap.get_snippet_by_offset(path, 0, 30)
+        s = codeloom.get_snippet_by_offset(path, 0, 30)
         self.assertIsNotNone(s)
         self.assertIn("tokens", s)
         self.assertIn("bytes", s)
@@ -460,9 +460,9 @@ class TestCodemap(unittest.TestCase):
                 f.write("secret\n")
             with open(os.path.join(tmp, "sub", "keep.py"), "w") as f:
                 f.write("y = 2\n")
-            rules = codemap.parse_gitignore(os.path.join(tmp, ".gitignore"))
+            rules = codeloom.parse_gitignore(os.path.join(tmp, ".gitignore"))
             files = []
-            codemap._walk(tmp, rules, 100, files)
+            codeloom._walk(tmp, rules, 100, files)
             rels = [os.path.relpath(f, tmp) for f in files]
             self.assertIn("a.py", rels)
             self.assertIn(os.path.join("sub", "keep.py"), rels)
@@ -478,19 +478,19 @@ class TestCodemap(unittest.TestCase):
                 f.write("*.log\n")
             with open(os.path.join(tmp, "a.py"), "w") as f:
                 f.write("x = 1\n")
-            cache = codemap.load_cache(tmp)
+            cache = codeloom.load_cache(tmp)
             files = [os.path.join(tmp, "a.py")]
             # first run: all changed
-            changed = codemap.changed_files(files, cache, tmp)
+            changed = codeloom.changed_files(files, cache, tmp)
             self.assertEqual(len(changed), 1)
-            codemap.update_cache(files, cache, tmp)
+            codeloom.update_cache(files, cache, tmp)
             # second run: no change
-            changed2 = codemap.changed_files(files, cache, tmp)
+            changed2 = codeloom.changed_files(files, cache, tmp)
             self.assertEqual(len(changed2), 0)
             # change .gitignore -> all changed again
             with open(os.path.join(tmp, ".gitignore"), "w") as f:
                 f.write("*.py\n")
-            changed3 = codemap.changed_files(files, cache, tmp)
+            changed3 = codeloom.changed_files(files, cache, tmp)
             self.assertEqual(len(changed3), 1)
         finally:
             shutil.rmtree(tmp)
@@ -502,7 +502,7 @@ class TestCodemap(unittest.TestCase):
             os.makedirs(os.path.join(tmp, "packages", "foo", "src"))
             with open(os.path.join(tmp, "packages", "foo", "pyproject.toml"), "w") as f:
                 f.write("[project]\nname = 'foo'\n")
-            roots = codemap._workspace_roots(tmp)
+            roots = codeloom._workspace_roots(tmp)
             self.assertIn("packages.foo.src", roots)
         finally:
             shutil.rmtree(tmp)
@@ -514,14 +514,14 @@ class TestCodemap(unittest.TestCase):
             with open(os.path.join(tmp, "a.py"), "w") as f:
                 f.write("class Foo:\n    def bar(self):\n        return 1\n")
             files = [os.path.join(tmp, "a.py")]
-            index = codemap.build_persistent_index(files, tmp)
+            index = codeloom.build_persistent_index(files, tmp)
             self.assertIn("Foo", index)
-            codemap.save_persistent_index(tmp, index, files)
-            loaded = codemap.load_persistent_index(tmp)
+            codeloom.save_persistent_index(tmp, index, files)
+            loaded = codeloom.load_persistent_index(tmp)
             self.assertIsNotNone(loaded)
             self.assertIn("Foo", loaded["symbols"])
             # status should report fresh
-            status = codemap.render_index_status(tmp)
+            status = codeloom.render_index_status(tmp)
             self.assertIn("fresh", status)
         finally:
             shutil.rmtree(tmp)
@@ -537,8 +537,8 @@ class TestCodemap(unittest.TestCase):
                 for i in range(100):
                     f.write(f"    def method_{i}(self):\n        return {i}\n")
             files = [os.path.join(tmp, "big.py")]
-            summary = codemap.render_get_symbol(files, tmp, "Big", summary=True)
-            full = codemap.render_get_symbol(files, tmp, "Big", summary=False)
+            summary = codeloom.render_get_symbol(files, tmp, "Big", summary=True)
+            full = codeloom.render_get_symbol(files, tmp, "Big", summary=False)
             self.assertIn("Signature", summary)
             self.assertIn("Docstring", summary)
             self.assertIn("Calls", summary)
@@ -559,7 +559,7 @@ class TestCodemap(unittest.TestCase):
                         "  return helper();\n"
                         "}\n")
             files = [os.path.join(tmp, "app.js")]
-            calls = codemap.build_call_graph_multi(files, tmp)
+            calls = codeloom.build_call_graph_multi(files, tmp)
             # main should call helper exactly once (the real call)
             self.assertIn("helper", calls.get("app", {}).get("main", set()))
             # the string/comment references should not create extra edges

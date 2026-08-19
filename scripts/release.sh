@@ -3,7 +3,7 @@
 # Usage: bash scripts/release.sh
 set -euo pipefail
 
-VERSION=$(grep -m1 'VERSION = ' codemap.py | sed -E 's/.*"([^"]+)".*/\1/')
+VERSION=$(grep -m1 'VERSION = ' codeloom.py | sed -E 's/.*"([^"]+)".*/\1/')
 TAG="v$VERSION"
 
 echo "Releasing $TAG"
@@ -19,19 +19,19 @@ git tag "$TAG"
 git push origin "$TAG"
 
 # create GitHub release with the demo GIF + checksum
-SHA=$(python3 codemap.py --verify codemap.py | grep sha256 | awk '{print $2}')
+SHA=$(python3 codeloom.py --verify codeloom.py | grep sha256 | awk '{print $2}')
 gh release create "$TAG" \
-  --title "codemap $VERSION" \
-  --notes "codemap $VERSION
+  --title "codeloom $VERSION" \
+  --notes "codeloom $VERSION
 
 - Single-file, zero-dependency, no-daemon codebase intelligence for AI agents.
 - Map, import graph, cross-file call graph, symbol search, usage search, grep,
   task-awareness, git diff, incremental cache, MCP server.
 - Optional tree-sitter / embedding / runtime-trace backends for precision.
 
-**SHA-256 of codemap.py:** \`$SHA\`
+**SHA-256 of codeloom.py:** \`$SHA\`
 
-Install: copy codemap.py into your repo, or \`curl -O\` + \`codemap --verify\`." \
+Install: copy codeloom.py into your repo, or \`curl -O\` + \`codeloom --verify\`." \
   demo.gif
 
 echo "Released $TAG"

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-codemap — a map of your codebase, in one command, for AI agents.
+codeloom — a map of your codebase, in one command, for AI agents.
 
 Single-file, zero-dependency, no-daemon. Walks a project, respects .gitignore,
 and emits a compact "table of contents" (folder tree + per-module one-liners +
@@ -8,11 +8,11 @@ entry points) that Claude Code, Cursor, Codex, Gemini or any coding agent can
 read in a second to build a mental model BEFORE burning tokens on grep/read.
 
 Usage:
-    codemap                       # map current directory -> stdout
-    codemap /path/to/repo         # map a specific repo
-    codemap --write MAP.md        # also write to MAP.md (gitignored-friendly)
-    codemap --json                # machine-readable JSON for tooling
-    codemap --max-files 2000      # cap traversal (default 5000)
+    codeloom                       # map current directory -> stdout
+    codeloom /path/to/repo         # map a specific repo
+    codeloom --write MAP.md        # also write to MAP.md (gitignored-friendly)
+    codeloom --json                # machine-readable JSON for tooling
+    codeloom --max-files 2000      # cap traversal (default 5000)
 
 Runs 100% locally. No network, no API keys, no GPU.
 """
@@ -33,7 +33,7 @@ VERSION = "0.19.0"
 
 # --------------------------------------------------------------------------- #
 # Optional progressive-enhancement backends.
-# codemap stays zero-dependency by default, but gets dramatically more precise
+# codeloom stays zero-dependency by default, but gets dramatically more precise
 # when richer tools are present. Each backend is gated on a `try: import` so
 # the core always works with stdlib only. See README "Known limits" for how
 # each limit is removed.
@@ -112,14 +112,14 @@ def install_grammars() -> str:
     ]
     cmd = "pip install " + " ".join(pkgs)
     return (
-        "codemap --install-grammars\n"
+        "codeloom --install-grammars\n"
         "==========================\n"
         "Installs optional tree-sitter language grammars for precise multi-language\n"
         "AST parsing (instead of the regex/brace-matching fallback).\n\n"
-        "This is OPT-IN — codemap works fully without it (zero-dep, single file).\n"
+        "This is OPT-IN — codeloom works fully without it (zero-dep, single file).\n"
         "Run:\n\n"
         f"  {cmd}\n\n"
-        "After installing, codemap auto-detects the grammars and uses real AST\n"
+        "After installing, codeloom auto-detects the grammars and uses real AST\n"
         "parsing for those languages. No config needed.\n"
     )
 
@@ -283,7 +283,7 @@ def _trace_call_edges(command: List[str], cwd: str) -> dict:
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
         f.write(_TRACE_WRAPPER)
         wrapper = f.name
-    out_path = os.path.join(tempfile.gettempdir(), "codemap_trace_out.json")
+    out_path = os.path.join(tempfile.gettempdir(), "codeloom_trace_out.json")
     env = dict(os.environ)
     env["CODEmap_TRACE_OUT"] = out_path
     try:
@@ -1395,7 +1395,7 @@ def render_grep(files: List[str], root: str, query: str, limit: int = 20) -> str
 # --------------------------------------------------------------------------- #
 # --read: extract exact symbol source via AST (token-efficient retrieval)
 # This is jcodemunch's core value — return the exact code the agent needs
-# without reading the whole file — integrated with codemap's task-orientation.
+# without reading the whole file — integrated with codeloom's task-orientation.
 # --------------------------------------------------------------------------- #
 
 def read_symbol(files: List[str], root: str, symbol: str) -> Optional[dict]:
@@ -1891,7 +1891,7 @@ def _file_hash(path: str) -> str:
         return ""
 
 def _cache_path(root: str) -> str:
-    return os.path.join(root, ".codemap-cache.json")
+    return os.path.join(root, ".codeloom-cache.json")
 
 def load_cache(root: str) -> dict:
     """Load the incremental cache if present and valid."""
@@ -1986,9 +1986,9 @@ def render_incremental(files: List[str], root: str, max_files: int) -> str:
     cache = load_cache(root)
     changed = changed_files(files, cache, root)
     buf = io.StringIO()
-    buf.write(f"# codemap --incremental — {len(changed)} changed file(s) since last run\n")
+    buf.write(f"# codeloom --incremental — {len(changed)} changed file(s) since last run\n")
     if not changed:
-        buf.write("No changes. Run `codemap` to refresh the full map.\n")
+        buf.write("No changes. Run `codeloom` to refresh the full map.\n")
     else:
         buf.write("\n## Changed files\n")
         for c in sorted(changed):
@@ -2000,8 +2000,8 @@ def render_incremental(files: List[str], root: str, max_files: int) -> str:
 
 # --------------------------------------------------------------------------- #
 # Persistent on-disk index (scale without a daemon).
-# `codemap --index` builds a full byte-offset symbol index once and saves it to
-# .codemap-index.json. Subsequent `--get-symbol`/`--search` load it in
+# `codeloom --index` builds a full byte-offset symbol index once and saves it to
+# .codeloom-index.json. Subsequent `--get-symbol`/`--search` load it in
 # milliseconds instead of re-parsing — the scale win for large repos, with no
 # background process. Incrementally refreshed via content hashes.
 # --------------------------------------------------------------------------- #
@@ -2009,7 +2009,7 @@ def render_incremental(files: List[str], root: str, max_files: int) -> str:
 INDEX_VERSION = 1
 
 def _index_path(root: str) -> str:
-    return os.path.join(root, ".codemap-index.json")
+    return os.path.join(root, ".codeloom-index.json")
 
 def build_persistent_index(files: List[str], root: str) -> dict:
     """Build a full byte-offset symbol index (all languages)."""
@@ -2046,7 +2046,7 @@ def render_index(files: List[str], root: str, max_files: int) -> str:
     save_persistent_index(root, index, files)
     n_syms = sum(len(v) for v in index.values())
     buf = io.StringIO()
-    buf.write(f"# codemap --index — built persistent index\n")
+    buf.write(f"# codeloom --index — built persistent index\n")
     buf.write(f"  {len(files)} files, {n_syms} symbols\n")
     buf.write(f"  saved to {_index_path(root)}\n")
     buf.write(f"  subsequent --get-symbol/--search load it in milliseconds\n")
@@ -2056,9 +2056,9 @@ def render_index_status(root: str) -> str:
     """Show whether a persistent index exists and how fresh it is."""
     data = load_persistent_index(root)
     buf = io.StringIO()
-    buf.write(f"# codemap --index-status\n")
+    buf.write(f"# codeloom --index-status\n")
     if data is None:
-        buf.write("  No persistent index. Run `codemap --index` to build one.\n")
+        buf.write("  No persistent index. Run `codeloom --index` to build one.\n")
         return buf.getvalue()
     buf.write(f"  index present ({len(data.get('symbols', {}))} symbols)\n")
     # check freshness: any file changed since index?
@@ -2067,7 +2067,7 @@ def render_index_status(root: str) -> str:
         if _file_hash(f) != h:
             stale += 1
     if stale:
-        buf.write(f"  {stale} file(s) changed since index — run `codemap --index` to refresh\n")
+        buf.write(f"  {stale} file(s) changed since index — run `codeloom --index` to refresh\n")
     else:
         buf.write("  index is fresh\n")
     return buf.getvalue()
@@ -2092,13 +2092,13 @@ def render_verify(path: str) -> str:
     """Print the SHA-256 of a file so users can verify a downloaded copy."""
     digest = sha256_file(path)
     buf = io.StringIO()
-    buf.write(f"# codemap --verify {path}\n")
+    buf.write(f"# codeloom --verify {path}\n")
     if not digest:
         buf.write("File not found or unreadable.\n")
         return buf.getvalue()
     buf.write(f"sha256: {digest}\n")
     buf.write("\nCompare this against the published checksum in the repo to confirm\n")
-    buf.write("the file you downloaded is the official codemap and not tampered with.\n")
+    buf.write("the file you downloaded is the official codeloom and not tampered with.\n")
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
@@ -2260,7 +2260,7 @@ def build_plan(files: List[str], root: str, task: str, top: int = 8) -> str:
     for i, r in enumerate(results, 1):
         buf.write(f"{i}. {r['path']}\n")
         buf.write(f"   why: {r['overlap']} keyword match(es), {r['centrality']} module(s) depend on it\n")
-    buf.write("\nThen run `codemap --impact <file>` on the file you plan to change.\n")
+    buf.write("\nThen run `codeloom --impact <file>` on the file you plan to change.\n")
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
@@ -2302,12 +2302,12 @@ def render_diff(root: str, max_files: int) -> str:
     """Show the structure of only the files changed vs HEAD."""
     changed = git_changed_files(root)
     if not changed:
-        return "# codemap --diff\nNo changes vs HEAD.\n"
+        return "# codeloom --diff\nNo changes vs HEAD.\n"
     # build a tree from just the changed files
     files = [os.path.join(root, c) for c in changed]
     tree = build_tree(files, root, want_outline=True)
     buf = io.StringIO()
-    buf.write(f"# codemap --diff — {len(changed)} changed file(s)\n")
+    buf.write(f"# codeloom --diff — {len(changed)} changed file(s)\n")
     buf.write("## Changed files\n")
     for c in sorted(changed):
         buf.write(f"  {c}\n")
@@ -2528,21 +2528,21 @@ def build_call_graph_multi(files: List[str], root: str) -> dict:
 # --install-agents: write/update AGENTS.md
 # --------------------------------------------------------------------------- #
 
-AGENTS_BLOCK = """<!-- codemap: auto-generated. Run `codemap` to refresh. -->
-Before editing anything, run `codemap` and read the output to build a mental model of the repo.
+AGENTS_BLOCK = """<!-- codeloom: auto-generated. Run `codeloom` to refresh. -->
+Before editing anything, run `codeloom` and read the output to build a mental model of the repo.
 """
 
 def install_agents(root: str) -> str:
-    """Write or update AGENTS.md with a codemap instruction block."""
+    """Write or update AGENTS.md with a codeloom instruction block."""
     path = os.path.join(root, "AGENTS.md")
     block = AGENTS_BLOCK
     if os.path.isfile(path):
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
-        if "codemap: auto-generated" in content:
+        if "codeloom: auto-generated" in content:
             # replace existing block
             import re as _re
-            content = _re.sub(r"<!-- codemap: auto-generated.*?-->\n.*?\n", block, content, flags=_re.DOTALL)
+            content = _re.sub(r"<!-- codeloom: auto-generated.*?-->\n.*?\n", block, content, flags=_re.DOTALL)
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
             return f"updated {path}"
@@ -2574,7 +2574,7 @@ def render_token_report(m: dict, text: str) -> str:
 def render_text(m: dict) -> str:
     ep = m["entry_points"]
     buf = io.StringIO()
-    buf.write(f"# codemap — {m['root']}\n")
+    buf.write(f"# codeloom — {m['root']}\n")
     buf.write(f"{m['file_count']} files\n")
     if ep:
         buf.write("\n## Entry points\n")
@@ -2598,7 +2598,7 @@ def tree_to_json(node: Node) -> dict:
 # --------------------------------------------------------------------------- #
 
 def main(argv: Optional[List[str]] = None) -> int:
-    p = argparse.ArgumentParser(prog="codemap", description=__doc__)
+    p = argparse.ArgumentParser(prog="codeloom", description=__doc__)
     p.add_argument("root", nargs="?", default=".", help="repo path (default: cwd)")
     p.add_argument("--write", metavar="FILE", help="write map to FILE too")
     p.add_argument("--json", action="store_true", help="emit JSON")
@@ -2608,7 +2608,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--focus", metavar="MODULE", help="show deps/dependents of one module (with --graph)")
     p.add_argument("--calls", action="store_true", help="show function-level call graph (multi-language)")
     p.add_argument("--diff", action="store_true", help="show structure of files changed vs HEAD (git)")
-    p.add_argument("--install-agents", action="store_true", help="write/update AGENTS.md with a codemap block")
+    p.add_argument("--install-agents", action="store_true", help="write/update AGENTS.md with a codeloom block")
     p.add_argument("--cost", action="store_true", help="append token-cost estimate to output")
     p.add_argument("--impact", metavar="MODULE", help="predict blast radius of changing a module")
     p.add_argument("--task", metavar="TEXT", help="rank modules relevant to a task description")
@@ -2632,7 +2632,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--install-grammars", action="store_true", help="install tree-sitter language grammars (opt-in precision)")
     p.add_argument("--index", action="store_true", help="build + save a persistent byte-offset index (scale)")
     p.add_argument("--index-status", action="store_true", help="show persistent index status/freshness")
-    p.add_argument("--version", action="version", version=f"codemap {VERSION}")
+    p.add_argument("--version", action="version", version=f"codeloom {VERSION}")
     args = p.parse_args(argv)
 
     root = os.path.abspath(args.root)

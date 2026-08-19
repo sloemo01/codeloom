@@ -1,19 +1,19 @@
 ---
-name: codemap
-description: "Use and maintain codemap: map, graph, calls, diff, MCP."
+name: codeloom
+description: "Use and maintain codeloom: map, graph, calls, diff, MCP."
 version: 0.1.0
 author: Nehal (sloemo01), Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
   hermes:
-    tags: [codemap, codebase, ai-agents, mcp, structural-intelligence]
+    tags: [codeloom, codebase, ai-agents, mcp, structural-intelligence]
     related_skills: [community-signal-research, deep-web-research]
 ---
 
-# codemap Skill
+# codeloom Skill
 
-codemap is a single-file, zero-dependency, no-daemon tool that gives AI coding
+codeloom is a single-file, zero-dependency, no-daemon tool that gives AI coding
 agents a structural model of a repo (tree + outlines + import graph + call graph
 + git diff) in under a second. This skill covers how to run it, wire it into
 agents via MCP, and maintain/extend the repo.
@@ -21,99 +21,99 @@ agents via MCP, and maintain/extend the repo.
 ## When to Use
 
 - User asks to map a codebase, trace imports, or see what changed in a repo.
-- User asks to wire codemap into Claude Code / Cursor / Codex / Gemini (MCP).
-- User asks to extend codemap, run its tests, or re-record its demo GIF.
+- User asks to wire codeloom into Claude Code / Cursor / Codex / Gemini (MCP).
+- User asks to extend codeloom, run its tests, or re-record its demo GIF.
 - Don't use for: general codebase questions that don't need structural output.
 
 ## Prerequisites
 
 - Python 3.8+ (stdlib only — no pip deps).
-- Repo files: `codemap.py`, `codemap-mcp.py`, `tests.py`, `demo.tape`,
+- Repo files: `codeloom.py`, `codeloom-mcp.py`, `tests.py`, `demo.tape`,
   `README.md`, `LAUNCH.md`.
-- `codemap` symlinked to `~/bin/codemap` (macOS/Linux) for bare-command use.
+- `codeloom` symlinked to `~/bin/codeloom` (macOS/Linux) for bare-command use.
 - `vhs` (charmbracelet) installed via `brew install vhs` to re-record the GIF.
 
 ## How to Run
 
 ```bash
 # Map a repo (tree + outlines + entry points)
-python3 codemap.py /path/to/repo
+python3 codeloom.py /path/to/repo
 
 # Import dependency graph
-python3 codemap.py --graph /path/to/repo
+python3 codeloom.py --graph /path/to/repo
 
 # Focus one module: what it needs + what needs it
-python3 codemap.py --graph --focus core.engine /path/to/repo
+python3 codeloom.py --graph --focus core.engine /path/to/repo
 
 # Function-level call graph (multi-language)
-python3 codemap.py --calls --focus core.engine /path/to/repo
+python3 codeloom.py --calls --focus core.engine /path/to/repo
 
 # Git-aware: structure of files changed vs HEAD
-python3 codemap.py --diff /path/to/repo
+python3 codeloom.py --diff /path/to/repo
 
 # One-command agent setup
-python3 codemap.py --install-agents /path/to/repo
+python3 codeloom.py --install-agents /path/to/repo
 
 # Token-cost estimate
-python3 codemap.py --cost /path/to/repo
+python3 codeloom.py --cost /path/to/repo
 
 # Task-aware: rank modules relevant to a task
-python3 codemap.py --task "fix the login bug" /path/to/repo
+python3 codeloom.py --task "fix the login bug" /path/to/repo
 
 # Change-impact: predict blast radius of changing a module
-python3 codemap.py --impact core/engine.py /path/to/repo
+python3 codeloom.py --impact core/engine.py /path/to/repo
 
 # Agent-native reading plan for a task
-python3 codemap.py --plan "add retry to engine" /path/to/repo
+python3 codeloom.py --plan "add retry to engine" /path/to/repo
 
 # Cross-file call graph (resolved across modules)
-python3 codemap.py --cross /path/to/repo
+python3 codeloom.py --cross /path/to/repo
 
 # Search the symbol index
-python3 codemap.py --search Engine /path/to/repo
+python3 codeloom.py --search Engine /path/to/repo
 
 # Find where a symbol is used (call sites + snippet)
-python3 codemap.py --usages retry /path/to/repo
+python3 codeloom.py --usages retry /path/to/repo
 
 # Snippet search (find exact code, ranked + context)
-python3 codemap.py --grep "retry" /path/to/repo
+python3 codeloom.py --grep "retry" /path/to/repo
 
 # Token-efficient read (exact symbol source via AST / tree-sitter / brace-match)
-python3 codemap.py --read Engine /path/to/repo
+python3 codeloom.py --read Engine /path/to/repo
 
 # Plain-English explanation of a symbol (no LLM)
-python3 codemap.py --explain Engine /path/to/repo
+python3 codeloom.py --explain Engine /path/to/repo
 
 # Find structurally similar functions/classes (refactoring)
-python3 codemap.py --similar run /path/to/repo
+python3 codeloom.py --similar run /path/to/repo
 
 # Find dead code (defined but never called)
-python3 codemap.py --deadcode /path/to/repo
+python3 codeloom.py --deadcode /path/to/repo
 
 # Token-counted symbol snippet (summary-first by default; --full for source)
-python3 codemap.py --get-symbol Engine /path/to/repo
-python3 codemap.py --get-symbol Engine --full /path/to/repo
+python3 codeloom.py --get-symbol Engine /path/to/repo
+python3 codeloom.py --get-symbol Engine --full /path/to/repo
 
 # Byte-range snippet extraction
-python3 codemap.py --snippet src/core/engine.py 0 60 /path/to/repo
+python3 codeloom.py --snippet src/core/engine.py 0 60 /path/to/repo
 
 # Incremental mode (hash-based cache, no daemon)
-python3 codemap.py --incremental /path/to/repo
+python3 codeloom.py --incremental /path/to/repo
 
 # Security check (SHA-256)
-python3 codemap.py --verify codemap.py
+python3 codeloom.py --verify codeloom.py
 
 # Runtime trace (captures dynamic imports/monkeypatching; needs --force)
-python3 codemap.py --trace tests.py /path/to/repo --force
+python3 codeloom.py --trace tests.py /path/to/repo --force
 
 # Install tree-sitter grammars (opt-in precision)
-python3 codemap.py --install-grammars
+python3 codeloom.py --install-grammars
 
 # Build a persistent byte-offset index (scale without a daemon)
-python3 codemap.py --index /path/to/repo
+python3 codeloom.py --index /path/to/repo
 
 # Check index freshness
-python3 codemap.py --index-status /path/to/repo
+python3 codeloom.py --index-status /path/to/repo
 ```
 
 ## Quick Reference
@@ -126,7 +126,7 @@ python3 codemap.py --index-status /path/to/repo
 | `--calls` | function-level call graph (multi-language) |
 | `--calls --focus X` | calls inside one module |
 | `--diff` | structure of files changed vs git HEAD |
-| `--install-agents` | write/update AGENTS.md with a codemap block |
+| `--install-agents` | write/update AGENTS.md with a codeloom block |
 | `--cost` | append token-cost estimate |
 | `--task "text"` | rank modules relevant to a task |
 | `--impact X` | predict blast radius of changing module X |
@@ -156,7 +156,7 @@ python3 codemap.py --index-status /path/to/repo
 
 **Optional precision backends** (auto-enabled when present, zero-dep otherwise):
 - `tree-sitter` + grammars → precise multi-language AST parsing
-- `CODEmap_EMBED_BASE_URL`/`CODEmap_EMBED_API_KEY` or `sentence-transformers` → semantic task scoring
+- `CODELOOM_EMBED_BASE_URL`/`CODELOOM_EMBED_API_KEY` or `sentence-transformers` → semantic task scoring
 - `--trace` → runtime call edges (static blind spots)
 
 `--focus` accepts a file path, package dir, or dotted module name
@@ -165,28 +165,28 @@ python3 codemap.py --index-status /path/to/repo
 ## Procedure
 
 ### 1. Map a repo for an agent
-1. Run `codemap <root>` (or `--graph`, `--calls`, `--diff` as needed).
+1. Run `codeloom <root>` (or `--graph`, `--calls`, `--diff` as needed).
 2. Confirm output shows the tree/outlines/graph and a file count.
 3. Point the agent at the output, or write it to `AGENTS.md` via `--install-agents`.
 
 ### 2. Wire into an agent via MCP
-1. Register `codemap-mcp.py` in the agent's MCP config:
+1. Register `codeloom-mcp.py` in the agent's MCP config:
    ```json
-   { "codemap": { "command": "python3", "args": ["/path/to/codemap-mcp.py"] } }
+   { "codeloom": { "command": "python3", "args": ["/path/to/codeloom-mcp.py"] } }
    ```
    (Windows: `"command": "python"`.)
 2. Verify with a smoke test:
    ```bash
    printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
-     | python3 codemap-mcp.py
+     | python3 codeloom-mcp.py
    ```
-   Expect `serverInfo` with name `codemap-mcp`.
-3. Tools exposed: `codemap_map`, `codemap_graph`, `codemap_focus`,
-   `codemap_calls`, `codemap_diff`, `codemap_impact`, `codemap_task`,
-   `codemap_plan`, `codemap_cross`, `codemap_search`, `codemap_usages`,
-   `codemap_grep`, `codemap_read`, `codemap_explain`, `codemap_similar`,
-   `codemap_deadcode`, `codemap_get_symbol`, `codemap_snippet`,
-   `codemap_incremental`, `codemap_verify`, `codemap_trace`.
+   Expect `serverInfo` with name `codeloom-mcp`.
+3. Tools exposed: `codeloom_map`, `codeloom_graph`, `codeloom_focus`,
+   `codeloom_calls`, `codeloom_diff`, `codeloom_impact`, `codeloom_task`,
+   `codeloom_plan`, `codeloom_cross`, `codeloom_search`, `codeloom_usages`,
+   `codeloom_grep`, `codeloom_read`, `codeloom_explain`, `codeloom_similar`,
+   `codeloom_deadcode`, `codeloom_get_symbol`, `codeloom_snippet`,
+   `codeloom_incremental`, `codeloom_verify`, `codeloom_trace`.
 
 ### 3. Run the test suite
 ```bash
@@ -198,13 +198,13 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 1. Edit `demo.tape` to showcase the features you want (map, graph+focus, calls, diff).
 2. Ensure the demo repo (`demo-repo/`) is a git repo with a committed baseline
    and a real change so `--diff` has output.
-3. Run `vhs demo.tape` (with `~/bin` on PATH so `codemap` resolves).
+3. Run `vhs demo.tape` (with `~/bin` on PATH so `codeloom` resolves).
 4. Verify a late frame with `vision_analyze` (extract via ffmpeg) before committing.
 
-### 5. Extend codemap
+### 5. Extend codeloom
 - New CLI flag: add to `argparse` in `main()`, implement the logic, add a test.
-- New MCP tool: add to `TOOLS` list + a branch in `call_tool()` in `codemap-mcp.py`.
-- Bump `VERSION` in `codemap.py` and `SERVER_VERSION` in `codemap-mcp.py`.
+- New MCP tool: add to `TOOLS` list + a branch in `call_tool()` in `codeloom-mcp.py`.
+- Bump `VERSION` in `codeloom.py` and `SERVER_VERSION` in `codeloom-mcp.py`.
 - Update `README.md` (usage, feature table, roadmap) and `LAUNCH.md` if launch copy changes.
 
 ## Pitfalls
@@ -223,21 +223,21 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 ## Verification
 
 - `python3 tests.py` → `OK` (40 tests).
-- `codemap --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
-- `codemap --impact <module> <root>` returns `risk` + `Direct dependents`.
-- `codemap --task "text" <root>` returns a ranked module list.
-- `codemap --cross <root>` returns cross-file call edges.
-- `codemap --search <symbol> <root>` returns symbol locations + snippet.
-- `codemap --usages <symbol> <root>` returns call sites + snippet.
-- `codemap --grep <query> <root>` returns ranked snippet matches.
-- `codemap --read <symbol> <root>` returns exact symbol source.
-- `codemap --explain <symbol> <root>` returns a summary + call graph.
-- `codemap --similar <symbol> <root>` returns refactoring candidates.
-- `codemap --deadcode <root>` returns unused symbols.
-- `codemap --get-symbol <symbol> <root>` returns byte offsets + token count.
-- `codemap --snippet <path> <start> <end> <root>` returns a byte-range snippet.
-- `codemap --incremental <root>` returns changed files (hash cache).
-- `codemap --trace <cmd> <root>` returns runtime call edges (or none).
+- `codeloom --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
+- `codeloom --impact <module> <root>` returns `risk` + `Direct dependents`.
+- `codeloom --task "text" <root>` returns a ranked module list.
+- `codeloom --cross <root>` returns cross-file call edges.
+- `codeloom --search <symbol> <root>` returns symbol locations + snippet.
+- `codeloom --usages <symbol> <root>` returns call sites + snippet.
+- `codeloom --grep <query> <root>` returns ranked snippet matches.
+- `codeloom --read <symbol> <root>` returns exact symbol source.
+- `codeloom --explain <symbol> <root>` returns a summary + call graph.
+- `codeloom --similar <symbol> <root>` returns refactoring candidates.
+- `codeloom --deadcode <root>` returns unused symbols.
+- `codeloom --get-symbol <symbol> <root>` returns byte offsets + token count.
+- `codeloom --snippet <path> <start> <end> <root>` returns a byte-range snippet.
+- `codeloom --incremental <root>` returns changed files (hash cache).
+- `codeloom --trace <cmd> <root>` returns runtime call edges (or none).
 - MCP server keeps an in-memory index (incremental, always fresh).
-- MCP smoke test returns `serverInfo` name `codemap-mcp`.
+- MCP smoke test returns `serverInfo` name `codeloom-mcp`.
 - `demo.gif` exists and a late frame shows the intended feature output.

@@ -6,26 +6,26 @@ Set Padding 24
 Set Theme "Dracula"
 Set Framerate 24
 
-Type "cd ~/Desktop/codemap/demo-repo"
+Type "cd ~/Desktop/codeloom/demo-repo"
 Enter
 Sleep 300ms
 
-Type "codemap ."
+Type "codeloom ."
 Enter
 Sleep 1s
 Sleep 500ms
 
-Type "codemap --task 'add retry logic' ."
+Type "codeloom --task 'add retry logic' ."
 Enter
 Sleep 1s
 Sleep 500ms
 
-Type "codemap --get-symbol Engine ."
+Type "codeloom --get-symbol Engine ."
 Enter
 Sleep 1s
 Sleep 500ms
 
-Type "codemap --explain Engine ."
+Type "codeloom --explain Engine ."
 Enter
 Sleep 1s
 Sleep 500ms

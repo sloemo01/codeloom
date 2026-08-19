@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-codemap-mcp — a Model Context Protocol (MCP) server that exposes codemap to
+codeloom-mcp — a Model Context Protocol (MCP) server that exposes codeloom to
 any MCP-capable agent (Claude Code, Cursor, Codex, Gemini, etc.) as native tools.
 
 Zero-dependency: implements the MCP stdio transport (JSON-RPC 2.0 over
@@ -8,15 +8,15 @@ stdin/stdout) using only the Python standard library. No `mcp` package, no
 daemon, no install beyond copying this file.
 
 Tools exposed:
-  codemap_map(root, max_files)          -> repo tree + entry points
-  codemap_graph(root, max_files)        -> full import dependency graph
-  codemap_focus(root, module, max_files)-> deps + dependents of one module
+  codeloom_map(root, max_files)          -> repo tree + entry points
+  codeloom_graph(root, max_files)        -> full import dependency graph
+  codeloom_focus(root, module, max_files)-> deps + dependents of one module
 
 Usage:
   # Register in your agent's MCP config, e.g. Claude Code:
-  #   "codemap": { "command": "python3", "args": ["/path/to/codemap-mcp.py"] }
+  #   "codeloom": { "command": "python3", "args": ["/path/to/codeloom-mcp.py"] }
   # or run standalone to test:
-  #   echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | python3 codemap-mcp.py
+  #   echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | python3 codeloom-mcp.py
 """
 
 from __future__ import annotations
@@ -26,12 +26,12 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 
-# Reuse codemap's logic directly (same directory).
+# Reuse codeloom's logic directly (same directory).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import codemap  # noqa: E402
+import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_NAME = "codemap-mcp"
+SERVER_NAME = "codeloom-mcp"
 SERVER_VERSION = "0.19.0"
 
 # --------------------------------------------------------------------------- #
@@ -40,7 +40,7 @@ SERVER_VERSION = "0.19.0"
 
 TOOLS: List[Dict[str, Any]] = [
     {
-        "name": "codemap_map",
+        "name": "codeloom_map",
         "description": (
             "Produce a compact 'table of contents' of a codebase: folder tree, "
             "per-module one-liners (classes/functions), and entry points. Use "
@@ -55,7 +55,7 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_graph",
+        "name": "codeloom_graph",
         "description": (
             "Build the Python import dependency graph of a codebase: which "
             "modules import which. Use to understand 'what touches what'."
@@ -69,7 +69,7 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_focus",
+        "name": "codeloom_focus",
         "description": (
             "Focus on ONE module: what it depends on (depends_on) and what "
             "depends on it (depended_on_by). Answers 'what does this code need?' "
@@ -87,7 +87,7 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_calls",
+        "name": "codeloom_calls",
         "description": (
             "Function-level call graph: which functions call which, across the "
             "codebase. Only reports calls to functions defined in the repo "
@@ -103,7 +103,7 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_diff",
+        "name": "codeloom_diff",
         "description": (
             "Show the structure of only the files changed vs git HEAD. Use when "
             "the agent is working on a specific change — tells it what's relevant "
@@ -118,7 +118,7 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_impact",
+        "name": "codeloom_impact",
         "description": (
             "Predict the blast radius of changing a module: which modules depend "
             "on it (direct + transitive) and what it depends on. Answers 'what "
@@ -135,7 +135,7 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_task",
+        "name": "codeloom_task",
         "description": (
             "Rank modules relevant to a task description, by token overlap + "
             "graph centrality. Use to find which files matter for a specific task "
@@ -152,7 +152,7 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_plan",
+        "name": "codeloom_plan",
         "description": (
             "Emit a prioritized 'read these files, in this order' plan for a task. "
             "The agent-native format: tells the agent exactly what to read to "
@@ -169,7 +169,7 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_cross",
+        "name": "codeloom_cross",
         "description": (
             "Cross-file call graph: resolve calls to their defining module, so "
             "A.main() calling engine.run() (imported from B) yields "
@@ -185,7 +185,7 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_search",
+        "name": "codeloom_search",
         "description": (
             "Search the symbol index for a function, class, or method. Returns "
             "where each symbol is defined (module + line) with a context snippet. "
@@ -202,7 +202,7 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_usages",
+        "name": "codeloom_usages",
         "description": (
             "Find where a symbol is USED (not just defined) across the codebase. "
             "Answers 'where is this function/class called?' with context snippets."
@@ -218,7 +218,7 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_grep",
+        "name": "codeloom_grep",
         "description": (
             "Search file contents for a snippet (the 'find the exact code' "
             "capability). Returns ranked matches with context lines. Use to find "
@@ -235,7 +235,7 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_read",
+        "name": "codeloom_read",
         "description": (
             "Extract the exact source of a function, class, or method. Python uses "
             "AST; other languages use tree-sitter (when available) or brace-matching. "
@@ -252,7 +252,7 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_explain",
+        "name": "codeloom_explain",
         "description": (
             "Generate a plain-English explanation of a symbol's role using its AST "
             "signature + call graph. Template-based, no LLM needed. Returns a summary, "
@@ -269,7 +269,7 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_similar",
+        "name": "codeloom_similar",
         "description": (
             "Find functions/classes with a structurally similar signature (same "
             "param count) for refactoring. Returns candidates across the codebase."
@@ -285,7 +285,7 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_deadcode",
+        "name": "codeloom_deadcode",
         "description": (
             "Find functions/classes defined in the codebase but never called. "
             "Uses the call graph to detect dead code."
@@ -299,7 +299,7 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_get_symbol",
+        "name": "codeloom_get_symbol",
         "description": (
             "Token-counted symbol retrieval. By default returns a SUMMARY "
             "(signature + docstring + call graph) — the 95%+ token-savings mode. "
@@ -319,7 +319,7 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_snippet",
+        "name": "codeloom_snippet",
         "description": (
             "Extract a byte-range snippet from a file. Returns the text + token "
             "estimate + byte count. Use for precise, token-efficient retrieval."
@@ -335,7 +335,7 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_incremental",
+        "name": "codeloom_incremental",
         "description": (
             "Show which files changed since the last run, using a hash-based "
             "cache (no daemon). Use for repeated runs on large repos — only "
@@ -350,10 +350,10 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_verify",
+        "name": "codeloom_verify",
         "description": (
             "Print the SHA-256 of a file so users can verify a downloaded copy "
-            "of codemap is official and not tampered with."
+            "of codeloom is official and not tampered with."
         ),
         "inputSchema": {
             "type": "object",
@@ -364,7 +364,7 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "codemap_trace",
+        "name": "codeloom_trace",
         "description": (
             "Run a command (e.g. a test script) under sys.settrace and record the "
             "ACTUAL runtime call edges. Captures dynamic imports and monkeypatching "
@@ -389,9 +389,9 @@ TOOLS: List[Dict[str, Any]] = [
 
 def _collect_files(root: str, max_files: int) -> List[str]:
     gi = os.path.join(root, ".gitignore")
-    rules = codemap.parse_gitignore(gi) if os.path.isfile(gi) else []
+    rules = codeloom.parse_gitignore(gi) if os.path.isfile(gi) else []
     files: List[str] = []
-    codemap._walk(root, rules, max_files, files)
+    codeloom._walk(root, rules, max_files, files)
     return files
 
 
@@ -434,23 +434,23 @@ class _Index:
         # find changed files
         changed = []
         for f in files:
-            h = codemap._file_hash(f)
+            h = codeloom._file_hash(f)
             if entry["hashes"].get(f) != h:
                 changed.append(f)
         if changed:
             # re-parse only changed files; reuse cached symbols for unchanged
             for f in files:
                 ext = os.path.splitext(f)[1].lower()
-                mod = codemap.module_name_of(f, root)
-                h = codemap._file_hash(f)
+                mod = codeloom.module_name_of(f, root)
+                h = codeloom._file_hash(f)
                 if entry["hashes"].get(f) == h and f in entry["symbols"]:
                     continue  # unchanged, keep cached
                 # parse fresh into a per-file dict
                 file_symbols: Dict[str, Any] = {}
                 if ext == ".py":
-                    codemap._index_python_bytes(f, mod, file_symbols)
-                elif ext in codemap.CALL_LANG_RULES:
-                    codemap._index_other_bytes(f, mod, ext, file_symbols)
+                    codeloom._index_python_bytes(f, mod, file_symbols)
+                elif ext in codeloom.CALL_LANG_RULES:
+                    codeloom._index_other_bytes(f, mod, ext, file_symbols)
                 entry["symbols"][f] = file_symbols
                 entry["hashes"][f] = h
         # rebuild the flat index from per-file symbols
@@ -469,9 +469,9 @@ def _resolve_focus(graph: dict, module: str, root: str) -> Optional[str]:
     focus = module
     focus_path = os.path.join(root, focus) if not os.path.isabs(focus) else focus
     if os.path.isdir(focus_path):
-        focus = codemap.module_name_of(focus_path, root)
+        focus = codeloom.module_name_of(focus_path, root)
     elif focus.endswith(".py") or os.path.isfile(focus_path):
-        focus = codemap.module_name_of(focus_path, root)
+        focus = codeloom.module_name_of(focus_path, root)
     if focus in graph:
         return focus
     # suffix match
@@ -491,23 +491,23 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     max_files = int(args.get("max_files", 5000))
     files = _collect_files(root, max_files)
 
-    if name == "codemap_map":
-        m = codemap.build_map(root, True, max_files)
-        text = codemap.render_text(m)
-    elif name == "codemap_graph":
-        graph = codemap.build_graph(files, root)
-        text = codemap.render_graph(graph, root)
-    elif name == "codemap_focus":
+    if name == "codeloom_map":
+        m = codeloom.build_map(root, True, max_files)
+        text = codeloom.render_text(m)
+    elif name == "codeloom_graph":
+        graph = codeloom.build_graph(files, root)
+        text = codeloom.render_graph(graph, root)
+    elif name == "codeloom_focus":
         module = args.get("module")
         if not module:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'module' argument"}]}
-        graph = codemap.build_graph(files, root)
+        graph = codeloom.build_graph(files, root)
         resolved = _resolve_focus(graph, module, root)
         if resolved is None:
             return {"isError": True, "content": [{"type": "text", "text": f"module not found: {module}"}]}
-        text = codemap.render_graph(graph, root, start=resolved)
-    elif name == "codemap_calls":
-        calls = codemap.build_call_graph_multi(files, root)
+        text = codeloom.render_graph(graph, root, start=resolved)
+    elif name == "codeloom_calls":
+        calls = codeloom.build_call_graph_multi(files, root)
         module = args.get("module")
         start = None
         if module:
@@ -515,30 +515,30 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             if resolved is None:
                 return {"isError": True, "content": [{"type": "text", "text": f"module not found: {module}"}]}
             start = resolved
-        text = codemap.render_calls(calls, root, start=start)
-    elif name == "codemap_diff":
-        text = codemap.render_diff(root, max_files)
-    elif name == "codemap_impact":
+        text = codeloom.render_calls(calls, root, start=start)
+    elif name == "codeloom_diff":
+        text = codeloom.render_diff(root, max_files)
+    elif name == "codeloom_impact":
         module = args.get("module")
         if not module:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'module' argument"}]}
-        graph = codemap.build_graph(files, root)
+        graph = codeloom.build_graph(files, root)
         resolved = _resolve_focus(graph, module, root)
         if resolved is None:
             return {"isError": True, "content": [{"type": "text", "text": f"module not found: {module}"}]}
-        text = codemap.render_impact(graph, root, resolved)
-    elif name == "codemap_task":
+        text = codeloom.render_impact(graph, root, resolved)
+    elif name == "codeloom_task":
         task = args.get("task")
         if not task:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'task' argument"}]}
-        text = codemap.render_task(files, root, task)
-    elif name == "codemap_plan":
+        text = codeloom.render_task(files, root, task)
+    elif name == "codeloom_plan":
         task = args.get("task")
         if not task:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'task' argument"}]}
-        text = codemap.build_plan(files, root, task)
-    elif name == "codemap_cross":
-        calls = codemap.build_cross_call_graph(files, root)
+        text = codeloom.build_plan(files, root, task)
+    elif name == "codeloom_cross":
+        calls = codeloom.build_cross_call_graph(files, root)
         module = args.get("module")
         start = None
         if module:
@@ -546,42 +546,42 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             if resolved is None:
                 return {"isError": True, "content": [{"type": "text", "text": f"module not found: {module}"}]}
             start = resolved
-        text = codemap.render_cross_calls(calls, root, start=start)
-    elif name == "codemap_search":
+        text = codeloom.render_cross_calls(calls, root, start=start)
+    elif name == "codeloom_search":
         symbol = args.get("symbol")
         if not symbol:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
         # use the in-memory index (incremental, always fresh)
         index = _INDEX.symbols(root, max_files)
-        text = codemap.render_search(index, symbol)
-    elif name == "codemap_usages":
+        text = codeloom.render_search(index, symbol)
+    elif name == "codeloom_usages":
         symbol = args.get("symbol")
         if not symbol:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
-        text = codemap.render_usages(files, root, symbol)
-    elif name == "codemap_grep":
+        text = codeloom.render_usages(files, root, symbol)
+    elif name == "codeloom_grep":
         query = args.get("query")
         if not query:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'query' argument"}]}
-        text = codemap.render_grep(files, root, query)
-    elif name == "codemap_read":
+        text = codeloom.render_grep(files, root, query)
+    elif name == "codeloom_read":
         symbol = args.get("symbol")
         if not symbol:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
-        text = codemap.render_read(files, root, symbol)
-    elif name == "codemap_explain":
+        text = codeloom.render_read(files, root, symbol)
+    elif name == "codeloom_explain":
         symbol = args.get("symbol")
         if not symbol:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
-        text = codemap.render_explain(files, root, symbol)
-    elif name == "codemap_similar":
+        text = codeloom.render_explain(files, root, symbol)
+    elif name == "codeloom_similar":
         symbol = args.get("symbol")
         if not symbol:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
-        text = codemap.render_similar(files, root, symbol)
-    elif name == "codemap_deadcode":
-        text = codemap.render_deadcode(files, root)
-    elif name == "codemap_get_symbol":
+        text = codeloom.render_similar(files, root, symbol)
+    elif name == "codeloom_deadcode":
+        text = codeloom.render_deadcode(files, root)
+    elif name == "codeloom_get_symbol":
         symbol = args.get("symbol")
         if not symbol:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
@@ -599,29 +599,29 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
                     f"{loc['source']}\n")
         else:
             # summary-first (95%+ token savings)
-            text = codemap.render_get_symbol(files, root, symbol, ctx, summary=True)
-    elif name == "codemap_snippet":
+            text = codeloom.render_get_symbol(files, root, symbol, ctx, summary=True)
+    elif name == "codeloom_snippet":
         path = args.get("path")
         start = args.get("start_byte")
         end = args.get("end_byte")
         if not path or start is None or end is None:
             return {"isError": True, "content": [{"type": "text", "text": "missing path/start_byte/end_byte"}]}
-        s = codemap.get_snippet_by_offset(path, int(start), int(end))
+        s = codeloom.get_snippet_by_offset(path, int(start), int(end))
         if s is None:
             return {"isError": True, "content": [{"type": "text", "text": f"cannot read {path}"}]}
         text = f"# snippet: {path} bytes {start}-{end}  ~{s['tokens']} tokens  {s['bytes']} bytes\n\n{s['text']}"
-    elif name == "codemap_incremental":
-        text = codemap.render_incremental(files, root, max_files)
-    elif name == "codemap_verify":
+    elif name == "codeloom_incremental":
+        text = codeloom.render_incremental(files, root, max_files)
+    elif name == "codeloom_verify":
         path = args.get("path")
         if not path:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'path' argument"}]}
-        text = codemap.render_verify(path)
-    elif name == "codemap_trace":
+        text = codeloom.render_verify(path)
+    elif name == "codeloom_trace":
         command = args.get("command")
         if not command:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'command' argument"}]}
-        text = codemap.render_trace(list(command), root)
+        text = codeloom.render_trace(list(command), root)
     else:
         return {"isError": True, "content": [{"type": "text", "text": f"unknown tool: {name}"}]}
 
