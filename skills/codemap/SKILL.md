@@ -78,6 +78,9 @@ python3 codemap.py --usages retry /path/to/repo
 # Snippet search (find exact code, ranked + context)
 python3 codemap.py --grep "retry" /path/to/repo
 
+# Token-efficient read (exact symbol source via AST)
+python3 codemap.py --read Engine /path/to/repo
+
 # Incremental mode (hash-based cache, no daemon)
 python3 codemap.py --incremental /path/to/repo
 
@@ -107,6 +110,7 @@ python3 codemap.py --trace tests.py /path/to/repo
 | `--search X` | search the symbol index (definitions + snippet) |
 | `--usages X` | find where a symbol is used (call sites + snippet) |
 | `--grep X` | search file contents for a snippet (ranked + context) |
+| `--read X` | extract exact source of a function/class/method (token-efficient) |
 | `--incremental` | files changed since last run (hash cache) |
 | `--verify FILE` | print SHA-256 of a file |
 | `--trace CMD` | run a command, record runtime call edges |
@@ -145,7 +149,8 @@ python3 codemap.py --trace tests.py /path/to/repo
 3. Tools exposed: `codemap_map`, `codemap_graph`, `codemap_focus`,
    `codemap_calls`, `codemap_diff`, `codemap_impact`, `codemap_task`,
    `codemap_plan`, `codemap_cross`, `codemap_search`, `codemap_usages`,
-   `codemap_grep`, `codemap_incremental`, `codemap_verify`, `codemap_trace`.
+   `codemap_grep`, `codemap_read`, `codemap_incremental`, `codemap_verify`,
+   `codemap_trace`.
 
 ### 3. Run the test suite
 ```bash
@@ -181,7 +186,7 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (26 tests).
+- `python3 tests.py` → `OK` (27 tests).
 - `codemap --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codemap --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codemap --task "text" <root>` returns a ranked module list.
@@ -189,6 +194,7 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 - `codemap --search <symbol> <root>` returns symbol locations + snippet.
 - `codemap --usages <symbol> <root>` returns call sites + snippet.
 - `codemap --grep <query> <root>` returns ranked snippet matches.
+- `codemap --read <symbol> <root>` returns exact symbol source.
 - `codemap --incremental <root>` returns changed files (hash cache).
 - `codemap --trace <cmd> <root>` returns runtime call edges (or none).
 - MCP smoke test returns `serverInfo` name `codemap-mcp`.

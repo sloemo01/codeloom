@@ -75,6 +75,7 @@ That's it. Under a second, zero setup, works offline. Cross-platform — macOS, 
 | `codemap --search X` | "Where is symbol X defined?" (symbol index + snippet) |
 | `codemap --usages X` | "Where is symbol X used?" (call sites + snippet) |
 | `codemap --grep X` | "Where does this code pattern appear?" (snippet search) |
+| `codemap --read X` | "Show me the exact source of symbol X" (token-efficient) |
 | `codemap --incremental` | "What changed since last run?" (hash-based cache) |
 | `codemap --verify FILE` | "Is this file the official codemap?" (SHA-256) |
 
@@ -99,6 +100,7 @@ codemap --cross              # cross-file call graph (resolved across modules)
 codemap --search SYMBOL      # search the symbol index (definitions + snippet)
 codemap --usages SYMBOL      # find where a symbol is used (call sites + snippet)
 codemap --grep QUERY         # search file contents for a snippet (ranked + context)
+codemap --read SYMBOL        # extract exact source of a function/class/method
 codemap --incremental        # show files changed since last run (hash-based cache)
 codemap --verify FILE        # print SHA-256 of a file (security check)
 codemap --trace CMD          # run a command, record runtime call edges
@@ -156,6 +158,27 @@ codemap --grep "retry" .
 Ranking: exact-word matches first, then substring, then case-insensitive.
 This closes the snippet-search gap — the one thing semble does that codemap
 previously didn't.
+
+## Token-efficient read (`--read`)
+
+Read the exact source of a function, class, or method without burning tokens on
+the whole file — jcodemunch's core value, integrated with codemap's
+task-orientation:
+
+```bash
+codemap --read Engine .
+# src.core.engine:4  [class]
+# class Engine:
+#     def __init__(self):
+#         self.cfg = Config()
+#     def run(self, fn):
+#         retry(fn)
+```
+
+`--read` uses Python `ast` to extract the precise source lines of a symbol, so
+the agent gets exactly the code it needs — not the whole file. Combined with
+`--task` (what's relevant), `--impact` (what breaks), and `--cross` (the call
+path), this is the full agent workflow: *find → read → understand → edit*.
 
 ## Task-aware intelligence (`--task`, `--impact`, `--plan`)
 
@@ -292,14 +315,15 @@ stdio — no `mcp` package, no daemon). Register it with any MCP-capable agent:
 }
 ```
 
-Exposes fifteen tools: `codemap_map`, `codemap_graph`, `codemap_focus`,
+Exposes sixteen tools: `codemap_map`, `codemap_graph`, `codemap_focus`,
 `codemap_calls`, `codemap_diff`, `codemap_impact`, `codemap_task`,
 `codemap_plan`, `codemap_cross`, `codemap_search`, `codemap_usages`,
-`codemap_grep`, `codemap_incremental`, `codemap_verify`, `codemap_trace`. Your
-agent can build a mental model, trace execution flow across files, see what
-changed, predict blast radius, get a task-oriented reading plan, search any
-symbol, find where it's used, grep for snippets, verify a download, and capture
-runtime call edges — natively, no install, no index.
+`codemap_grep`, `codemap_read`, `codemap_incremental`, `codemap_verify`,
+`codemap_trace`. Your agent can build a mental model, trace execution flow
+across files, see what changed, predict blast radius, get a task-oriented
+reading plan, search any symbol, find where it's used, grep for snippets, read
+exact symbol source, verify a download, and capture runtime call edges —
+natively, no install, no index.
 
 ## How it works
 
@@ -406,6 +430,7 @@ the fastest way to answer "what is this project, actually?"
 - [x] Symbol index + search (`--search`, with snippets)
 - [x] Usage search (`--usages`, call sites + snippets)
 - [x] Snippet search (`--grep`, ranked + context)
+- [x] Token-efficient read (`--read`, exact symbol source via AST)
 - [x] Persistent parsed cache (repeated runs skip re-parsing)
 - [x] Benchmark harness + CI + release script (trust/credibility)
 - [x] Incremental mode (`--incremental`, hash-based cache)

@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 
 # --------------------------------------------------------------------------- #
 # Optional progressive-enhancement backends.
@@ -1311,6 +1311,49 @@ def render_grep(files: List[str], root: str, query: str, limit: int = 20) -> str
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
+# --read: extract exact symbol source via AST (token-efficient retrieval)
+# This is jcodemunch's core value — return the exact code the agent needs
+# without reading the whole file — integrated with codemap's task-orientation.
+# --------------------------------------------------------------------------- #
+
+def read_symbol(files: List[str], root: str, symbol: str) -> Optional[dict]:
+    """Find a function/class/method by name and return its exact source.
+    Uses Python `ast` to extract the precise source lines. Returns
+    {module, kind, line, source} or None if not found."""
+    for f in files:
+        if not f.endswith(".py"):
+            continue
+        mod = module_name_of(f, root)
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+            tree = ast.parse(text)
+        except (SyntaxError, OSError):
+            continue
+        lines = text.splitlines()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) \
+               and node.name == symbol:
+                # extract source from node.lineno to node.end_lineno
+                start = node.lineno - 1
+                end = getattr(node, "end_lineno", node.lineno)
+                source = "\n".join(lines[start:end])
+                kind = "class" if isinstance(node, ast.ClassDef) else "function"
+                return {"module": mod, "kind": kind, "line": node.lineno, "source": source}
+    return None
+
+def render_read(files: List[str], root: str, symbol: str) -> str:
+    result = read_symbol(files, root, symbol)
+    buf = io.StringIO()
+    buf.write(f"# read: {symbol}\n")
+    if result is None:
+        buf.write("Symbol not found.\n")
+        return buf.getvalue()
+    buf.write(f"{result['module']}:{result['line']}  [{result['kind']}]\n\n")
+    buf.write(result["source"] + "\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
 # Incremental / indexed mode (hash-based cache, no daemon)
 # --------------------------------------------------------------------------- #
 
@@ -1861,6 +1904,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--search", metavar="SYMBOL", help="search the symbol index for a function/class/method")
     p.add_argument("--usages", metavar="SYMBOL", help="find where a symbol is used (not just defined)")
     p.add_argument("--grep", metavar="QUERY", help="search file contents for a snippet (ranked + context)")
+    p.add_argument("--read", metavar="SYMBOL", help="extract exact source of a function/class/method (token-efficient)")
     p.add_argument("--incremental", action="store_true", help="show files changed since last run (hash-based cache)")
     p.add_argument("--verify", metavar="FILE", help="print SHA-256 of a file (security check)")
     p.add_argument("--trace", nargs="+", metavar="CMD", help="run a command under sys.settrace, record runtime call edges")
@@ -1898,8 +1942,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(render_incremental(files, root, args.max_files))
         return 0
 
-    # --cross / --search / --usages / --grep: deep structural intelligence
-    if args.cross or args.search or args.usages or args.grep:
+    # --cross / --search / --usages / --grep / --read: deep structural intelligence
+    if args.cross or args.search or args.usages or args.grep or args.read:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
@@ -1918,6 +1962,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.grep:
             print(render_grep(files, root, args.grep))
+            return 0
+
+        if args.read:
+            print(render_read(files, root, args.read))
             return 0
 
         if args.cross:

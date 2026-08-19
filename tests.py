@@ -345,6 +345,21 @@ class TestCodemap(unittest.TestCase):
         index2 = codemap.cached_symbols(files, self.repo, cache)
         self.assertIn("Engine", index2)
 
+    def test_read_symbol(self):
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        result = codemap.read_symbol(files, self.repo, "Engine")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["kind"], "class")
+        self.assertIn("class Engine", result["source"])
+        # method
+        result2 = codemap.read_symbol(files, self.repo, "run")
+        self.assertIsNotNone(result2)
+        self.assertIn("def run", result2["source"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
