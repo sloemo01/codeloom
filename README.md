@@ -24,32 +24,7 @@ No GPU. Runs 100% on your machine.
 
 ## Demo
 
-```bash
-# In any repo:
-$ codemap
-# codemap — /you/project
-# 468 files
-#
-# ## Entry points
-#   README.md
-#   src/cli.py
-#   pyproject.toml
-#
-# ## Structure
-# ├── src/
-# │   ├── cli.py
-# │   │   def main():
-# │   │   class Parser:
-# │   ├── core/
-# │   │   ├── engine.py
-# │   │   │   class Engine:
-# │   │   │   async def run(
-# │   │   └── models.py
-# │   │       class User:
-# │   │       class Config:
-# └── tests/
-#     └── test_engine.py
-```
+![codemap demo](demo.gif)
 
 Drop the output into your `AGENTS.md`, or point your agent at it:
 
