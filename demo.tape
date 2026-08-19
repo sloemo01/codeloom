@@ -15,17 +15,17 @@ Enter
 Sleep 1s
 Sleep 500ms
 
-Type "codemap --cross ."
+Type "codemap --task 'add retry logic' ."
 Enter
 Sleep 1s
 Sleep 500ms
 
-Type "codemap --search Engine ."
+Type "codemap --get-symbol Engine ."
 Enter
 Sleep 1s
 Sleep 500ms
 
-Type "codemap --incremental ."
+Type "codemap --explain Engine ."
 Enter
 Sleep 1s
 Sleep 500ms
