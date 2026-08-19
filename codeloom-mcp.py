@@ -528,13 +528,15 @@ def _resolve_focus(graph: dict, module: str, root: str) -> Optional[str]:
 def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any]:
     """Route a natural-language request to the right codeloom tool.
 
-    This is the answer to jcodemunch's 91-tool routing problem: instead of
-    making the agent pick among 22 tools (or 91), codeloom_ask takes plain
-    language and dispatches deterministically. The agent never misroutes
-    because it never routes."""
+    Fail-safe by design: every branch returns USEFUL context, and the default
+    always returns the map + task relevance — never an error. Even an ambiguous
+    query yields something the agent can act on, so a 'wrong' pick is still
+    helpful. This is the answer to jcodemunch's 91-tool routing problem: the
+    agent never picks among 23 tools, and codeloom never returns nothing."""
     q = (args.get("query") or "").strip().lower()
     if not q:
-        return {"isError": True, "content": [{"type": "text", "text": "missing 'query' argument"}]}
+        # empty query -> still return the map (never an error)
+        return {"content": [{"type": "text", "text": codeloom.render_text(codeloom.build_map(root, True, max_files))}]}
     files = _collect_files(root, max_files)
 
     # 1. Task-orientation (the moat) — "what matters / what breaks / read order / context"
@@ -551,7 +553,10 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
                 graph = codeloom.build_graph(files, root)
                 resolved = _resolve_focus(graph, target, root)
                 if resolved:
-                    return {"content": [{"type": "text", "text": codeloom.render_impact(graph, root, resolved)}]}
+                    # combined: impact + task relevance (fail-safe)
+                    impact = codeloom.render_impact(graph, root, resolved)
+                    task = codeloom.render_task(files, root, q, top=3)
+                    return {"content": [{"type": "text", "text": impact + "\n" + task}]}
             return {"content": [{"type": "text", "text": codeloom.render_task(files, root, q)}]}
         if any(k in q for k in ["pack", "whole context", "context for", "understand this task"]):
             return {"content": [{"type": "text", "text": codeloom.render_pack(files, root, q)}]}
@@ -592,8 +597,10 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
             return {"content": [{"type": "text", "text": codeloom.render_graph(codeloom.build_graph(files, root), root)}]}
         return {"content": [{"type": "text", "text": codeloom.render_text(codeloom.build_map(root, True, max_files))}]}
 
-    # 4. Default — map the repo
-    return {"content": [{"type": "text", "text": codeloom.render_text(codeloom.build_map(root, True, max_files))}]}
+    # 4. Default — map + task relevance (never an error, always useful)
+    map_text = codeloom.render_text(codeloom.build_map(root, True, max_files))
+    task_text = codeloom.render_task(files, root, q, top=3)
+    return {"content": [{"type": "text", "text": map_text + "\n" + task_text}]}
 
 
 def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
