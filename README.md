@@ -699,6 +699,14 @@ complement, not a replacement, for the heavy tools. Run them yourself:
 python3 benchmarks/run.py --repo /path/to/repo
 ```
 
+## Documentation
+
+- **[`CAPABILITIES.md`](CAPABILITIES.md)** — everything codeloom can do, in one place
+- **[`USER_GUIDE.md`](USER_GUIDE.md)** — practical walkthrough for agent work
+- **[`CLI.md`](CLI.md)** — every command, flag, and argument
+- **[`SECURITY.md`](SECURITY.md)** — the trust model, verification, and what codeloom does NOT do
+- **[`benchmarks/`](benchmarks/README.md)** — honest, reproducible numbers vs the competitors
+
 ## Trust & verification
 
 - **CI** — the test suite runs on Linux, macOS, and Windows (Python 3.8–3.12)
