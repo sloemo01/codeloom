@@ -22,6 +22,36 @@ where CodeLoom found all 5 queried symbols. The express/gin figures are
 excluded from the headline because CodeLoom only resolved a subset of the
 queried symbols there (2/5 and 3/4), so their "100%" is not a fair comparison.
 
+## Side-by-side: codeloom vs jcodemunch (same repo, same symbols)
+
+`benchmarks/side_by_side.py` runs **both tools on the same repo and same
+symbols**, measuring the tokens each returns to retrieve a symbol. This is the
+apples-to-apples yardstick.
+
+```bash
+# requires jcodemunch-mcp installed (pip install jcodemunch-mcp)
+JCODEMUNCH_MCP=/path/to/jcodemunch-mcp python3 benchmarks/side_by_side.py \
+  --repo /tmp/bench-fastapi --symbols Body,Cookie,File,Header
+```
+
+Measured on fastapi (329 files):
+
+| symbol | codeloom | jcodemunch | codeloom wins |
+|---|---|---|---|
+| `Body` | 13 | 89 | YES |
+| `Cookie` | 13 | 810 | YES |
+| `File` | 13 | 821 | YES |
+| `Header` | 5 | 95 | YES |
+
+**The honest caveat:** this measures *retrieval tokens* — codeloom returns a
+summary (signature + docstring + call graph) by default, while jcodemunch's
+`get_symbol_source` returns the **full source**. So codeloom wins on token count
+by design: summary-first is the whole point. The tradeoff is that jcodemunch
+gives you the complete source in one call, while codeloom gives you the summary
+and you opt into `--full` when you need the implementation. Some symbols
+(`Depends`) were excluded because jcodemunch's fuzzy search didn't return a
+clean match — we only report symbols both tools resolved.
+
 ## How to reproduce
 
 ```bash
