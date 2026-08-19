@@ -361,6 +361,26 @@ class TestCodemap(unittest.TestCase):
         self.assertIsNotNone(result2)
         self.assertIn("def run", result2["source"])
 
+    def test_read_symbol_multi_lang(self):
+        # Go via tree-sitter, Java via brace-matching fallback
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, "main.go"), "w") as f:
+                f.write("package main\nfunc helper() int { return 42 }\n")
+            with open(os.path.join(tmp, "App.java"), "w") as f:
+                f.write("public class App {\n    public int add(int a, int b) {\n        return a + b;\n    }\n}\n")
+            files = [os.path.join(tmp, "main.go"), os.path.join(tmp, "App.java")]
+            # Go (tree-sitter if available, else brace fallback)
+            r1 = codemap.read_symbol(files, tmp, "helper")
+            self.assertIsNotNone(r1)
+            self.assertIn("func helper", r1["source"])
+            # Java (brace-matching fallback)
+            r2 = codemap.read_symbol(files, tmp, "add")
+            self.assertIsNotNone(r2)
+            self.assertIn("public int add", r2["source"])
+        finally:
+            shutil.rmtree(tmp)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

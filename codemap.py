@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.11.0"
+VERSION = "0.12.0"
 
 # --------------------------------------------------------------------------- #
 # Optional progressive-enhancement backends.
@@ -1318,28 +1318,101 @@ def render_grep(files: List[str], root: str, query: str, limit: int = 20) -> str
 
 def read_symbol(files: List[str], root: str, symbol: str) -> Optional[dict]:
     """Find a function/class/method by name and return its exact source.
-    Uses Python `ast` to extract the precise source lines. Returns
-    {module, kind, line, source} or None if not found."""
+    Python uses `ast`; other languages use tree-sitter (when a grammar is
+    available) or a brace-matching fallback. Returns {module, kind, line,
+    source} or None if not found."""
     for f in files:
-        if not f.endswith(".py"):
-            continue
+        ext = os.path.splitext(f)[1].lower()
         mod = module_name_of(f, root)
-        try:
-            with open(f, "r", encoding="utf-8", errors="replace") as fh:
-                text = fh.read()
-            tree = ast.parse(text)
-        except (SyntaxError, OSError):
+        if ext == ".py":
+            result = _read_python(f, mod, symbol)
+        elif ext in CALL_LANG_RULES:
+            result = _read_other(f, mod, ext, symbol)
+        else:
             continue
-        lines = text.splitlines()
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) \
-               and node.name == symbol:
-                # extract source from node.lineno to node.end_lineno
-                start = node.lineno - 1
-                end = getattr(node, "end_lineno", node.lineno)
-                source = "\n".join(lines[start:end])
-                kind = "class" if isinstance(node, ast.ClassDef) else "function"
-                return {"module": mod, "kind": kind, "line": node.lineno, "source": source}
+        if result:
+            return result
+    return None
+
+def _read_python(path: str, mod: str, symbol: str) -> Optional[dict]:
+    """Extract a Python symbol's source via `ast`."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        tree = ast.parse(text)
+    except (SyntaxError, OSError):
+        return None
+    lines = text.splitlines()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) \
+           and node.name == symbol:
+            start = node.lineno - 1
+            end = getattr(node, "end_lineno", node.lineno)
+            source = "\n".join(lines[start:end])
+            kind = "class" if isinstance(node, ast.ClassDef) else "function"
+            return {"module": mod, "kind": kind, "line": node.lineno, "source": source}
+    return None
+
+def _read_other(path: str, mod: str, ext: str, symbol: str) -> Optional[dict]:
+    """Extract a non-Python symbol's source. Uses tree-sitter when a grammar is
+    available; otherwise a brace-matching fallback."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    lines = text.splitlines()
+
+    # 1. tree-sitter fast-path (precise)
+    ts_root = _ts_parse(path, ext)
+    if ts_root is not None:
+        # find the function/class node with the matching name
+        def find(node):
+            if node.type in ("function_definition", "function_declaration",
+                             "method_definition", "class_declaration",
+                             "struct_item", "impl_item", "func_declaration",
+                             "method_declaration", "type_declaration"):
+                for child in node.children:
+                    if child.type in ("identifier", "name", "type_identifier",
+                                      "field_identifier") and \
+                       child.text.decode("utf-8", "replace") == symbol:
+                        start = node.start_point[0]
+                        end = node.end_point[0]
+                        source = "\n".join(lines[start:end + 1])
+                        kind = "class" if "class" in node.type or "struct" in node.type else "function"
+                        return {"module": mod, "kind": kind, "line": start + 1, "source": source}
+            for child in node.children:
+                r = find(child)
+                if r:
+                    return r
+            return None
+        return find(ts_root)
+
+    # 2. brace-matching fallback (best-effort)
+    def_re, _ = CALL_LANG_RULES[ext]
+    for i, line in enumerate(lines):
+        m = re.match(def_re, line)
+        if not m:
+            continue
+        name = next((g for g in m.groups() if g), None)
+        if name != symbol:
+            continue
+        # find the opening brace and match it
+        start = i
+        depth = 0
+        opened = False
+        for j in range(i, len(lines)):
+            for ch in lines[j]:
+                if ch == "{":
+                    depth += 1
+                    opened = True
+                elif ch == "}":
+                    depth -= 1
+            if opened and depth == 0:
+                source = "\n".join(lines[start:j + 1])
+                return {"module": mod, "kind": "function", "line": start + 1, "source": source}
+        # no braces (single-line or no body) — return the def line
+        return {"module": mod, "kind": "function", "line": start + 1, "source": line}
     return None
 
 def render_read(files: List[str], root: str, symbol: str) -> str:

@@ -78,7 +78,7 @@ python3 codemap.py --usages retry /path/to/repo
 # Snippet search (find exact code, ranked + context)
 python3 codemap.py --grep "retry" /path/to/repo
 
-# Token-efficient read (exact symbol source via AST)
+# Token-efficient read (exact symbol source via AST / tree-sitter / brace-match)
 python3 codemap.py --read Engine /path/to/repo
 
 # Incremental mode (hash-based cache, no daemon)
@@ -110,7 +110,7 @@ python3 codemap.py --trace tests.py /path/to/repo
 | `--search X` | search the symbol index (definitions + snippet) |
 | `--usages X` | find where a symbol is used (call sites + snippet) |
 | `--grep X` | search file contents for a snippet (ranked + context) |
-| `--read X` | extract exact source of a function/class/method (token-efficient) |
+| `--read X` | extract exact source of a symbol (AST / tree-sitter / brace-match) |
 | `--incremental` | files changed since last run (hash cache) |
 | `--verify FILE` | print SHA-256 of a file |
 | `--trace CMD` | run a command, record runtime call edges |
@@ -186,7 +186,7 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (27 tests).
+- `python3 tests.py` → `OK` (28 tests).
 - `codemap --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codemap --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codemap --task "text" <root>` returns a ranked module list.

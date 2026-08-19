@@ -176,9 +176,12 @@ codemap --read Engine .
 ```
 
 `--read` uses Python `ast` to extract the precise source lines of a symbol, so
-the agent gets exactly the code it needs — not the whole file. Combined with
-`--task` (what's relevant), `--impact` (what breaks), and `--cross` (the call
-path), this is the full agent workflow: *find → read → understand → edit*.
+the agent gets exactly the code it needs — not the whole file. For other
+languages it uses tree-sitter (when a grammar is installed) or a brace-matching
+fallback, so `--read` works across Python, JS/TS, Go, Rust, Java, C/C++, and
+more. Combined with `--task` (what's relevant), `--impact` (what breaks), and
+`--cross` (the call path), this is the full agent workflow: *find → read →
+understand → edit*.
 
 ## Task-aware intelligence (`--task`, `--impact`, `--plan`)
 

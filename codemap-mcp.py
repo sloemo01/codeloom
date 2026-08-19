@@ -32,7 +32,7 @@ import codemap  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codemap-mcp"
-SERVER_VERSION = "0.11.0"
+SERVER_VERSION = "0.12.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -237,9 +237,9 @@ TOOLS: List[Dict[str, Any]] = [
     {
         "name": "codemap_read",
         "description": (
-            "Extract the exact source of a function, class, or method via AST. "
-            "Token-efficient: returns only the code the agent needs, not the whole "
-            "file. Use to read a symbol's implementation without burning tokens."
+            "Extract the exact source of a function, class, or method. Python uses "
+            "AST; other languages use tree-sitter (when available) or brace-matching. "
+            "Token-efficient: returns only the code the agent needs, not the whole file."
         ),
         "inputSchema": {
             "type": "object",
