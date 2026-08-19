@@ -25,6 +25,7 @@ anything. No install. No daemon. No GPU. Runs 100% on your machine.
 
 ## Quickstart
 
+**macOS / Linux:**
 ```bash
 # 1. Grab the one file (no pip, no deps)
 curl -O https://raw.githubusercontent.com/sloemo01/codemap/main/codemap.py
@@ -37,7 +38,19 @@ chmod +x codemap.py
 echo "Before editing anything, run: codemap" >> AGENTS.md
 ```
 
-That's it. Under a second, zero setup, works offline.
+**Windows (PowerShell):**
+```powershell
+# 1. Grab the one file
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/sloemo01/codemap/main/codemap.py" -OutFile codemap.py
+
+# 2. Map any repo
+python codemap.py C:\path\to\repo
+
+# 3. Tell your agent to read it first
+Add-Content AGENTS.md "Before editing anything, run: codemap"
+```
+
+That's it. Under a second, zero setup, works offline. Cross-platform — macOS, Linux, Windows (Python 3.8+).
 
 ## Demo
 
@@ -147,6 +160,7 @@ stdio — no `mcp` package, no daemon). Register it with any MCP-capable agent:
 
 ```json
 // Claude Code / Cursor / Codex MCP config
+// macOS/Linux: "command": "python3"   Windows: "command": "python"
 {
   "codemap": {
     "command": "python3",
