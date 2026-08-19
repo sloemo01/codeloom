@@ -180,7 +180,7 @@ def _collect_calls(node, caller, edges):
 # If an embedding source is available, use real semantic similarity for --task
 # relevance instead of token overlap. Sources (checked in order):
 #   1. local sentence-transformers (if installed)
-#   2. an OpenAI-compatible API via CODEmap_EMBED_BASE_URL + CODEmap_EMBED_API_KEY
+#   2. an OpenAI-compatible API via CODELOOM_EMBED_BASE_URL + CODELOOM_EMBED_API_KEY
 _EMBED_AVAILABLE = False
 try:
     import numpy  # noqa: F401
@@ -201,14 +201,14 @@ def _embedding_backend():
     except Exception:
         pass
     # 2. OpenAI-compatible API
-    base = os.environ.get("CODEmap_EMBED_BASE_URL")
-    key = os.environ.get("CODEmap_EMBED_API_KEY")
+    base = os.environ.get("CODELOOM_EMBED_BASE_URL")
+    key = os.environ.get("CODELOOM_EMBED_API_KEY")
     if base and key:
         import urllib.request
         def _api(texts):
             req = urllib.request.Request(
                 base.rstrip("/") + "/embeddings",
-                data=json.dumps({"model": os.environ.get("CODEmap_EMBED_MODEL", "text-embedding-3-small"),
+                data=json.dumps({"model": os.environ.get("CODELOOM_EMBED_MODEL", "text-embedding-3-small"),
                                  "input": texts}).encode(),
                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
             )
@@ -262,7 +262,7 @@ def _run():
         runpy.run_path(script, run_name="__main__")
     finally:
         sys.settrace(None)
-        out = os.environ.get("CODEmap_TRACE_OUT", "")
+        out = os.environ.get("CODELOOM_TRACE_OUT", "")
         if out:
             with open(out, "w") as f:
                 json.dump(list(_edges), f)
@@ -285,7 +285,7 @@ def _trace_call_edges(command: List[str], cwd: str) -> dict:
         wrapper = f.name
     out_path = os.path.join(tempfile.gettempdir(), "codeloom_trace_out.json")
     env = dict(os.environ)
-    env["CODEmap_TRACE_OUT"] = out_path
+    env["CODELOOM_TRACE_OUT"] = out_path
     try:
         subprocess.run(
             [sys.executable, wrapper] + command,
@@ -2176,7 +2176,7 @@ def task_relevance(files: List[str], root: str, task: str, top: int = 10) -> Lis
     import graph so non-Python modules participate too.
 
     If an embedding backend is available (local sentence-transformers or an
-    OpenAI-compatible API via CODEmap_EMBED_* env vars), semantic similarity
+    OpenAI-compatible API via CODELOOM_EMBED_* env vars), semantic similarity
     replaces token overlap for much better relevance ranking."""
     task_tokens = _tokenize(task)
     if not task_tokens:
