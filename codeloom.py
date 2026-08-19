@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.24.0"
+VERSION = "0.25.0"
 
 # --------------------------------------------------------------------------- #
 # Optional progressive-enhancement backends.
