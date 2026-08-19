@@ -147,6 +147,39 @@ def _ts_parse(path: str, ext: str):
     except Exception:
         return None
 
+# --------------------------------------------------------------------------- #
+# Parallel file parsing (--parallel) — stdlib multiprocessing, opt-in
+# --------------------------------------------------------------------------- #
+# Heavy ops (--cross, --deadcode, --calls) re-parse every file. On a monorepo
+# that's single-threaded and slow. --parallel dispatches the per-file reads
+# across processes (stdlib multiprocessing, no deps) for a big speedup.
+
+def _read_file_worker(args):
+    """Module-level worker for multiprocessing: read a file's text."""
+    path, ext = args
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return (path, fh.read())
+    except OSError:
+        return (path, None)
+
+def read_files_parallel(files: List[str], parallel: bool = False) -> dict:
+    """Read all files' text. With parallel=True, use multiprocessing."""
+    if not parallel or len(files) < 50:
+        out = {}
+        for f in files:
+            try:
+                with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                    out[f] = fh.read()
+            except OSError:
+                out[f] = None
+        return out
+    import multiprocessing as mp
+    exts = {f: os.path.splitext(f)[1].lower() for f in files}
+    with mp.Pool() as pool:
+        results = pool.map(_read_file_worker, [(f, exts[f]) for f in files])
+    return {path: text for path, text in results}
+
 def install_grammars(do_install: bool = False) -> str:
     """One-command opt-in installer for tree-sitter language grammars.
     Keeps the single-file zero-dep core; grammars are an optional precision
@@ -2095,9 +2128,9 @@ def render_similar(files, root, symbol, limit=10):
 # --deadcode: find functions defined but never called
 # --------------------------------------------------------------------------- #
 
-def dead_code(files, root):
+def dead_code(files, root, texts=None):
     """Find functions/classes defined in the codebase but never called."""
-    calls = build_call_graph_multi(files, root)
+    calls = build_call_graph_multi(files, root, texts=texts)
     defined = set()
     called = set()
     for mod, funcs in calls.items():
@@ -2122,8 +2155,8 @@ def dead_code(files, root):
             dead.append({"symbol": d})
     return dead
 
-def render_deadcode(files, root):
-    dead = dead_code(files, root)
+def render_deadcode(files, root, texts=None):
+    dead = dead_code(files, root, texts=texts)
     buf = io.StringIO()
     buf.write(f"# dead code — {len(dead)} symbol(s) defined but never called\n")
     if not dead:
@@ -2819,12 +2852,13 @@ def _scan_defs(text: str, ext: str) -> set:
             found.add(name)
     return found
 
-def build_call_graph_multi(files: List[str], root: str) -> dict:
+def build_call_graph_multi(files: List[str], root: str, texts: Optional[dict] = None) -> dict:
     """Multi-language call graph. {module: {func: set(called_funcs)}}.
     Uses tree-sitter for precise AST parsing when a grammar is available;
     falls back to a string/comment-aware scanner (more precise than raw regex)
     otherwise. Only reports calls to functions defined in the codebase
-    (builtins filtered)."""
+    (builtins filtered). `texts` is an optional {path: content} cache so
+    callers can pre-read files in parallel (--parallel)."""
     # First pass: collect defined function names per module.
     defined: dict = {}
     for f in files:
@@ -2838,11 +2872,13 @@ def build_call_graph_multi(files: List[str], root: str) -> dict:
         if ts_root is not None:
             defined[mod] = _ts_function_names(ts_root)
             continue
-        try:
-            with open(f, "r", encoding="utf-8", errors="replace") as fh:
-                text = fh.read()
-        except OSError:
-            continue
+        text = texts.get(f) if texts else None
+        if text is None:
+            try:
+                with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError:
+                continue
         def_re, _ = CALL_LANG_RULES[ext]
         for m in re.finditer(def_re, text, re.MULTILINE):
             name = next((g for g in m.groups() if g), None)
@@ -2870,11 +2906,13 @@ def build_call_graph_multi(files: List[str], root: str) -> dict:
             # drop empty callers
             calls[mod] = {k: v for k, v in calls[mod].items() if v}
             continue
-        try:
-            with open(f, "r", encoding="utf-8", errors="replace") as fh:
-                text = fh.read()
-        except OSError:
-            continue
+        text = texts.get(f) if texts else None
+        if text is None:
+            try:
+                with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError:
+                continue
         def_re, _ = CALL_LANG_RULES[ext]
         # find each function body and the calls within it, using the
         # string/comment-aware scanner (no false positives from strings/comments)
@@ -3051,6 +3089,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--json", action="store_true", help="emit JSON")
     p.add_argument("--no-outline", action="store_true", help="skip per-file outlines (faster)")
     p.add_argument("--max-files", type=int, default=5000, help="cap traversal (default 5000)")
+    p.add_argument("--parallel", action="store_true", help="parallelize file parsing for heavy ops (--cross/--deadcode/--calls) on large repos")
     p.add_argument("--graph", action="store_true", help="show Python import dependency graph")
     p.add_argument("--focus", metavar="MODULE", help="show deps/dependents of one module (with --graph)")
     p.add_argument("--calls", action="store_true", help="show function-level call graph (multi-language)")
@@ -3258,7 +3297,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
         if args.deadcode:
-            print(render_deadcode(files, root))
+            if args.parallel:
+                texts = read_files_parallel(files, parallel=True)
+                print(render_deadcode(files, root, texts=texts))
+            else:
+                print(render_deadcode(files, root))
             return 0
 
         if args.cross:
