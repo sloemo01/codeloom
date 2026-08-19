@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.23.0"
+SERVER_VERSION = "0.24.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -436,6 +436,20 @@ TOOLS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "codeloom_session_report",
+        "description": (
+            "Summarize the local session log: total calls, tokens, and estimated "
+            "input cost, broken down by command. Local observability — no network, "
+            "no daemon. Run codeloom with --session to start logging."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+            },
+        },
+    },
 ]
 
 
@@ -632,6 +646,9 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
 
     if name == "codeloom_framework":
         return {"content": [{"type": "text", "text": codeloom.render_framework(root, max_files)}]}
+
+    if name == "codeloom_session_report":
+        return {"content": [{"type": "text", "text": codeloom.render_session_report(root)}]}
 
     if name == "codeloom_map":
         m = codeloom.build_map(root, True, max_files)

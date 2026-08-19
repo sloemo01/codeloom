@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.23.0"
+VERSION = "0.24.0"
 
 # --------------------------------------------------------------------------- #
 # Optional progressive-enhancement backends.
@@ -2944,6 +2944,74 @@ def render_token_report(m: dict, text: str) -> str:
     buf.write(f"  ~{tokens} tokens (~{len(text)} bytes) — vs ~40k+ tokens for grep+read on a large repo\n")
     return buf.getvalue()
 
+# --------------------------------------------------------------------------- #
+# Session telemetry (--session, --session-report) — local observability
+# --------------------------------------------------------------------------- #
+# jcodemunch has session_yield/telemetry/cost accounting. codeloom's answer is
+# LOCAL, no-network, no-daemon session telemetry: each invocation logs its
+# command, tokens, and cost to a JSONL file; --session-report summarizes it.
+# This gives the agent/developer observability without a daemon or telemetry
+# that phones home — it stays on your machine.
+
+SESSION_LOG = ".codeloom-session.jsonl"
+
+def _session_path(root: str) -> str:
+    return os.path.join(root, SESSION_LOG)
+
+def log_session(root: str, command: str, text: str) -> None:
+    """Append one invocation to the local session log (JSONL)."""
+    import json as _json
+    import time as _time
+    entry = {
+        "ts": _time.time(),
+        "cmd": command,
+        "tokens": estimate_tokens(text),
+        "bytes": len(text),
+    }
+    try:
+        with open(_session_path(root), "a", encoding="utf-8") as f:
+            f.write(_json.dumps(entry) + "\n")
+    except OSError:
+        pass
+
+def render_session_report(root: str) -> str:
+    """Summarize the local session log: total calls, tokens, cost estimate."""
+    import json as _json
+    path = _session_path(root)
+    buf = io.StringIO()
+    buf.write(f"# codeloom --session-report\n")
+    if not os.path.isfile(path):
+        buf.write("  No session log yet. Run `codeloom --session` to start logging.\n")
+        return buf.getvalue()
+    total_tokens = 0
+    total_calls = 0
+    cmd_counts = {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    e = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                total_tokens += e.get("tokens", 0)
+                total_calls += 1
+                cmd = e.get("cmd", "?")
+                cmd_counts[cmd] = cmd_counts.get(cmd, 0) + 1
+    except OSError:
+        buf.write("  Could not read session log.\n")
+        return buf.getvalue()
+    # cost estimate: ~$15/MTok input (Claude Opus), conservative
+    est_cost = total_tokens / 1_000_000 * 15
+    buf.write(f"  {total_calls} call(s), {total_tokens} token(s) logged\n")
+    buf.write(f"  est. input cost (Opus ~$15/MTok): ${est_cost:.4f}\n\n")
+    buf.write("## By command\n")
+    for cmd, n in sorted(cmd_counts.items(), key=lambda x: -x[1]):
+        buf.write(f"  {cmd}: {n}\n")
+    return buf.getvalue()
+
 def render_text(m: dict) -> str:
     ep = m["entry_points"]
     buf = io.StringIO()
@@ -2983,6 +3051,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--diff", action="store_true", help="show structure of files changed vs HEAD (git)")
     p.add_argument("--install-agents", action="store_true", help="write/update AGENTS.md with a codeloom block")
     p.add_argument("--cost", action="store_true", help="append token-cost estimate to output")
+    p.add_argument("--session", action="store_true", help="log this invocation to the local session log (JSONL)")
+    p.add_argument("--session-report", action="store_true", help="summarize the local session log (calls, tokens, cost)")
     p.add_argument("--impact", metavar="MODULE", help="predict blast radius of changing a module")
     p.add_argument("--task", metavar="TEXT", help="rank modules relevant to a task description")
     p.add_argument("--plan", metavar="TEXT", help="emit a prioritized reading plan for a task")
@@ -3013,6 +3083,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     root = os.path.abspath(args.root)
 
+    # --session: log this invocation to the local session log (every command)
+    if args.session:
+        log_session(root, " ".join(sys.argv[1:]), " ".join(sys.argv[1:]))
+
     # --install-grammars: opt-in tree-sitter grammar installer
     if args.install_grammars:
         print(install_grammars(do_install=args.yes))
@@ -3026,6 +3100,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     # --framework: detect the web/app framework and surface its structure
     if args.framework:
         print(render_framework(root, args.max_files))
+        return 0
+
+    # --session-report: summarize the local session log
+    if args.session_report:
+        print(render_session_report(root))
         return 0
 
     # --index: build + save the persistent index

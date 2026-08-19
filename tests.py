@@ -627,6 +627,20 @@ class TestCodeLoom(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
+    def test_session_telemetry(self):
+        # log_session appends; render_session_report summarizes
+        tmp = tempfile.mkdtemp()
+        try:
+            codeloom.log_session(tmp, "--graph .", "some output text")
+            codeloom.log_session(tmp, "--task x .", "more output")
+            report = codeloom.render_session_report(tmp)
+            self.assertIn("2 call(s)", report)
+            self.assertIn("--graph .", report)
+            self.assertIn("--task x .", report)
+            self.assertIn("cost", report)
+        finally:
+            shutil.rmtree(tmp)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
