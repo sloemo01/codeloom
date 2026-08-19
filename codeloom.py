@@ -2128,8 +2128,10 @@ def render_similar(files, root, symbol, limit=10):
 # --deadcode: find functions defined but never called
 # --------------------------------------------------------------------------- #
 
-def dead_code(files, root, texts=None):
-    """Find functions/classes defined in the codebase but never called."""
+def dead_code(files, root, texts=None, index=None):
+    """Find functions/classes defined in the codebase but never called.
+    O(n) — builds a called-set once, then each symbol lookup is O(1).
+    `index` is an optional persistent index (symbols) to avoid re-parsing."""
     calls = build_call_graph_multi(files, root, texts=texts)
     defined = set()
     called = set()
@@ -2137,26 +2139,25 @@ def dead_code(files, root, texts=None):
         for caller, callees in funcs.items():
             defined.add(f"{mod}.{caller}")
             called |= callees
-    index = build_symbol_index(files, root)
-    for name, locs in index.items():
-        for loc in locs:
-            defined.add(f"{loc['module']}.{name}")
+    if index is not None:
+        # use the persistent index's symbols — no re-parse
+        for name, locs in index.get("symbols", {}).items():
+            for loc in locs:
+                defined.add(f"{loc['module']}.{name}")
+    else:
+        index_syms = build_symbol_index(files, root)
+        for name, locs in index_syms.items():
+            for loc in locs:
+                defined.add(f"{loc['module']}.{name}")
+    # O(1) lookup: a symbol is dead if its bare name is never in the called set
     dead = []
     for d in sorted(defined):
-        is_called = False
-        for mod, funcs in calls.items():
-            for caller, callees in funcs.items():
-                if d.split(".")[-1] in callees:
-                    is_called = True
-                    break
-            if is_called:
-                break
-        if not is_called:
+        if d.split(".")[-1] not in called:
             dead.append({"symbol": d})
     return dead
 
-def render_deadcode(files, root, texts=None):
-    dead = dead_code(files, root, texts=texts)
+def render_deadcode(files, root, texts=None, index=None):
+    dead = dead_code(files, root, texts=texts, index=index)
     buf = io.StringIO()
     buf.write(f"# dead code — {len(dead)} symbol(s) defined but never called\n")
     if not dead:
@@ -3306,11 +3307,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
         if args.deadcode:
+            pidx = ensure_fresh_index(root, args.max_files)
             if args.parallel:
                 texts = read_files_parallel(files, parallel=True)
-                print(render_deadcode(files, root, texts=texts))
+                print(render_deadcode(files, root, texts=texts, index=pidx))
             else:
-                print(render_deadcode(files, root))
+                print(render_deadcode(files, root, index=pidx))
             return 0
 
         if args.cross:
