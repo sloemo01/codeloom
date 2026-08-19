@@ -223,5 +223,6 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 - `codemap --snippet <path> <start> <end> <root>` returns a byte-range snippet.
 - `codemap --incremental <root>` returns changed files (hash cache).
 - `codemap --trace <cmd> <root>` returns runtime call edges (or none).
+- MCP server keeps an in-memory index (incremental, always fresh).
 - MCP smoke test returns `serverInfo` name `codemap-mcp`.
 - `demo.gif` exists and a late frame shows the intended feature output.

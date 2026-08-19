@@ -32,7 +32,7 @@ import codemap  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codemap-mcp"
-SERVER_VERSION = "0.14.0"
+SERVER_VERSION = "0.15.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -393,6 +393,75 @@ def _collect_files(root: str, max_files: int) -> List[str]:
     return files
 
 
+# --------------------------------------------------------------------------- #
+# In-memory index (the "better than daemon" layer).
+# A daemon keeps the index in RAM for fast repeated queries but goes stale and
+# needs a separate process. This keeps the index in memory for the lifetime of
+# the MCP server (resident in the agent's process), and incrementally re-parses
+# ONLY changed files (via content hashes) so it's always fresh — no separate
+# process, no staleness, no idle resource use.
+# --------------------------------------------------------------------------- #
+
+class _Index:
+    """Per-root in-memory index with incremental refresh."""
+
+    def __init__(self):
+        self._roots: Dict[str, Dict[str, Any]] = {}
+
+    def _get(self, root: str, max_files: int) -> Dict[str, Any]:
+        entry = self._roots.get(root)
+        if entry is None:
+            entry = {"files": [], "hashes": {}, "symbols": {}}
+            self._roots[root] = entry
+        return entry
+
+    def files(self, root: str, max_files: int) -> List[str]:
+        """Return the file list, re-walking only if the repo changed."""
+        entry = self._get(root, max_files)
+        # re-walk if the file set may have changed (cheap: compare count + mtimes)
+        current = _collect_files(root, max_files)
+        if len(current) != len(entry["files"]):
+            entry["files"] = current
+            entry["hashes"] = {}
+        return entry["files"]
+
+    def symbols(self, root: str, max_files: int) -> dict:
+        """Return the symbol index, re-parsing only changed files."""
+        entry = self._get(root, max_files)
+        files = self.files(root, max_files)
+        # find changed files
+        changed = []
+        for f in files:
+            h = codemap._file_hash(f)
+            if entry["hashes"].get(f) != h:
+                changed.append(f)
+        if changed:
+            # re-parse only changed files; reuse cached symbols for unchanged
+            for f in files:
+                ext = os.path.splitext(f)[1].lower()
+                mod = codemap.module_name_of(f, root)
+                h = codemap._file_hash(f)
+                if entry["hashes"].get(f) == h and f in entry["symbols"]:
+                    continue  # unchanged, keep cached
+                # parse fresh into a per-file dict
+                file_symbols: Dict[str, Any] = {}
+                if ext == ".py":
+                    codemap._index_python_bytes(f, mod, file_symbols)
+                elif ext in codemap.CALL_LANG_RULES:
+                    codemap._index_other_bytes(f, mod, ext, file_symbols)
+                entry["symbols"][f] = file_symbols
+                entry["hashes"][f] = h
+        # rebuild the flat index from per-file symbols
+        flat = {}
+        for f, syms in entry["symbols"].items():
+            for name, locs in syms.items():
+                flat.setdefault(name, []).extend(locs)
+        return flat
+
+
+_INDEX = _Index()
+
+
 def _resolve_focus(graph: dict, module: str, root: str) -> Optional[str]:
     """Resolve a focus target (path/dir/dotted) to a module in the graph."""
     focus = module
@@ -480,7 +549,8 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         symbol = args.get("symbol")
         if not symbol:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
-        index = codemap.build_symbol_index(files, root)
+        # use the in-memory index (incremental, always fresh)
+        index = _INDEX.symbols(root, max_files)
         text = codemap.render_search(index, symbol)
     elif name == "codemap_usages":
         symbol = args.get("symbol")
@@ -514,7 +584,16 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if not symbol:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
         ctx = args.get("context_lines", 2)
-        text = codemap.render_get_symbol(files, root, symbol, ctx)
+        # use the in-memory index (incremental, always fresh)
+        index = _INDEX.symbols(root, max_files)
+        locs = index.get(symbol)
+        if not locs:
+            text = f"# get_symbol: {symbol}\nSymbol not found.\n"
+        else:
+            loc = locs[0]
+            text = (f"# get_symbol: {symbol}\n{loc['module']}:{loc['line']}  [{loc['kind']}]  "
+                    f"bytes {loc['start_byte']}-{loc['end_byte']}  ~{loc['tokens']} tokens\n\n"
+                    f"{loc['source']}\n")
     elif name == "codemap_snippet":
         path = args.get("path")
         start = args.get("start_byte")

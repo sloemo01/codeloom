@@ -363,6 +363,26 @@ codemap --verify codemap.py
 # sha256: bd4b63de974d2b1411d11847ff6d541a60f9252482da030e5bdcfd4f1c1262ef
 ```
 
+## Why no daemon (the MCP server is better)
+
+A daemon keeps the index in RAM for fast repeated queries — but it goes stale,
+needs a separate process to manage, and uses resources even when idle. codemap
+doesn't need one:
+
+- **The MCP server is the daemon.** When an agent registers `codemap-mcp.py`,
+  it stays resident in the agent's process and answers repeated queries from an
+  in-memory index — daemon-speed, no separate process.
+- **Always fresh.** The in-memory index re-parses *only changed files* (via
+  content hashes) on each query, so it never goes stale like a daemon's index.
+- **Nothing to crash.** No background process, no idle RAM/CPU, no operational
+  surface. Copy one file, done.
+- **Zero-dep, single file.** The whole thing — CLI + MCP server + in-memory
+  index — is stdlib-only.
+
+That's the honest tradeoff: a daemon is faster for *thousands of queries per
+second on a 28M-LOC monorepo*. For an AI agent working on a repo, the MCP
+server delivers the same in-memory speed with none of the daemon's costs.
+
 ## MCP server (agents call codemap natively)
 
 `codemap-mcp.py` is a **zero-dependency MCP server** (stdlib JSON-RPC over
@@ -510,6 +530,7 @@ the fastest way to answer "what is this project, actually?"
 - [x] Token-counted symbol retrieval (`--get-symbol`, byte offsets + tokens)
 - [x] Byte-range snippet extraction (`--snippet`)
 - [x] Token-consumption benchmark (`benchmarks/run.py --tokens`)
+- [x] In-memory index in MCP server (incremental, always fresh — no daemon)
 - [x] Persistent parsed cache (repeated runs skip re-parsing)
 - [x] Benchmark harness + CI + release script (trust/credibility)
 - [x] Incremental mode (`--incremental`, hash-based cache)
