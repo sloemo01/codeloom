@@ -450,27 +450,33 @@ task-awareness** — the 80% case for everyday agent use.
 
 ## Why it's different
 
-| | codemap | heavyweight tools (semble, codebase-memory-mcp, etc.) |
-|---|---|---|
-| Install | one file, copy it | `pip install` + deps |
-| Setup | none | indexing daemon, MCP server, build step |
-| Runs on | stdlib only | heavy runtime |
-| Import graph | **yes — `--graph`, <1s** | yes, but after indexing |
-| Function call graph | **yes — `--calls`, multi-lang** | partial |
-| **Cross-file call graph** | **yes — `--cross`, AST-resolved** | yes (tree-sitter) |
-| **Symbol index / search** | **yes — `--search`** | yes |
-| Git-aware `--diff` | **yes — always fresh** | no |
-| **Task relevance (`--task`)** | **yes** | **no** |
-| **Change impact (`--impact`)** | **yes** | **no** |
-| **Reading plan (`--plan`)** | **yes** | **no** |
-| `--install-agents` | **yes — one command** | manual setup |
-| MCP server | **yes — zero-dep `codemap-mcp.py`** | yes |
-| Offline | yes | varies |
-| Speed | < 1s | indexing can take minutes |
-| Cost | 0 tokens to query | still uses tokens to *query* it |
+| | codemap | jcodemunch | semble / codebase-memory-mcp |
+|---|---|---|---|
+| Install | one file, copy it | `pip install` + MCP + deps | `pip install` + deps |
+| Setup | none | index once | indexing daemon |
+| Runs on | stdlib only | tree-sitter + index | heavy runtime |
+| Time to first result | < 1s | after indexing | after indexing |
+| Always fresh | yes (reads live) | re-index | re-index |
+| Import graph | **yes — `--graph`** | partial | yes |
+| Cross-file call graph | **yes — `--cross`** | yes (`get_call_hierarchy`) | yes |
+| Symbol index / search | **yes — `--search`** | yes (`search_symbols`) | yes |
+| Token-shaving retrieval | **yes — `--get-symbol`** | yes (`get_symbol_source`) | partial |
+| Byte-range snippets | **yes — `--snippet`** | yes | partial |
+| **Task relevance (`--task`)** | **yes** | **no** | **no** |
+| **Reading plan (`--plan`)** | **yes** | **no** | **no** |
+| **Explain (`--explain`)** | **yes (no LLM)** | **no** | **no** |
+| **Similar (`--similar`)** | **yes** | **no** | **no** |
+| **Dead code (`--deadcode`)** | **yes** | **no** | **no** |
+| **Runtime trace (`--trace`)** | **yes** | **no** | **no** |
+| Git-aware `--diff` | **yes — always fresh** | partial (`get_changed_symbols`) | no |
+| MCP server | **yes — zero-dep, 21 tools** | yes | yes |
+| Offline | yes | yes | varies |
 
-The heavyweight tools are great — but they're *overkill* when all you need is
-a map. codemap is the 80/20: the fastest possible structural context.
+The heavyweight tools are great at retrieval — but they're *search engines*,
+not *task-orientation engines*. codemap does retrieval (token-shaving, byte
+offsets) *and* tells the agent what matters, what breaks, and what to read
+first — the reasoning the search tools don't do. And it's the fastest possible
+structural context, in one file, in under a second, always fresh.
 
 ## For humans too
 
