@@ -2170,18 +2170,21 @@ def render_similar(files, root, symbol, limit=10):
 # --deadcode: find functions defined but never called
 # --------------------------------------------------------------------------- #
 
-def dead_code(files, root, texts=None, index=None, parallel=False):
+def dead_code(files, root, texts=None, index=None, parallel=False, calls=None):
     """Find functions/classes defined in the codebase but never called.
     O(n) — builds a called-set once, then each symbol lookup is O(1).
     `index` is an optional persistent index (symbols) to avoid re-parsing.
-    `parallel` parallelizes the call-edge scan (--parallel)."""
-    calls = build_call_graph_multi(files, root, texts=texts, parallel=parallel)
+    `parallel` parallelizes the call-edge scan (--parallel).
+    `calls` is an optional precomputed call graph (from the knowledge graph)."""
+    if calls is None:
+        calls = build_call_graph_multi(files, root, texts=texts, parallel=parallel)
     defined = set()
     called = set()
     for mod, funcs in calls.items():
         for caller, callees in funcs.items():
             defined.add(f"{mod}.{caller}")
-            called |= callees
+            # callees may be a set (fresh build) or list (from kg) — normalize
+            called |= set(callees)
     if index is not None:
         # use the persistent index's symbols — no re-parse
         for name, locs in index.get("symbols", {}).items():
@@ -2199,8 +2202,8 @@ def dead_code(files, root, texts=None, index=None, parallel=False):
             dead.append({"symbol": d})
     return dead
 
-def render_deadcode(files, root, texts=None, index=None, parallel=False):
-    dead = dead_code(files, root, texts=texts, index=index, parallel=parallel)
+def render_deadcode(files, root, texts=None, index=None, parallel=False, calls=None):
+    dead = dead_code(files, root, texts=texts, index=index, parallel=parallel, calls=calls)
     buf = io.StringIO()
     buf.write(f"# dead code — {len(dead)} symbol(s) defined but never called\n")
     if not dead:
@@ -2357,10 +2360,22 @@ def build_persistent_index(files: List[str], root: str) -> dict:
     """Build a full byte-offset symbol index (all languages)."""
     return build_byte_index(files, root)
 
-def save_persistent_index(root: str, index: dict, files: List[str]) -> None:
+def build_knowledge_graph(files: List[str], root: str) -> dict:
+    """Build the knowledge-graph edges (call + import) for the persistent index.
+    This is what lets heavy ops (--cross, --deadcode) load from the index
+    instead of re-parsing every file — daemon-speed, no daemon."""
+    calls = build_call_graph_multi(files, root)
+    graph = build_graph(files, root)  # import edges
+    return {
+        "calls": {m: {c: sorted(s) for c, s in funcs.items()} for m, funcs in calls.items()},
+        "imports": {m: sorted(deps) for m, deps in graph.items()},
+    }
+
+def save_persistent_index(root: str, index: dict, files: List[str], kg: Optional[dict] = None) -> None:
     """Save the persistent index with per-file (mtime, size) for incremental
     refresh. Size is tracked because Windows mtime has ~2s resolution, so a
-    quick append may not change mtime — but it always changes size."""
+    quick append may not change mtime — but it always changes size.
+    `kg` is the optional knowledge-graph edges (call + import)."""
     data = {
         "version": INDEX_VERSION,
         "root": root,
@@ -2368,6 +2383,8 @@ def save_persistent_index(root: str, index: dict, files: List[str]) -> None:
                   for f in files if os.path.isfile(f)},
         "symbols": index,
     }
+    if kg:
+        data["kg"] = kg
     try:
         with open(_index_path(root), "w", encoding="utf-8") as f:
             json.dump(data, f)
@@ -2424,15 +2441,17 @@ def ensure_fresh_index(root: str, max_files: int) -> Optional[dict]:
     return load_persistent_index(root)
 
 def render_index(files: List[str], root: str, max_files: int) -> str:
-    """Build and save the persistent index. Returns a summary."""
+    """Build and save the persistent index + knowledge graph. Returns a summary."""
     index = build_persistent_index(files, root)
-    save_persistent_index(root, index, files)
+    kg = build_knowledge_graph(files, root)
+    save_persistent_index(root, index, files, kg=kg)
     n_syms = sum(len(v) for v in index.values())
+    n_edges = sum(len(v) for v in kg["calls"].values()) + sum(len(v) for v in kg["imports"].values())
     buf = io.StringIO()
-    buf.write(f"# codeloom --index — built persistent index\n")
-    buf.write(f"  {len(files)} files, {n_syms} symbols\n")
+    buf.write(f"# codeloom --index — built persistent index + knowledge graph\n")
+    buf.write(f"  {len(files)} files, {n_syms} symbols, {n_edges} call/import edges\n")
     buf.write(f"  saved to {_index_path(root)}\n")
-    buf.write(f"  subsequent --get-symbol/--search load it in milliseconds\n")
+    buf.write(f"  subsequent --get-symbol/--search/--cross/--deadcode load it in milliseconds\n")
     return buf.getvalue()
 
 def render_index_status(root: str) -> str:
@@ -3364,7 +3383,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.deadcode:
             pidx = ensure_fresh_index(root, args.max_files)
-            if args.parallel:
+            # load call edges from the knowledge graph if present (no re-parse)
+            kg_calls = None
+            if pidx and pidx.get("kg"):
+                kg_calls = pidx["kg"].get("calls")
+            if kg_calls:
+                print(render_deadcode(files, root, index=pidx, calls=kg_calls))
+            elif args.parallel:
                 texts = read_files_parallel(files, parallel=True)
                 print(render_deadcode(files, root, texts=texts, index=pidx, parallel=True))
             else:
