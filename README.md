@@ -538,10 +538,11 @@ ceiling rises when you opt in:
 - **Regex multi-language analysis is best-effort.** *Improved:* codeloom now uses
   a **string/comment-aware scanner** that strips strings and comments before
   matching, so it doesn't false-positive on `helper()` inside a string or
-  comment. *Removed by:* `codeloom --install-grammars` (or `pip install
+  comment. *Removed by:* `codeloom --install-grammars --yes` (or `pip install
   tree-sitter tree-sitter-python ...`). codeloom then uses real AST parsing for
-  those languages instead of regex. Verified: `export function helper` (missed
-  by regex) is caught by tree-sitter.
+  **17 languages** (Python, JS/TS, Go, Rust, Java, C/C++, C#, Ruby, PHP, Swift,
+  Kotlin, Dart, Lua, bash) instead of regex. Verified: `export function helper`
+  (missed by regex) is caught by tree-sitter.
 - **Static analysis misses runtime wiring.** *Removed by:* `codeloom --trace CMD
   --force` runs a command (e.g. your test suite) under `sys.settrace` and
   records the ACTUAL call edges — capturing dynamic imports and monkeypatching

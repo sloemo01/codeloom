@@ -52,7 +52,9 @@ except ImportError:
     _TS_AVAILABLE = False
 
 def _ts_grammar_for(ext: str):
-    """Return a tree-sitter Language for a file extension, or None."""
+    """Return a tree-sitter Language for a file extension, or None.
+    Wires up the languages codeloom already supports via regex, so
+    --install-grammars gives real AST precision across all of them."""
     if not _TS_AVAILABLE:
         return None
     try:
@@ -71,6 +73,39 @@ def _ts_grammar_for(ext: str):
         if ext == ".rs":
             import tree_sitter_rust
             return Language(tree_sitter_rust.language())
+        if ext == ".java":
+            import tree_sitter_java
+            return Language(tree_sitter_java.language())
+        if ext in (".c", ".h"):
+            import tree_sitter_c
+            return Language(tree_sitter_c.language())
+        if ext in (".cpp", ".hpp", ".cc", ".cxx"):
+            import tree_sitter_cpp
+            return Language(tree_sitter_cpp.language())
+        if ext == ".cs":
+            import tree_sitter_c_sharp
+            return Language(tree_sitter_c_sharp.language())
+        if ext == ".rb":
+            import tree_sitter_ruby
+            return Language(tree_sitter_ruby.language())
+        if ext == ".php":
+            import tree_sitter_php
+            return Language(tree_sitter_php.language())
+        if ext == ".swift":
+            import tree_sitter_swift
+            return Language(tree_sitter_swift.language())
+        if ext == ".kt":
+            import tree_sitter_kotlin
+            return Language(tree_sitter_kotlin.language())
+        if ext == ".dart":
+            import tree_sitter_dart
+            return Language(tree_sitter_dart.language())
+        if ext == ".lua":
+            import tree_sitter_lua
+            return Language(tree_sitter_lua.language())
+        if ext == ".sh":
+            import tree_sitter_bash
+            return Language(tree_sitter_bash.language())
     except Exception:
         return None
     return None
@@ -109,6 +144,7 @@ def install_grammars(do_install: bool = False) -> str:
         "tree-sitter-kotlin",
         "tree-sitter-dart",
         "tree-sitter-lua",
+        "tree-sitter-bash",
     ]
     cmd = "pip install " + " ".join(pkgs)
     if do_install:
