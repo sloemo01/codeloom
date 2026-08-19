@@ -483,7 +483,7 @@ class _Index:
     def _get(self, root: str, max_files: int) -> Dict[str, Any]:
         entry = self._roots.get(root)
         if entry is None:
-            entry = {"files": [], "hashes": {}, "symbols": {}}
+            entry = {"files": [], "hashes": {}, "symbols": {}, "kg": None}
             self._roots[root] = entry
         return entry
 
@@ -529,6 +529,22 @@ class _Index:
             for name, locs in syms.items():
                 flat.setdefault(name, []).extend(locs)
         return flat
+
+    def kg(self, root: str, max_files: int) -> dict:
+        """Return the knowledge-graph call edges, cached in memory and
+        invalidated when files change. This is the resident-graph win: heavy
+        ops (--cross, --deadcode) hit memory, not disk — daemon-speed without
+        a separate daemon process."""
+        entry = self._get(root, max_files)
+        files = self.files(root, max_files)
+        # invalidate the cached graph if the file set changed
+        if entry["kg"] is None or entry["kg"].get("_files") != files:
+            calls = codeloom.build_call_graph_multi(files, root)
+            entry["kg"] = {
+                "_files": files,
+                "calls": {m: {c: sorted(s) for c, s in funcs.items()} for m, funcs in calls.items()},
+            }
+        return entry["kg"]["calls"]
 
 
 _INDEX = _Index()
@@ -744,7 +760,9 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
         text = codeloom.render_similar(files, root, symbol)
     elif name == "codeloom_deadcode":
-        text = codeloom.render_deadcode(files, root)
+        # use the resident in-memory knowledge graph (no re-parse)
+        kg_calls = _INDEX.kg(root, max_files)
+        text = codeloom.render_deadcode(files, root, calls=kg_calls)
     elif name == "codeloom_get_symbol":
         symbol = args.get("symbol")
         if not symbol:
