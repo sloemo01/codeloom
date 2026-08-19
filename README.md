@@ -73,6 +73,8 @@ That's it. Under a second, zero setup, works offline. Cross-platform — macOS, 
 | `codemap --plan "X"` | "Read these files, in this order, to do task X" |
 | `codemap --cross` | "What calls what, across files?" (resolved call graph) |
 | `codemap --search X` | "Where is symbol X defined?" (symbol index) |
+| `codemap --incremental` | "What changed since last run?" (hash-based cache) |
+| `codemap --verify FILE` | "Is this file the official codemap?" (SHA-256) |
 
 ## Usage
 
@@ -93,6 +95,8 @@ codemap --task "text"        # rank modules relevant to a task
 codemap --plan "text"        # prioritized reading plan for a task
 codemap --cross              # cross-file call graph (resolved across modules)
 codemap --search SYMBOL      # search the symbol index for a function/class/method
+codemap --incremental        # show files changed since last run (hash-based cache)
+codemap --verify FILE        # print SHA-256 of a file (security check)
 codemap --no-outline         # skip per-file one-liners (faster)
 codemap --max-files 2000     # cap traversal (default 5000)
 ```
@@ -214,6 +218,30 @@ codemap --cost .
 
 Quantify the win. Numbers beat claims.
 
+## Incremental mode (`--incremental`)
+
+Repeated runs on large repos shouldn't re-parse everything. `--incremental`
+uses a hash-based cache (`.codemap-cache.json`) — no daemon, no index — and
+reports only the files that changed since the last run:
+
+```bash
+codemap --incremental .
+# codemap --incremental — 1 changed file(s) since last run
+# ## Changed files
+#   src/utils/retry.py
+```
+
+## Security check (`--verify`)
+
+Running a single-file script downloaded from the web carries risk. `--verify`
+prints the SHA-256 of a file so you can confirm a downloaded copy is the
+official codemap and not tampered with:
+
+```bash
+codemap --verify codemap.py
+# sha256: bd4b63de974d2b1411d11847ff6d541a60f9252482da030e5bdcfd4f1c1262ef
+```
+
 ## MCP server (agents call codemap natively)
 
 `codemap-mcp.py` is a **zero-dependency MCP server** (stdlib JSON-RPC over
@@ -230,28 +258,64 @@ stdio — no `mcp` package, no daemon). Register it with any MCP-capable agent:
 }
 ```
 
-Exposes ten tools: `codemap_map`, `codemap_graph`, `codemap_focus`,
+Exposes twelve tools: `codemap_map`, `codemap_graph`, `codemap_focus`,
 `codemap_calls`, `codemap_diff`, `codemap_impact`, `codemap_task`,
-`codemap_plan`, `codemap_cross`, `codemap_search`. Your agent can build a mental
-model, trace execution flow across files, see what changed, predict blast radius,
-get a task-oriented reading plan, and search any symbol — natively, no install,
+`codemap_plan`, `codemap_cross`, `codemap_search`, `codemap_incremental`,
+`codemap_verify`. Your agent can build a mental model, trace execution flow
+across files, see what changed, predict blast radius, get a task-oriented
+reading plan, search any symbol, and verify a download — natively, no install,
 no index.
 
 ## How it works
 
 codemap is a single Python file using only the standard library:
 
-- **Tree + outlines** — walks the repo, respects `.gitignore`, and reads the
-  top-level declarations of each file (classes, functions) across 18 languages.
+- **Tree + outlines** — walks the repo, respects `.gitignore` (full pattern
+  support: negation, anchoring, `**`, dir-only), guards against symlink loops,
+  and reads the top-level declarations of each file across 18 languages.
 - **Import graph** — parses Python with the built-in `ast` module to resolve
-  absolute, relative, and source-root-relative imports into a dependency graph.
+  absolute, relative, importer-relative, and source-root-relative imports into
+  a dependency graph. Non-Python languages (JS/TS, Go, Rust, Java, C/C++, C#,
+  Ruby, PHP, Swift, Kotlin, Dart, Lua) use best-effort regex import detection.
 - **Call graph** — traces which functions call which, filtering to only
   repo-defined functions so you see real execution flow, not builtin noise.
+- **Cross-file call graph** — resolves calls to their defining module via
+  `ast` + import maps, so `A.main() -> B.engine.run()` works across files.
+- **Symbol index** — a true inverted index of every function, class, and method
+  with module + line, searchable via `--search`.
+- **Incremental cache** — a hash-based `.codemap-cache.json` (no daemon) so
+  repeated runs only re-parse changed files.
 - **MCP server** — a minimal JSON-RPC 2.0 stdio transport, so any MCP client
   can call codemap without installing the `mcp` package.
 
 No indexing daemon, no background process, no network. It reads your files,
 computes the structure, prints it, and exits.
+
+## Known limits (honest)
+
+codemap trades precision for its single-file/zero-dep design. These are
+deliberate, documented tradeoffs — not bugs:
+
+- **Regex multi-language analysis is best-effort.** The non-Python call graph
+  and import detection use regex, not tree-sitter. It will miss some language
+  idioms (dynamic dispatch, higher-order calls) and can mis-attribute calls.
+  Python analysis uses precise `ast` and is much more accurate.
+- **Static analysis misses runtime wiring.** Dynamic imports, monkeypatching,
+  and import-time tricks aren't visible to any static analyzer — including
+  tree-sitter tools. codemap is for *structure*, not guaranteed correctness.
+- **Import resolution is heuristic.** It handles common layouts, namespace
+  packages, and source-root-relative imports, but unusual `sys.path` setups
+  may mis-resolve. The suffix-match fallback covers most cases.
+- **Task scoring is a heuristic.** Token overlap + graph centrality is fast and
+  effective, but won't match semantic-embedding relevance for nuanced tasks.
+- **No persistent index.** codemap is always-fresh (reads files live) rather
+  than maintaining a background index. `--incremental` mitigates repeated-run
+  cost, but it's not a daemon-backed knowledge graph.
+
+If you need tree-sitter precision, a persistent knowledge graph, or snippet-level
+code search, the heavyweight tools (semble, codebase-memory-mcp) are genuinely
+better at those. codemap wins on **speed, zero-setup, freshness, and
+task-awareness** — the 80% case for everyday agent use.
 
 ## Why it's different
 
@@ -300,8 +364,12 @@ the fastest way to answer "what is this project, actually?"
 - [x] Agent-native reading plan (`--plan`)
 - [x] Cross-file call graph (`--cross`, AST-resolved)
 - [x] Symbol index + search (`--search`)
-- [ ] Incremental mode (only re-emit changed modules)
-- [ ] Multi-language import graph (beyond Python)
+- [x] Incremental mode (`--incremental`, hash-based cache)
+- [x] Multi-language import graph (JS/TS, Go, Rust, Java, C/C++, C#, Ruby, PHP, Swift, Kotlin, Dart, Lua)
+- [x] Full `.gitignore` support (negation, anchoring, `**`, dir-only)
+- [x] Symlink loop protection + Windows-safe path handling
+- [x] Security check (`--verify`, SHA-256)
+- [ ] Persistent knowledge-graph index (daemon-backed, for monorepos)
 
 ## Benchmarks
 

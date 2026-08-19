@@ -32,7 +32,7 @@ import codemap  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codemap-mcp"
-SERVER_VERSION = "0.6.0"
+SERVER_VERSION = "0.7.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -201,6 +201,35 @@ TOOLS: List[Dict[str, Any]] = [
             "required": ["symbol"],
         },
     },
+    {
+        "name": "codemap_incremental",
+        "description": (
+            "Show which files changed since the last run, using a hash-based "
+            "cache (no daemon). Use for repeated runs on large repos — only "
+            "re-parses changed files."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+        },
+    },
+    {
+        "name": "codemap_verify",
+        "description": (
+            "Print the SHA-256 of a file so users can verify a downloaded copy "
+            "of codemap is official and not tampered with."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path to the file to checksum"},
+            },
+            "required": ["path"],
+        },
+    },
 ]
 
 
@@ -210,9 +239,9 @@ TOOLS: List[Dict[str, Any]] = [
 
 def _collect_files(root: str, max_files: int) -> List[str]:
     gi = os.path.join(root, ".gitignore")
-    globs, ignore_dirs = codemap.parse_gitignore(gi) if os.path.isfile(gi) else ([], [])
+    rules = codemap.parse_gitignore(gi) if os.path.isfile(gi) else []
     files: List[str] = []
-    codemap._walk(root, globs, ignore_dirs, max_files, files)
+    codemap._walk(root, rules, max_files, files)
     return files
 
 
@@ -305,6 +334,13 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
         index = codemap.build_symbol_index(files, root)
         text = codemap.render_search(index, symbol)
+    elif name == "codemap_incremental":
+        text = codemap.render_incremental(files, root, max_files)
+    elif name == "codemap_verify":
+        path = args.get("path")
+        if not path:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'path' argument"}]}
+        text = codemap.render_verify(path)
     else:
         return {"isError": True, "content": [{"type": "text", "text": f"unknown tool: {name}"}]}
 

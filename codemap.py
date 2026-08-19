@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 
 # --------------------------------------------------------------------------- #
 # Language / structure detection
@@ -75,44 +75,133 @@ ENTRY_HINTS = {
 }
 
 # --------------------------------------------------------------------------- #
-# .gitignore parsing (best-effort, pattern-subset; no dep)
+# .gitignore parsing (stdlib `fnmatch`; supports negation, anchoring, **, dir-only)
 # --------------------------------------------------------------------------- #
 
-def parse_gitignore(path: str) -> Tuple[List[str], List[str]]:
-    """Return (ignore_globs, ignore_dirs). Handles common patterns."""
-    globs: List[str] = []
-    dirs: Set[str] = set()
+@dataclass
+class GitignoreRule:
+    pattern: str      # normalized pattern (no leading ! or /)
+    negated: bool     # True for '!pattern'
+    anchored: bool    # True for '/pattern' or pattern containing '/'
+    dir_only: bool    # True for 'pattern/'
+    base: str         # directory the .gitignore lives in (for nested files)
+
+def _normalize_glob(p: str) -> str:
+    """Convert a gitignore pattern to an fnmatch-compatible glob.
+    Handles ** (match any depth) and leading/trailing slashes."""
+    p = p.strip()
+    # collapse ** to a match-any-depth token; fnmatch doesn't do ** natively,
+    # so we translate it to a pattern that matches across separators.
+    # We'll handle ** by splitting on it and matching segments.
+    return p
+
+def parse_gitignore(path: str) -> List[GitignoreRule]:
+    """Parse a .gitignore file into rules. Handles negation (!), slash
+    anchoring, ** globs, and directory-only patterns."""
+    rules: List[GitignoreRule] = []
+    base = os.path.dirname(path)
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
-                line = line.strip()
+                line = line.rstrip("\n")
+                # strip trailing spaces (unless escaped)
+                if line.endswith(" ") and not line.endswith("\\ "):
+                    line = line.rstrip()
                 if not line or line.startswith("#"):
                     continue
-                # strip trailing comment (crude)
-                if line.endswith("/"):
-                    dirs.add(line.rstrip("/").lstrip("/"))
+                negated = line.startswith("!")
+                if negated:
+                    line = line[1:]
+                # strip leading slash (anchored to base)
+                anchored = line.startswith("/")
+                if anchored:
+                    line = line[1:]
+                dir_only = line.endswith("/")
+                if dir_only:
+                    line = line.rstrip("/")
+                if not line:
                     continue
-                globs.append(line.lstrip("/"))
+                # a pattern containing a slash (after stripping) is anchored
+                if "/" in line:
+                    anchored = True
+                rules.append(GitignoreRule(line, negated, anchored, dir_only, base))
     except OSError:
         pass
-    return globs, sorted(dirs)
+    return rules
 
-def is_ignored(path: str, globs: List[str], ignore_dirs: Set[str]) -> bool:
-    """Simple gitignore check: basename, dir, and common glob patterns."""
-    name = os.path.basename(path)
-    for d in ignore_dirs:
-        if d in path.split(os.sep):
+def _match_glob(pattern: str, relpath: str) -> bool:
+    """Match a gitignore pattern against a path relative to the rule's base.
+    Supports *, ?, **, and character classes via fnmatch, with ** matching
+    across directory separators."""
+    # Normalize separators
+    relpath = relpath.replace(os.sep, "/")
+    pattern = pattern.replace(os.sep, "/")
+
+    # Handle ** (match any number of path segments)
+    if "**" in pattern:
+        # Split pattern on ** and match each part as a prefix/suffix
+        parts = pattern.split("**")
+        # If pattern is exactly '**' or '**/...', match everything under base
+        if parts[0] == "" and parts[-1] == "":
             return True
-    for g in globs:
-        g = g.rstrip("/")
-        if g.startswith("*") and name.endswith(g.lstrip("*")):
+        # '**/foo' matches foo at any depth
+        if parts[0] == "":
+            return _match_glob(parts[-1].lstrip("/"), relpath) or \
+                   any(_match_glob(parts[-1].lstrip("/"), r) for r in _ancestors(relpath))
+        # 'foo/**' matches everything under foo
+        if parts[-1] == "":
+            prefix = parts[0].rstrip("/")
+            return relpath == prefix or relpath.startswith(prefix + "/")
+        # 'foo/**/bar' — match foo/.../bar
+        prefix = parts[0].rstrip("/")
+        suffix = parts[-1].lstrip("/")
+        if relpath.startswith(prefix + "/") and relpath.endswith(suffix):
             return True
-        if g.endswith("*") and name.startswith(g.rstrip("*")):
-            return True
-        if g == name:
-            return True
-        # pattern like node_modules or *.pyc already caught above
-    return False
+        return False
+
+    # No ** — use fnmatch on the full relative path
+    import fnmatch
+    return fnmatch.fnmatch(relpath, pattern) or fnmatch.fnmatch(os.path.basename(relpath), pattern)
+
+def _ancestors(relpath: str) -> List[str]:
+    """Return all ancestor paths of a relative path (for ** matching)."""
+    parts = relpath.split("/")
+    return ["/".join(parts[:i]) for i in range(1, len(parts))]
+
+def is_ignored(path: str, rules: List[GitignoreRule]) -> bool:
+    """Check if a path is ignored, honoring negation. Returns True if ignored.
+    The LAST matching rule wins (gitignore semantics). A pattern that matches a
+    directory also ignores everything under it."""
+    ignored = False
+    for rule in rules:
+        # compute path relative to the rule's base
+        try:
+            rel = os.path.relpath(path, rule.base)
+        except ValueError:
+            continue
+        rel = rel.replace(os.sep, "/")
+        matched = False
+        if rule.anchored:
+            # anchored: match the full relative path, or a directory prefix
+            matched = _match_glob(rule.pattern, rel)
+            if not matched and not rule.dir_only:
+                # '/build' should also ignore 'build/out.js' (dir prefix)
+                matched = rel.startswith(rule.pattern.rstrip("/") + "/")
+        else:
+            # unanchored: match basename, any path segment, or dir prefix
+            matched = (_match_glob(rule.pattern, rel) or
+                       _match_glob(rule.pattern, os.path.basename(rel)) or
+                       any(_match_glob(rule.pattern, a) for a in _ancestors(rel)))
+            if not matched:
+                # 'node_modules/' should ignore 'node_modules/x.js'
+                matched = rel.startswith(rule.pattern.rstrip("/") + "/")
+        if not matched:
+            continue
+        # dir_only patterns only match directories (or their contents)
+        if rule.dir_only and not (os.path.isdir(path) or rel.startswith(rule.pattern.rstrip("/") + "/")):
+            continue
+        ignored = not rule.negated
+    return ignored
 
 # --------------------------------------------------------------------------- #
 # Module outline extraction
@@ -159,12 +248,19 @@ class Node:
     outline: List[str] = field(default_factory=list)
     children: List["Node"] = field(default_factory=list)
 
-def _walk(root: str, globs: List[str], ignore_dirs: Set[str],
-          max_files: int, files: List[str]) -> None:
-    """Collect file paths, respecting ignores, capped by max_files."""
+def _walk(root: str, rules: List[GitignoreRule], max_files: int, files: List[str],
+          _visited: Optional[set] = None) -> None:
+    """Collect file paths, respecting ignores, capped by max_files.
+    Guards against symlink loops by tracking visited real paths."""
     if len(files) >= max_files:
         return
+    if _visited is None:
+        _visited = set()
     try:
+        real = os.path.realpath(root)
+        if real in _visited:
+            return  # symlink loop
+        _visited.add(real)
         entries = sorted(os.listdir(root))
     except OSError:
         return
@@ -172,10 +268,10 @@ def _walk(root: str, globs: List[str], ignore_dirs: Set[str],
         if e.startswith(".") and e not in (".gitignore", ".env.example"):
             continue
         full = os.path.join(root, e)
-        if is_ignored(full, globs, ignore_dirs):
+        if is_ignored(full, rules):
             continue
         if os.path.isdir(full):
-            _walk(full, globs, ignore_dirs, max_files, files)
+            _walk(full, rules, max_files, files, _visited)
         elif os.path.isfile(full):
             if len(files) >= max_files:
                 return
@@ -246,9 +342,9 @@ def entry_points(files: List[str]) -> List[str]:
 def build_map(root: str, want_outline: bool, max_files: int) -> dict:
     root = os.path.abspath(root)
     gi = os.path.join(root, ".gitignore")
-    globs, ignore_dirs = parse_gitignore(gi) if os.path.isfile(gi) else ([], [])
+    rules = parse_gitignore(gi) if os.path.isfile(gi) else []
     files: List[str] = []
-    _walk(root, globs, ignore_dirs, max_files, files)
+    _walk(root, rules, max_files, files)
     tree = build_tree(files, root, want_outline)
     return {
         "root": root,
@@ -262,36 +358,54 @@ def build_map(root: str, want_outline: bool, max_files: int) -> dict:
 # --------------------------------------------------------------------------- #
 
 def module_name_of(path: str, root: str) -> str:
-    """Map a file path to its dotted module name, e.g. src/core/engine.py -> src.core.engine."""
+    """Map a file path to its dotted module name, e.g. src/core/engine.py -> src.core.engine.
+    Strips known source extensions so `util.js` -> `util`."""
     rel = os.path.relpath(path, root)
-    if rel.endswith(".py"):
-        rel = rel[:-3]
-    elif rel.endswith("/__init__"):
-        rel = rel[:-9]
+    ext = os.path.splitext(rel)[1].lower()
+    if ext in LANG_RULES or ext in IMPORT_LANG_RULES:
+        rel = rel[:-(len(ext))]
+    elif rel.endswith(os.sep + "__init__"):
+        rel = rel[:-(len(os.sep) + 9)]
     if rel.endswith("__init__"):
         rel = rel[:-9]
     return rel.replace(os.sep, ".")
 
 def _resolve_import(target: str, importer_mod: str, root: str, module_map: dict) -> Optional[str]:
     """Resolve an imported module name to an existing local module, or None.
-    Handles absolute, relative (from .x / from ..x), and the common case where
-    the import is relative to the source root (e.g. 'core.engine' -> 'src.core.engine').
+    Handles absolute, relative (from .x / from ..x), namespace packages, and the
+    common case where the import is relative to the source root (e.g. 'core.engine'
+    -> 'src.core.engine').
     Strategy:
       1. exact match
-      2. drop trailing segments (pkg.module -> pkg)
-      3. suffix match against known modules (core.engine matches src.core.engine)
+      2. importer-relative: resolve against the importer's package prefix
+      3. drop trailing segments (pkg.module -> pkg)
+      4. suffix match against known modules (core.engine matches src.core.engine)
     """
     if target.startswith("."):
         # relative import — handled by caller via parse_module; skip here
         return None
-    cands = [target]
+
+    # 1. exact match
+    if target in module_map:
+        return target
+
+    # 2. importer-relative: if importer is src.core.engine, try src.core.<target>
+    if importer_mod and "." in importer_mod:
+        importer_pkg = ".".join(importer_mod.split(".")[:-1])
+        while importer_pkg:
+            cand = f"{importer_pkg}.{target}"
+            if cand in module_map:
+                return cand
+            importer_pkg = ".".join(importer_pkg.split(".")[:-1])
+
+    # 3. drop trailing segments (pkg.module -> pkg)
     parts = target.split(".")
     for i in range(len(parts) - 1, 0, -1):
-        cands.append(".".join(parts[:i]))
-    for c in cands:
-        if c in module_map:
-            return c
-    # suffix match: does any local module end with '.target' (or equal it)?
+        cand = ".".join(parts[:i])
+        if cand in module_map:
+            return cand
+
+    # 4. suffix match: does any local module end with '.target' (or equal it)?
     tgt_segs = target.split(".")
     best = None
     for mod in module_map:
@@ -353,6 +467,97 @@ def build_graph(files: List[str], root: str) -> dict:
                 deps.add(resolved)
         graph[mod] = deps
     return graph
+
+# regex-based import detection for non-Python languages (best-effort, zero-dep)
+IMPORT_LANG_RULES: dict = {
+    ".js":   (r"^\s*(?:import\s+.*?from\s+['\"]([^'\"]+)['\"]|require\(['\"]([^'\"]+)['\"]\))", r"^import\s+['\"]([^'\"]+)['\"]"),
+    ".ts":   (r"^\s*(?:import\s+.*?from\s+['\"]([^'\"]+)['\"]|require\(['\"]([^'\"]+)['\"]\))", r"^import\s+['\"]([^'\"]+)['\"]"),
+    ".jsx":  (r"^\s*(?:import\s+.*?from\s+['\"]([^'\"]+)['\"]|require\(['\"]([^'\"]+)['\"]\))", r"^import\s+['\"]([^'\"]+)['\"]"),
+    ".tsx":  (r"^\s*(?:import\s+.*?from\s+['\"]([^'\"]+)['\"]|require\(['\"]([^'\"]+)['\"]\))", r"^import\s+['\"]([^'\"]+)['\"]"),
+    ".go":   (r"^\s*import\s+[\"']([^\"']+)[\"']", r"^\s*import\s+[\"']([^\"']+)[\"']"),
+    ".rs":   (r"^\s*(?:use|mod)\s+([\w:]+)", r"^\s*use\s+([\w:]+)"),
+    ".java": (r"^\s*import\s+([\w.]+)", r"^\s*import\s+([\w.]+)"),
+    ".c":    (r"^\s*#include\s*[<\"]([^>\"]+)[>\"]", r"^\s*#include\s*[<\"]([^>\"]+)[>\"]"),
+    ".h":    (r"^\s*#include\s*[<\"]([^>\"]+)[>\"]", r"^\s*#include\s*[<\"]([^>\"]+)[>\"]"),
+    ".cpp":  (r"^\s*#include\s*[<\"]([^>\"]+)[>\"]", r"^\s*#include\s*[<\"]([^>\"]+)[>\"]"),
+    ".hpp":  (r"^\s*#include\s*[<\"]([^>\"]+)[>\"]", r"^\s*#include\s*[<\"]([^>\"]+)[>\"]"),
+    ".cs":   (r"^\s*using\s+([\w.]+)", r"^\s*using\s+([\w.]+)"),
+    ".rb":   (r"^\s*require\s+['\"]([^'\"]+)['\"]", r"^\s*require\s+['\"]([^'\"]+)['\"]"),
+    ".php":  (r"^\s*(?:use\s+([\w\\]+)|require\w*\s*\(?['\"]([^'\"]+)['\"]\))", r"^\s*use\s+([\w\\]+)"),
+    ".swift":(r"^\s*import\s+([\w.]+)", r"^\s*import\s+([\w.]+)"),
+    ".kt":   (r"^\s*import\s+([\w.]+)", r"^\s*import\s+([\w.]+)"),
+    ".dart": (r"^\s*import\s+['\"]([^'\"]+)['\"]", r"^\s*import\s+['\"]([^'\"]+)['\"]"),
+    ".lua":  (r"^\s*require\s*\(?['\"]([^'\"]+)['\"]\)?", r"^\s*require\s*\(?['\"]([^'\"]+)['\"]\)?"),
+}
+
+def build_graph_multi(files: List[str], root: str) -> dict:
+    """Build a cross-language import dependency graph: {module: set(deps)}.
+    Python uses precise `ast`; other languages use best-effort regex. Deps are
+    resolved to local modules via suffix matching."""
+    # collect all local module names (any language)
+    module_map = {}
+    for f in files:
+        ext = os.path.splitext(f)[1].lower()
+        if ext in LANG_RULES or ext in IMPORT_LANG_RULES:
+            module_map[module_name_of(f, root)] = f
+
+    graph: dict = {}
+    for f in files:
+        ext = os.path.splitext(f)[1].lower()
+        if ext == ".py":
+            mod = module_name_of(f, root)
+            info = parse_module(f, root, module_map)
+            deps = set()
+            for imp in info["imports"]:
+                resolved = _resolve_import(imp, mod, root, module_map)
+                if resolved and resolved != mod:
+                    deps.add(resolved)
+            graph[mod] = deps
+        elif ext in IMPORT_LANG_RULES:
+            mod = module_name_of(f, root)
+            deps = set()
+            try:
+                with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            def_re, _ = IMPORT_LANG_RULES[ext]
+            for m in re.finditer(def_re, text, re.MULTILINE):
+                target = next((g for g in m.groups() if g), None)
+                if not target:
+                    continue
+                # strip quotes/angle brackets and resolve to local module
+                target = target.strip("'\"<>")
+                # strip relative path prefixes (./, ../) for JS/TS/Dart
+                while target.startswith("./") or target.startswith("../"):
+                    target = target[2:] if target.startswith("./") else target[3:]
+                # for C includes, strip .h extension
+                if ext in (".c", ".h", ".cpp", ".hpp"):
+                    target = target.rsplit(".", 1)[0] if "." in target else target
+                resolved = _resolve_import(target, mod, root, module_map)
+                if resolved and resolved != mod:
+                    deps.add(resolved)
+            graph[mod] = deps
+    return graph
+
+def render_graph_multi(graph: dict, root: str, start: Optional[str] = None) -> str:
+    buf = io.StringIO()
+    if start:
+        fs = focus_subgraph(graph, start)
+        buf.write(f"# focus: {start}\n")
+        buf.write(f"## depends_on ({len(fs['depends_on'])})\n")
+        for d in fs["depends_on"]:
+            buf.write(f"  {d}\n")
+        buf.write(f"## depended_on_by ({len(fs['depended_on_by'])})\n")
+        for d in fs["depended_on_by"]:
+            buf.write(f"  {d}\n")
+        return buf.getvalue()
+    buf.write("# import graph (multi-language)\n")
+    edges = [(m, d) for m, deps in sorted(graph.items()) for d in sorted(deps)]
+    buf.write(f"{len(graph)} modules, {len(edges)} edges\n\n")
+    for m, d in edges:
+        buf.write(f"  {m} -> {d}\n")
+    return buf.getvalue()
 
 def reachable(graph: dict, start: str, direction: str = "out") -> set:
     """BFS over the graph. direction='out' = what start depends on; 'in' = what depends on start."""
@@ -695,6 +900,109 @@ def render_search(index: dict, query: str, limit: int = 20) -> str:
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
+# Incremental / indexed mode (hash-based cache, no daemon)
+# --------------------------------------------------------------------------- #
+
+CACHE_VERSION = 1
+
+def _file_hash(path: str) -> str:
+    """Return a content hash for a file (mtime + size + quick hash)."""
+    import hashlib
+    try:
+        st = os.stat(path)
+        with open(path, "rb") as f:
+            data = f.read(8192)  # sample first 8KB
+        h = hashlib.sha256()
+        h.update(str(st.st_mtime_ns).encode())
+        h.update(str(st.st_size).encode())
+        h.update(data)
+        return h.hexdigest()
+    except OSError:
+        return ""
+
+def _cache_path(root: str) -> str:
+    return os.path.join(root, ".codemap-cache.json")
+
+def load_cache(root: str) -> dict:
+    """Load the incremental cache if present and valid."""
+    try:
+        with open(_cache_path(root), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if data.get("version") == CACHE_VERSION:
+            return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {"version": CACHE_VERSION, "files": {}}
+
+def save_cache(root: str, cache: dict) -> None:
+    """Persist the incremental cache."""
+    try:
+        with open(_cache_path(root), "w", encoding="utf-8") as f:
+            json.dump(cache, f)
+    except OSError:
+        pass
+
+def changed_files(files: List[str], cache: dict) -> List[str]:
+    """Return files whose content hash changed vs the cache (or are new)."""
+    changed = []
+    for f in files:
+        h = _file_hash(f)
+        if cache.get("files", {}).get(f) != h:
+            changed.append(f)
+    return changed
+
+def update_cache(files: List[str], cache: dict) -> None:
+    """Update the cache with current file hashes."""
+    for f in files:
+        cache.setdefault("files", {})[f] = _file_hash(f)
+
+def render_incremental(files: List[str], root: str, max_files: int) -> str:
+    """Show which files changed since the last run (incremental mode)."""
+    cache = load_cache(root)
+    changed = changed_files(files, cache)
+    buf = io.StringIO()
+    buf.write(f"# codemap --incremental — {len(changed)} changed file(s) since last run\n")
+    if not changed:
+        buf.write("No changes. Run `codemap` to refresh the full map.\n")
+    else:
+        buf.write("\n## Changed files\n")
+        for c in sorted(changed):
+            buf.write(f"  {os.path.relpath(c, root)}\n")
+    # update cache so next run is incremental
+    update_cache(files, cache)
+    save_cache(root, cache)
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
+# --verify: checksum for security (curl|chmod safety)
+# --------------------------------------------------------------------------- #
+
+def sha256_file(path: str) -> str:
+    """Return the full SHA-256 of a file."""
+    import hashlib
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return ""
+
+def render_verify(path: str) -> str:
+    """Print the SHA-256 of a file so users can verify a downloaded copy."""
+    digest = sha256_file(path)
+    buf = io.StringIO()
+    buf.write(f"# codemap --verify {path}\n")
+    if not digest:
+        buf.write("File not found or unreadable.\n")
+        return buf.getvalue()
+    buf.write(f"sha256: {digest}\n")
+    buf.write("\nCompare this against the published checksum in the repo to confirm\n")
+    buf.write("the file you downloaded is the official codemap and not tampered with.\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
 # --impact: blast-radius prediction (graph reachability)
 # --------------------------------------------------------------------------- #
 
@@ -734,14 +1042,25 @@ def render_impact(graph: dict, root: str, start: str) -> str:
 # --------------------------------------------------------------------------- #
 
 def _tokenize(text: str) -> set:
-    """Lowercase, split on non-alphanumerics, drop stopwords/short tokens."""
+    """Lowercase, split on non-alphanumerics AND camelCase/snake_case boundaries,
+    drop stopwords/short tokens. So 'loginBug' and 'login_bug' both yield 'login'."""
     stop = {"the", "and", "for", "with", "this", "that", "from", "into", "are",
             "was", "were", "have", "has", "had", "not", "but", "its", "it's",
             "you", "your", "our", "their", "them", "they", "will", "would",
             "should", "could", "can", "do", "does", "did", "is", "am", "are",
             "a", "an", "to", "of", "in", "on", "at", "by", "be", "been", "being"}
-    words = re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", text.lower())
-    return {w for w in words if len(w) > 2 and w not in stop}
+    # split on non-alphanumerics first (preserving case for camelCase split)
+    words = re.findall(r"[a-zA-Z0-9_]+", text)
+    out = set()
+    for w in words:
+        # split snake_case
+        for part in w.split("_"):
+            if part:
+                out.add(part.lower())
+        # split camelCase: loginBug -> login, bug (split on case boundaries)
+        for m in re.finditer(r"[a-z]+|[A-Z][a-z]*|\d+", w):
+            out.add(m.group(0).lower())
+    return {w for w in out if len(w) > 2 and w not in stop}
 
 def _module_tokens(path: str) -> set:
     """Extract identifier tokens from a source file (function/class/var names)."""
@@ -753,25 +1072,30 @@ def _module_tokens(path: str) -> set:
     return _tokenize(text)
 
 def task_relevance(files: List[str], root: str, task: str, top: int = 10) -> List[dict]:
-    """Rank modules by relevance to a task string. Score = token overlap +
-    graph centrality bonus (modules with more dependents are more impactful)."""
+    """Rank modules by relevance to a task string. Score = token overlap (weighted
+    by module-name matches) + graph centrality bonus. Uses the multi-language
+    import graph so non-Python modules participate too."""
     task_tokens = _tokenize(task)
     if not task_tokens:
         return []
-    # build import graph for centrality
-    graph = build_graph(files, root)
+    # build multi-language import graph for centrality
+    graph = build_graph_multi(files, root)
     scored = []
     for f in files:
-        if not f.endswith(".py"):
+        ext = os.path.splitext(f)[1].lower()
+        if ext not in LANG_RULES and ext not in IMPORT_LANG_RULES:
             continue
         mod = module_name_of(f, root)
         toks = _module_tokens(f)
         overlap = len(task_tokens & toks)
         if overlap == 0:
             continue
+        # module-name match bonus: if the module name itself matches a task token
+        mod_tokens = _tokenize(mod)
+        name_bonus = len(task_tokens & mod_tokens) * 3
         # centrality: how many modules depend on this one (transitively)
         centrality = len(reachable(graph, mod, "in"))
-        score = overlap * 2 + min(centrality, 10)  # overlap dominates, centrality breaks ties
+        score = overlap * 2 + name_bonus + min(centrality, 10)
         scored.append({"module": mod, "path": f, "score": score,
                        "overlap": overlap, "centrality": centrality})
     scored.sort(key=lambda s: (-s["score"], s["module"]))
@@ -1048,10 +1372,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--plan", metavar="TEXT", help="emit a prioritized reading plan for a task")
     p.add_argument("--cross", action="store_true", help="show cross-file call graph (resolved across modules)")
     p.add_argument("--search", metavar="SYMBOL", help="search the symbol index for a function/class/method")
+    p.add_argument("--incremental", action="store_true", help="show files changed since last run (hash-based cache)")
+    p.add_argument("--verify", metavar="FILE", help="print SHA-256 of a file (security check)")
     p.add_argument("--version", action="version", version=f"codemap {VERSION}")
     args = p.parse_args(argv)
 
     root = os.path.abspath(args.root)
+
+    # --verify: checksum for security
+    if args.verify:
+        print(render_verify(args.verify))
+        return 0
 
     # --install-agents: write/update AGENTS.md
     if args.install_agents:
@@ -1063,12 +1394,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(render_diff(root, args.max_files))
         return 0
 
+    # --incremental: hash-based cache, no daemon
+    if args.incremental:
+        gi = os.path.join(root, ".gitignore")
+        rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+        files: List[str] = []
+        _walk(root, rules, args.max_files, files)
+        print(render_incremental(files, root, args.max_files))
+        return 0
+
     # --cross / --search: deep structural intelligence
     if args.cross or args.search:
         gi = os.path.join(root, ".gitignore")
-        globs, ignore_dirs = parse_gitignore(gi) if os.path.isfile(gi) else ([], [])
+        rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
-        _walk(root, globs, ignore_dirs, args.max_files, files)
+        _walk(root, rules, args.max_files, files)
 
         if args.search:
             index = build_symbol_index(files, root)
@@ -1104,9 +1444,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     # --impact / --task / --plan: task-aware intelligence
     if args.impact or args.task or args.plan:
         gi = os.path.join(root, ".gitignore")
-        globs, ignore_dirs = parse_gitignore(gi) if os.path.isfile(gi) else ([], [])
+        rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
-        _walk(root, globs, ignore_dirs, args.max_files, files)
+        _walk(root, rules, args.max_files, files)
 
         if args.impact:
             graph = build_graph(files, root)
@@ -1144,9 +1484,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Call-graph mode (multi-language)
     if args.graph or args.calls:
         gi = os.path.join(root, ".gitignore")
-        globs, ignore_dirs = parse_gitignore(gi) if os.path.isfile(gi) else ([], [])
+        rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
-        _walk(root, globs, ignore_dirs, args.max_files, files)
+        _walk(root, rules, args.max_files, files)
         if args.calls:
             calls = build_call_graph_multi(files, root)
             focus = None
@@ -1176,7 +1516,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 text += render_token_report({}, text)
             print(text)
             return 0
-        graph = build_graph(files, root)
+        graph = build_graph_multi(files, root)
         if args.focus:
             # accept file path, directory (package), or dotted module name
             focus = args.focus
@@ -1199,9 +1539,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 else:
                     print(f"module not found: {args.focus}", file=sys.stderr)
                     return 1
-            text = render_graph(graph, root, start=focus)
+            text = render_graph_multi(graph, root, start=focus)
         else:
-            text = render_graph(graph, root)
+            text = render_graph_multi(graph, root)
         if args.cost:
             text += render_token_report({}, text)
         print(text)

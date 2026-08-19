@@ -65,6 +65,18 @@ python3 codemap.py --impact core/engine.py /path/to/repo
 
 # Agent-native reading plan for a task
 python3 codemap.py --plan "add retry to engine" /path/to/repo
+
+# Cross-file call graph (resolved across modules)
+python3 codemap.py --cross /path/to/repo
+
+# Search the symbol index
+python3 codemap.py --search Engine /path/to/repo
+
+# Incremental mode (hash-based cache, no daemon)
+python3 codemap.py --incremental /path/to/repo
+
+# Security check (SHA-256)
+python3 codemap.py --verify codemap.py
 ```
 
 ## Quick Reference
@@ -72,7 +84,7 @@ python3 codemap.py --plan "add retry to engine" /path/to/repo
 | Flag | Purpose |
 |---|---|
 | `(none)` | tree + per-module one-liners + entry points |
-| `--graph` | Python import dependency graph |
+| `--graph` | import dependency graph (multi-language) |
 | `--graph --focus X` | deps + dependents of module X |
 | `--calls` | function-level call graph (multi-language) |
 | `--calls --focus X` | calls inside one module |
@@ -82,6 +94,10 @@ python3 codemap.py --plan "add retry to engine" /path/to/repo
 | `--task "text"` | rank modules relevant to a task |
 | `--impact X` | predict blast radius of changing module X |
 | `--plan "text"` | prioritized reading plan for a task |
+| `--cross` | cross-file call graph (AST-resolved) |
+| `--search X` | search the symbol index |
+| `--incremental` | files changed since last run (hash cache) |
+| `--verify FILE` | print SHA-256 of a file |
 | `--json` | machine-readable JSON |
 | `--write FILE` | write map to FILE |
 | `--no-outline` | skip per-file one-liners (faster) |
@@ -111,7 +127,8 @@ python3 codemap.py --plan "add retry to engine" /path/to/repo
    Expect `serverInfo` with name `codemap-mcp`.
 3. Tools exposed: `codemap_map`, `codemap_graph`, `codemap_focus`,
    `codemap_calls`, `codemap_diff`, `codemap_impact`, `codemap_task`,
-   `codemap_plan`.
+   `codemap_plan`, `codemap_cross`, `codemap_search`, `codemap_incremental`,
+   `codemap_verify`.
 
 ### 3. Run the test suite
 ```bash
@@ -147,9 +164,12 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (14 tests).
+- `python3 tests.py` → `OK` (20 tests).
 - `codemap --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codemap --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codemap --task "text" <root>` returns a ranked module list.
+- `codemap --cross <root>` returns cross-file call edges.
+- `codemap --search <symbol> <root>` returns symbol locations.
+- `codemap --incremental <root>` returns changed files (hash cache).
 - MCP smoke test returns `serverInfo` name `codemap-mcp`.
 - `demo.gif` exists and a late frame shows the intended feature output.

@@ -145,8 +145,8 @@ class TestCodemap(unittest.TestCase):
                 f.write("package main\nfunc helper() int { return 1 }\nfunc main() { helper() }\n")
             files = [os.path.join(tmp, "app.js"), os.path.join(tmp, "main.go")]
             calls = codemap.build_call_graph_multi(files, tmp)
-            self.assertIn("greet", calls.get("app.js", {}).get("main", set()))
-            self.assertIn("helper", calls.get("main.go", {}).get("main", set()))
+            self.assertIn("greet", calls.get("app", {}).get("main", set()))
+            self.assertIn("helper", calls.get("main", {}).get("main", set()))
         finally:
             shutil.rmtree(tmp)
 
@@ -225,6 +225,50 @@ class TestCodemap(unittest.TestCase):
         # search for a method
         results2 = codemap.search_symbols(index, "run")
         self.assertTrue(results2)
+
+    def test_gitignore_negation_and_anchoring(self):
+        # create a .gitignore with negation + anchoring
+        gi = os.path.join(self.repo, ".gitignore")
+        with open(gi, "w") as f:
+            f.write("*.pyc\n/build\n!keep.pyc\nnode_modules/\n")
+        rules = codemap.parse_gitignore(gi)
+        # *.pyc ignored
+        self.assertTrue(codemap.is_ignored(os.path.join(self.repo, "a.pyc"), rules))
+        # /build anchored ignores build/out.js
+        self.assertTrue(codemap.is_ignored(os.path.join(self.repo, "build", "out.js"), rules))
+        # node_modules/ dir-only ignores contents
+        self.assertTrue(codemap.is_ignored(os.path.join(self.repo, "node_modules", "x.js"), rules))
+        # !keep.pyc negation keeps it
+        self.assertFalse(codemap.is_ignored(os.path.join(self.repo, "keep.pyc"), rules))
+
+    def test_incremental_cache(self):
+        # first run: all files changed
+        files = [os.path.join(self.repo, "src", "cli.py")]
+        cache = codemap.load_cache(self.repo)
+        changed = codemap.changed_files(files, cache)
+        self.assertEqual(len(changed), 1)
+        # update cache, second run: no changes
+        codemap.update_cache(files, cache)
+        changed2 = codemap.changed_files(files, cache)
+        self.assertEqual(len(changed2), 0)
+
+    def test_multi_lang_import_graph(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, "app.js"), "w") as f:
+                f.write('import { helper } from "./util";\nfunction main() { helper(); }\n')
+            with open(os.path.join(tmp, "util.js"), "w") as f:
+                f.write("export function helper() { return 1; }\n")
+            files = [os.path.join(tmp, "app.js"), os.path.join(tmp, "util.js")]
+            graph = codemap.build_graph_multi(files, tmp)
+            self.assertIn("util", graph.get("app", set()))
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_verify_sha256(self):
+        path = os.path.join(self.repo, "src", "cli.py")
+        digest = codemap.sha256_file(path)
+        self.assertEqual(len(digest), 64)  # sha256 hex is 64 chars
 
 
 if __name__ == "__main__":

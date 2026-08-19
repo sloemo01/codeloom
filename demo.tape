@@ -15,17 +15,17 @@ Enter
 Sleep 1s
 Sleep 500ms
 
-Type "codemap --task 'add retry logic' ."
+Type "codemap --cross ."
 Enter
 Sleep 1s
 Sleep 500ms
 
-Type "codemap --impact core.engine ."
+Type "codemap --search Engine ."
 Enter
 Sleep 1s
 Sleep 500ms
 
-Type "codemap --plan 'add retry to engine' ."
+Type "codemap --incremental ."
 Enter
 Sleep 1s
 Sleep 500ms
