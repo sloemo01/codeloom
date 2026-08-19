@@ -526,6 +526,27 @@ class TestCodemap(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
+    def test_summary_retrieval(self):
+        # summary-first retrieval should be much smaller than full source
+        # for a LARGE symbol (the huge-symbol case that used to lose tokens)
+        tmp = tempfile.mkdtemp()
+        try:
+            # build a large class (100 methods) so full source is big
+            with open(os.path.join(tmp, "big.py"), "w") as f:
+                f.write("class Big:\n")
+                for i in range(100):
+                    f.write(f"    def method_{i}(self):\n        return {i}\n")
+            files = [os.path.join(tmp, "big.py")]
+            summary = codemap.render_get_symbol(files, tmp, "Big", summary=True)
+            full = codemap.render_get_symbol(files, tmp, "Big", summary=False)
+            self.assertIn("Signature", summary)
+            self.assertIn("Docstring", summary)
+            self.assertIn("Calls", summary)
+            # summary should be much smaller than full source for a large symbol
+            self.assertLess(len(summary), len(full) // 10)
+        finally:
+            shutil.rmtree(tmp)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

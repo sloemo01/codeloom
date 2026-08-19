@@ -90,8 +90,9 @@ python3 codemap.py --similar run /path/to/repo
 # Find dead code (defined but never called)
 python3 codemap.py --deadcode /path/to/repo
 
-# Token-counted symbol snippet (byte offsets + token estimate)
+# Token-counted symbol snippet (summary-first by default; --full for source)
 python3 codemap.py --get-symbol Engine /path/to/repo
+python3 codemap.py --get-symbol Engine --full /path/to/repo
 
 # Byte-range snippet extraction
 python3 codemap.py --snippet src/core/engine.py 0 60 /path/to/repo
@@ -138,7 +139,8 @@ python3 codemap.py --index-status /path/to/repo
 | `--explain X` | plain-English explanation of a symbol (no LLM) |
 | `--similar X` | find structurally similar functions/classes (refactoring) |
 | `--deadcode` | find functions defined but never called |
-| `--get-symbol X` | token-counted symbol snippet (byte offsets + tokens) |
+| `--get-symbol X` | token-counted symbol snippet (summary-first by default) |
+| `--get-symbol X --full` | full source (opt-in) |
 | `--snippet P S E` | extract bytes S-E from file P |
 | `--incremental` | files changed since last run (hash cache) |
 | `--verify FILE` | print SHA-256 of a file |
@@ -220,7 +222,7 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (38 tests).
+- `python3 tests.py` → `OK` (39 tests).
 - `codemap --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codemap --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codemap --task "text" <root>` returns a ranked module list.

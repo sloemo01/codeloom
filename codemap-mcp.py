@@ -32,7 +32,7 @@ import codemap  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codemap-mcp"
-SERVER_VERSION = "0.17.0"
+SERVER_VERSION = "0.18.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -301,15 +301,17 @@ TOOLS: List[Dict[str, Any]] = [
     {
         "name": "codemap_get_symbol",
         "description": (
-            "Token-counted symbol retrieval: return the smallest snippet needed to "
-            "understand a symbol, with exact byte offsets + token estimate. This is "
-            "the token-shaving primitive — agents request only what they need."
+            "Token-counted symbol retrieval. By default returns a SUMMARY "
+            "(signature + docstring + call graph) — the 95%+ token-savings mode. "
+            "Pass full=true for the complete source. Agents should use summary "
+            "first, then full only when they need the implementation."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "symbol": {"type": "string", "description": "Symbol name to retrieve"},
+                "full": {"type": "boolean", "description": "Return full source instead of summary (default false)"},
                 "context_lines": {"type": "integer", "description": "Surrounding lines to include (default 2)"},
                 "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
             },
@@ -584,16 +586,20 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if not symbol:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
         ctx = args.get("context_lines", 2)
+        full = bool(args.get("full", False))
         # use the in-memory index (incremental, always fresh)
         index = _INDEX.symbols(root, max_files)
         locs = index.get(symbol)
         if not locs:
             text = f"# get_symbol: {symbol}\nSymbol not found.\n"
-        else:
+        elif full:
             loc = locs[0]
             text = (f"# get_symbol: {symbol}\n{loc['module']}:{loc['line']}  [{loc['kind']}]  "
                     f"bytes {loc['start_byte']}-{loc['end_byte']}  ~{loc['tokens']} tokens\n\n"
                     f"{loc['source']}\n")
+        else:
+            # summary-first (95%+ token savings)
+            text = codemap.render_get_symbol(files, root, symbol, ctx, summary=True)
     elif name == "codemap_snippet":
         path = args.get("path")
         start = args.get("start_byte")

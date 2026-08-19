@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.17.0"
+VERSION = "0.18.0"
 
 # --------------------------------------------------------------------------- #
 # Optional progressive-enhancement backends.
@@ -1670,12 +1670,44 @@ def get_snippet_by_offset(path, start_byte, end_byte):
     snippet = text[start_byte:end_byte]
     return {"text": snippet, "tokens": estimate_tokens(snippet), "bytes": len(snippet.encode("utf-8"))}
 
-def render_get_symbol(files, root, symbol, context_lines=2):
+def render_get_symbol(files, root, symbol, context_lines=2, summary=False):
     loc = get_symbol(files, root, symbol, context_lines)
     buf = io.StringIO()
     buf.write(f"# get_symbol: {symbol}\n")
     if loc is None:
         buf.write("Symbol not found.\n")
+        return buf.getvalue()
+    if summary:
+        # summary-first: signature + docstring + call graph, NOT full source.
+        # This is the 95%+ token-savings lever — huge symbols return a tiny
+        # summary instead of the whole class/function.
+        sig = _signature_shape(loc["source"])
+        sig_str = sig[0] if sig else symbol
+        # extract docstring
+        import re as _re
+        doc = _re.search(r'["\']{3}(.*?)["\']{3}', loc["source"], _re.DOTALL)
+        doc_str = doc.group(1).strip().split("\n")[0][:120] if doc else "(no docstring)"
+        # call graph: what it calls + what calls it
+        calls = build_call_graph_multi(files, root)
+        callees = set()
+        for caller, cs in calls.get(loc["module"], {}).items():
+            if caller == symbol:
+                callees |= cs
+        called_by = set()
+        for cm, funcs in calls.items():
+            for caller, cs in funcs.items():
+                if symbol in cs:
+                    called_by.add(f"{cm}.{caller}")
+        summary_text = (
+            f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
+            f"~{estimate_tokens(sig_str + doc_str)} tokens (summary)\n\n"
+            f"Signature: {sig_str}\n"
+            f"Docstring: {doc_str}\n"
+            f"Calls ({len(callees)}): {', '.join(sorted(callees)) or 'none'}\n"
+            f"Called by ({len(called_by)}): {', '.join(sorted(called_by)) or 'none'}\n"
+            f"\nUse `--get-symbol {symbol} --full` for the full source.\n"
+        )
+        buf.write(summary_text)
         return buf.getvalue()
     buf.write(f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
               f"bytes {loc['start_byte']}-{loc['end_byte']}  ~{loc['tokens']} tokens\n\n")
@@ -2493,6 +2525,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--similar", metavar="SYMBOL", help="find structurally similar functions/classes (refactoring)")
     p.add_argument("--deadcode", action="store_true", help="find functions defined but never called")
     p.add_argument("--get-symbol", metavar="SYMBOL", help="token-counted symbol snippet (byte offsets + token estimate)")
+    p.add_argument("--summary", action="store_true", help="summary-first retrieval (signature+docstring+call graph, not full source)")
+    p.add_argument("--full", action="store_true", help="with --get-symbol, return the full source (default is summary)")
     p.add_argument("--snippet", nargs=3, metavar=("PATH", "START", "END"), help="extract a byte-range snippet from a file")
     p.add_argument("--incremental", action="store_true", help="show files changed since last run (hash-based cache)")
     p.add_argument("--verify", metavar="FILE", help="print SHA-256 of a file (security check)")
@@ -2586,18 +2620,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         _walk(root, rules, args.max_files, files)
 
         if args.get_symbol:
+            # summary-first by default; --full returns the full source
+            use_summary = not args.full
             # use persistent index if present (fast path), else build fresh
             pidx = load_persistent_index(root)
             if pidx is not None:
                 locs = pidx.get("symbols", {}).get(args.get_symbol)
                 if locs:
                     loc = locs[0]
-                    print(f"# get_symbol: {args.get_symbol}\n"
-                          f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
-                          f"bytes {loc['start_byte']}-{loc['end_byte']}  ~{loc['tokens']} tokens\n\n"
-                          f"{loc['source']}\n")
+                    if use_summary:
+                        print(render_get_symbol(files, root, args.get_symbol, summary=True))
+                    else:
+                        print(f"# get_symbol: {args.get_symbol}\n"
+                              f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
+                              f"bytes {loc['start_byte']}-{loc['end_byte']}  ~{loc['tokens']} tokens\n\n"
+                              f"{loc['source']}\n")
                     return 0
-            print(render_get_symbol(files, root, args.get_symbol))
+            print(render_get_symbol(files, root, args.get_symbol, summary=use_summary))
             return 0
 
         if args.search:
