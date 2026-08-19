@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.20.0"
+VERSION = "0.21.0"
 
 # --------------------------------------------------------------------------- #
 # Optional progressive-enhancement backends.
@@ -88,10 +88,10 @@ def _ts_parse(path: str, ext: str):
     except Exception:
         return None
 
-def install_grammars() -> str:
+def install_grammars(do_install: bool = False) -> str:
     """One-command opt-in installer for tree-sitter language grammars.
     Keeps the single-file zero-dep core; grammars are an optional precision
-    upgrade. Prints the pip command to run."""
+    upgrade. With do_install=True, actually runs pip install."""
     pkgs = [
         "tree-sitter",
         "tree-sitter-python",
@@ -111,6 +111,13 @@ def install_grammars() -> str:
         "tree-sitter-lua",
     ]
     cmd = "pip install " + " ".join(pkgs)
+    if do_install:
+        import subprocess as _sp
+        print("Installing tree-sitter grammars (this may take a minute)...")
+        r = _sp.run(cmd, shell=True, capture_output=True, text=True)
+        if r.returncode == 0:
+            return "Installed tree-sitter grammars. codeloom now uses precise AST parsing.\n"
+        return f"Install failed (exit {r.returncode}). Run manually:\n  {cmd}\n"
     return (
         "codeloom --install-grammars\n"
         "==========================\n"
@@ -118,6 +125,8 @@ def install_grammars() -> str:
         "AST parsing (instead of the regex/brace-matching fallback).\n\n"
         "This is OPT-IN — codeloom works fully without it (zero-dep, single file).\n"
         "Run:\n\n"
+        "  codeloom --install-grammars --yes\n\n"
+        "to actually install, or manually:\n\n"
         f"  {cmd}\n\n"
         "After installing, codeloom auto-detects the grammars and uses real AST\n"
         "parsing for those languages. No config needed.\n"
@@ -2016,11 +2025,11 @@ def build_persistent_index(files: List[str], root: str) -> dict:
     return build_byte_index(files, root)
 
 def save_persistent_index(root: str, index: dict, files: List[str]) -> None:
-    """Save the persistent index with per-file hashes for incremental refresh."""
+    """Save the persistent index with per-file mtimes for incremental refresh."""
     data = {
         "version": INDEX_VERSION,
         "root": root,
-        "files": {f: _file_hash(f) for f in files},
+        "files": {f: os.path.getmtime(f) for f in files if os.path.isfile(f)},
         "symbols": index,
     }
     try:
@@ -2039,6 +2048,37 @@ def load_persistent_index(root: str) -> Optional[dict]:
     except (OSError, json.JSONDecodeError):
         pass
     return None
+
+def index_is_fresh(root: str, pidx: dict) -> bool:
+    """Check whether the persistent index is fresh (no files changed since).
+    Uses mtime (cheap stat) rather than full hashing so the check is O(1)-ish
+    and doesn't defeat the fast-path."""
+    files = pidx.get("files", {})
+    for path, mtime in files.items():
+        if not os.path.isfile(path):
+            return False
+        try:
+            if os.path.getmtime(path) != mtime:
+                return False
+        except OSError:
+            return False
+    return True
+
+def ensure_fresh_index(root: str, max_files: int) -> Optional[dict]:
+    """Load the persistent index, rebuilding it if stale. Returns the index."""
+    pidx = load_persistent_index(root)
+    if pidx is None:
+        return None
+    if index_is_fresh(root, pidx):
+        return pidx
+    # stale — rebuild
+    gi = os.path.join(root, ".gitignore")
+    rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+    files: List[str] = []
+    _walk(root, rules, max_files, files)
+    index = build_persistent_index(files, root)
+    save_persistent_index(root, index, files)
+    return load_persistent_index(root)
 
 def render_index(files: List[str], root: str, max_files: int) -> str:
     """Build and save the persistent index. Returns a summary."""
@@ -2704,6 +2744,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--trace", nargs="+", metavar="CMD", help="run a command under sys.settrace, record runtime call edges")
     p.add_argument("--force", action="store_true", help="acknowledge --trace executes code (isolation warning)")
     p.add_argument("--install-grammars", action="store_true", help="install tree-sitter language grammars (opt-in precision)")
+    p.add_argument("--yes", action="store_true", help="with --install-grammars, actually run pip install")
     p.add_argument("--index", action="store_true", help="build + save a persistent byte-offset index (scale)")
     p.add_argument("--index-status", action="store_true", help="show persistent index status/freshness")
     p.add_argument("--version", action="version", version=f"codeloom {VERSION}")
@@ -2713,7 +2754,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # --install-grammars: opt-in tree-sitter grammar installer
     if args.install_grammars:
-        print(install_grammars())
+        print(install_grammars(do_install=args.yes))
         return 0
 
     # --index-status: show persistent index status
@@ -2732,7 +2773,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # --get-symbol / --search: fast-path from the persistent index (no walk)
     if (args.get_symbol or args.search) and not args.full:
-        pidx = load_persistent_index(root)
+        pidx = ensure_fresh_index(root, args.max_files)
         if pidx is not None:
             if args.get_symbol:
                 locs = pidx.get("symbols", {}).get(args.get_symbol)

@@ -148,6 +148,7 @@ python3 codeloom.py --index-status /path/to/repo
 | `--trace CMD` | run a command, record runtime call edges (needs --force) |
 | `--force` | acknowledge --trace executes code (isolation warning) |
 | `--install-grammars` | install tree-sitter grammars (opt-in precision) |
+| `--install-grammars --yes` | actually run pip install (one-command) |
 | `--index` | build + save a persistent byte-offset index (scale) |
 | `--index-status` | show persistent index status/freshness |
 | `--json` | machine-readable JSON |
@@ -223,7 +224,7 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (41 tests).
+- `python3 tests.py` → `OK` (43 tests).
 - `codeloom --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codeloom --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codeloom --task "text" <root>` returns a ranked module list.

@@ -580,6 +580,35 @@ class TestCodeLoom(unittest.TestCase):
         self.assertIn("Symbols", pack)
         self.assertIn("retry", pack)
 
+    def test_index_auto_refresh(self):
+        # a fresh index is fast; a changed file triggers a rebuild
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, "a.py"), "w") as f:
+                f.write("class Foo:\n    def bar(self):\n        return 1\n")
+            files = [os.path.join(tmp, "a.py")]
+            index = codeloom.build_persistent_index(files, tmp)
+            codeloom.save_persistent_index(tmp, index, files)
+            pidx = codeloom.load_persistent_index(tmp)
+            self.assertIsNotNone(pidx)
+            self.assertTrue(codeloom.index_is_fresh(tmp, pidx))
+            # modify the file -> stale
+            with open(os.path.join(tmp, "a.py"), "a") as f:
+                f.write("\n# change\n")
+            self.assertFalse(codeloom.index_is_fresh(tmp, pidx))
+            # ensure_fresh_index rebuilds
+            fresh = codeloom.ensure_fresh_index(tmp, 100)
+            self.assertIsNotNone(fresh)
+            self.assertTrue(codeloom.index_is_fresh(tmp, fresh))
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_install_grammars_prints(self):
+        # without --yes, install_grammars prints the command (doesn't install)
+        out = codeloom.install_grammars(do_install=False)
+        self.assertIn("pip install", out)
+        self.assertIn("--yes", out)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
