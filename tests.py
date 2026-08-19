@@ -567,6 +567,19 @@ class TestCodeLoom(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
+    def test_pack(self):
+        # --pack emits a single-shot context file with reading order + impact + symbols
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        pack = codeloom.render_pack(files, self.repo, "retry")
+        self.assertIn("Reading order", pack)
+        self.assertIn("Impact", pack)
+        self.assertIn("Symbols", pack)
+        self.assertIn("retry", pack)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

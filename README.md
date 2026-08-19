@@ -23,6 +23,35 @@ then it forgets what it learned.
 that your agent reads in a second to build a mental model *before* touching
 anything. No install. No daemon. No GPU. Runs 100% on your machine.
 
+## Agent reasoning, not just retrieval
+
+The search tools (jcodemunch, semble, codebase-memory-mcp) answer one question:
+*"Where is this symbol?"* codeloom answers the questions that actually matter
+when an agent is working:
+
+- **`--task "fix the login bug"`** → *"which files matter for THIS task?"* (ranked)
+- **`--impact auth/login.py`** → *"what breaks if I change this?"* (blast radius)
+- **`--plan "add retry"`** → *"read these files, in this order"* (prioritized)
+- **`--pack "task"`** → *"here's the whole context, in one file"* (single-shot)
+
+This is the moat. jcodemunch is retrieval-only — it can't prioritize, so it
+can't do this. codeloom turns a query tool into a **context engine**:
+
+```bash
+# One command → the complete context for a task, pre-computed
+codeloom --pack "fix the login bug" .
+#   ## Reading order (most relevant first)
+#   1. src/auth/login.py  (score 8, 3 keyword hits, 12 dependents)
+#   2. src/auth/session.py (score 6, 2 keyword hits, 8 dependents)
+#   ## Impact (what breaks if you change each)
+#   ## Symbols in the relevant modules
+```
+
+An agent pastes that one file once and has everything it needs — **zero
+per-query retrieval during the session.** That's the workflow jcodemunch can't
+serve: it's built for repeated queries on a persistent index; codeloom is built
+to load the whole context once and work offline.
+
 ## Quickstart
 
 **macOS / Linux:**
@@ -71,6 +100,7 @@ That's it. Under a second, zero setup, works offline. Cross-platform — macOS, 
 | `codeloom --task "X"` | "Which files matter for task X?" |
 | `codeloom --impact X` | "What breaks if I change X?" |
 | `codeloom --plan "X"` | "Read these files, in this order, to do task X" |
+| `codeloom --pack "X"` | "Give me the whole context for task X, in one file" |
 | `codeloom --cross` | "What calls what, across files?" (resolved call graph) |
 | `codeloom --search X` | "Where is symbol X defined?" (symbol index + snippet) |
 | `codeloom --usages X` | "Where is symbol X used?" (call sites + snippet) |
@@ -543,6 +573,24 @@ offsets) *and* tells the agent what matters, what breaks, and what to read
 first — the reasoning the search tools don't do. And it's the fastest possible
 structural context, in one file, in under a second, always fresh.
 
+## When to use codeloom vs jcodemunch
+
+| | codeloom | jcodemunch |
+|---|---|---|
+| **Best for** | single-session agent work, ephemeral queries, one-off repo audits | long-term index, repeated queries on the same codebase, production scale |
+| **Setup** | one file, copy it | pip + index + daemon |
+| **Freshness** | always live (reads files) | stale until re-indexed |
+| **Offline / air-gapped** | yes | no (needs install) |
+| **Task-orientation** | yes (`--task`/`--plan`/`--pack`) | no (retrieval only) |
+| **Context packing** | yes (`--pack`, single-shot) | no |
+
+**The honest positioning:** codeloom isn't trying to beat jcodemunch at being a
+retrieval engine — jcodemunch has won that (persistent index, 158-language
+tree-sitter, production scale). codeloom owns a *different workflow*: **load
+the whole context once, work offline, always fresh, zero setup.** For one-off
+repo audits and ephemeral agent sessions, codeloom is the faster, fresher,
+zero-friction choice.
+
 ## For humans too
 
 codeloom isn't just for agents. Onboarding to a new codebase, auditing a repo
@@ -564,6 +612,7 @@ the fastest way to answer "what is this project, actually?"
 - [x] Task-aware relevance (`--task`)
 - [x] Change-impact prediction (`--impact`)
 - [x] Agent-native reading plan (`--plan`)
+- [x] Single-shot context packing (`--pack`, the moat feature)
 - [x] Cross-file call graph (`--cross`, AST-resolved)
 - [x] Symbol index + search (`--search`, with snippets)
 - [x] Usage search (`--usages`, call sites + snippets)

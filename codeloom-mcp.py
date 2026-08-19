@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.19.0"
+SERVER_VERSION = "0.20.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -157,6 +157,25 @@ TOOLS: List[Dict[str, Any]] = [
             "Emit a prioritized 'read these files, in this order' plan for a task. "
             "The agent-native format: tells the agent exactly what to read to "
             "understand a task before editing."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "task": {"type": "string", "description": "Task description"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["task"],
+        },
+    },
+    {
+        "name": "codeloom_pack",
+        "description": (
+            "Single-shot context packing: emit ONE compact file for a task with "
+            "reading order + impact analysis + symbol index, all pre-computed. "
+            "An agent pastes this once and has everything it needs — zero "
+            "per-query retrieval during the session. The feature jcodemunch "
+            "can't do (it's retrieval-only, can't prioritize)."
         ),
         "inputSchema": {
             "type": "object",
@@ -537,6 +556,11 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if not task:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'task' argument"}]}
         text = codeloom.build_plan(files, root, task)
+    elif name == "codeloom_pack":
+        task = args.get("task")
+        if not task:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'task' argument"}]}
+        text = codeloom.render_pack(files, root, task)
     elif name == "codeloom_cross":
         calls = codeloom.build_cross_call_graph(files, root)
         module = args.get("module")

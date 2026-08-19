@@ -94,8 +94,8 @@ python3 codeloom.py --deadcode /path/to/repo
 python3 codeloom.py --get-symbol Engine /path/to/repo
 python3 codeloom.py --get-symbol Engine --full /path/to/repo
 
-# Byte-range snippet extraction
-python3 codeloom.py --snippet src/core/engine.py 0 60 /path/to/repo
+# Single-shot context packing (the moat feature: reading order + impact + symbols)
+python3 codeloom.py --pack "add retry logic" /path/to/repo
 
 # Incremental mode (hash-based cache, no daemon)
 python3 codeloom.py --incremental /path/to/repo
@@ -130,7 +130,8 @@ python3 codeloom.py --index-status /path/to/repo
 | `--cost` | append token-cost estimate |
 | `--task "text"` | rank modules relevant to a task |
 | `--impact X` | predict blast radius of changing module X |
-| `--plan "text"` | prioritized reading plan for a task |
+| `--plan "X"` | prioritized reading plan for a task |
+| `--pack "X"` | single-shot context file (reading order + impact + symbols) |
 | `--cross` | cross-file call graph (AST-resolved) |
 | `--search X` | search the symbol index (definitions + snippet) |
 | `--usages X` | find where a symbol is used (call sites + snippet) |
@@ -222,7 +223,7 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (40 tests).
+- `python3 tests.py` → `OK` (41 tests).
 - `codeloom --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codeloom --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codeloom --task "text" <root>` returns a ranked module list.

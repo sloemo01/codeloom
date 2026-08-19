@@ -1,48 +1,59 @@
-# codeloom benchmarks
+# CodeLoom benchmarks
 
-Honest, reproducible numbers comparing codeloom to the heavyweight competitors
-(semble, codebase-memory-mcp, jcodemunch-mcp). The point is not "codeloom is
-faster at everything" — it's that codeloom wins decisively on the axis that
-matters most for everyday agent use: **time to first structural context, with
-zero setup.**
+Honest, reproducible numbers comparing CodeLoom to the heavyweight competitors
+(semble, codebase-memory-mcp, jcodemunch-mcp). The point is not "CodeLoom is
+faster at everything" — it's that CodeLoom wins decisively on the axis that
+matters for everyday agent work: **token-efficient, task-oriented retrieval
+with zero setup and always-fresh context.**
 
-## Methodology
+## Token savings (vs grep-and-read baseline)
 
-- **Repo:** `browser-use/browser-use` (468 files, ~14MB) — a real production codebase.
-- **codeloom:** `python3 codeloom.py <flag> .` from the repo root, cold start, no index.
-- **Competitors:** their own published claims (indexing time, setup) from their READMEs.
-- All timings are wall-clock on a MacBook (Apple Silicon).
+Measured on the same repos jcodemunch benchmarks against. `--get-symbol` is
+summary-first by default (signature + docstring + call graph, not full source).
 
-## Results
+| repo | symbols found | baseline (grep+read) | codeloom | savings |
+|---|---|---|---|---|
+| **fastapi** | 5/5 | 665,765 | 7,465 | **98.9%** |
+| express | 2/5 | 17,806 | ~0 | (partial — see note) |
+| gin | 3/4 | 2,227 | ~0 | (partial — see note) |
 
-| Operation | codeloom | semble | codebase-memory-mcp |
+**The honest headline is fastapi: 98.9%** — a real, large repo (329 files)
+where CodeLoom found all 5 queried symbols. The express/gin figures are
+excluded from the headline because CodeLoom only resolved a subset of the
+queried symbols there (2/5 and 3/4), so their "100%" is not a fair comparison.
+
+## How to reproduce
+
+```bash
+# clone the benchmark repos
+git clone --depth 1 https://github.com/fastapi/fastapi.git /tmp/bench-fastapi
+
+# run the token benchmark
+python3 benchmarks/run.py --repo /tmp/bench-fastapi --tokens
+```
+
+## Speed vs staleness
+
+| | CodeLoom | jcodemunch | semble / codebase-memory |
 |---|---|---|---|
-| **Setup** | none (copy one file) | `pip install` + deps | native exe + index |
-| **First structural context** | **0.8s** | minutes (index) | minutes (index) |
-| **Import graph** | 0.8s (385 modules, 1126 edges) | after index | after index |
-| **Call graph** | 0.8s (multi-language) | after index | after index |
-| **Git-aware `--diff`** | 0.1s | n/a | n/a |
-| **Task relevance (`--task`)** | 0.8s | n/a | n/a |
-| **Change impact (`--impact`)** | 0.8s | n/a | n/a |
-| **Freshness** | always (reads live) | stale between re-index | stale between re-index |
+| Time to first result | **< 1s, no index** | after indexing (minutes) | after indexing (minutes) |
+| Freshness | **always live** (reads files) | stale until re-indexed | stale until re-indexed |
+| Setup | **one file, copy it** | pip + index + daemon | pip + daemon |
+
+## Installation friction scorecard
+
+| | CodeLoom | jcodemunch |
+|---|---|---|
+| Files to install | **1** | pip package + index |
+| Commands to run | **0** (copy the file) | pip install + init + index |
+| Dependencies | **0** (stdlib only) | tree-sitter + index libs |
+| Works air-gapped | **yes** | no (needs install) |
+| Daemon/background process | **no** | yes |
 
 ## The honest caveat
 
-codeloom is **not** a replacement for the heavy tools. It does not do code
-*search* (semble's core job), and its regex call graph is less precise than
-tree-sitter (codebase-memory-mcp's 158-language analysis). codeloom wins on
-**speed, zero-setup, freshness, and task-awareness** — the 80% case. For deep
-search or production-scale indexing, the competitors are genuinely better.
-
-## Reproduce
-
-```bash
-# clone the test repo
-git clone --depth 1 https://github.com/browser-use/browser-use.git /tmp/bu
-cd /tmp/bu
-
-# time codeloom operations
-time python3 /path/to/codeloom.py --graph .
-time python3 /path/to/codeloom.py --task "browser automation click" .
-time python3 /path/to/codeloom.py --impact browser_use/agent/service .
-```
+CodeLoom is a **complement, not a replacement**, for the heavy tools. If you
+need tree-sitter precision across 158 languages, a persistent knowledge graph,
+or snippet-level search on a 28M-LOC monorepo, the heavyweight tools are
+genuinely better at those. CodeLoom wins on **speed, zero-setup, freshness, and
+task-awareness** — the 80% case for everyday agent use.
