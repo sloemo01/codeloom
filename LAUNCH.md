@@ -5,7 +5,7 @@ so it renders inline on both platforms.
 
 - Demo GIF: `https://raw.githubusercontent.com/sloemo01/codeloom/main/demo.gif`
 - Repo: `https://github.com/sloemo01/codeloom`
-- Latest release: `https://github.com/sloemo01/codeloom/releases/tag/v0.19.0`
+- Latest release: `https://github.com/sloemo01/codeloom/releases/tag/v0.22.0`
 
 ---
 
@@ -29,7 +29,8 @@ What it does:
 - **Understanding** — `--explain` (plain-English, no LLM), `--similar` (refactoring candidates), `--deadcode` (unused symbols)
 - **Change-aware** — `--diff` (structure of changed files), `--incremental` (hash-based cache)
 - **Runtime truth** — `--trace CMD` (captures dynamic imports/monkeypatching static analysis misses)
-- **MCP server** — `codeloom-mcp.py` is a zero-dep MCP server with 21 tools, so agents call it natively
+- **MCP server** — `codeloom-mcp.py` is a zero-dep MCP server with 23 tools, so agents call it natively
+- **No routing errors** — `codeloom_ask` is a single natural-language entry point that routes deterministically and is fail-safe: every query returns useful context, never an error. The agent never picks among 23 tools (or jcodemunch's 91), so it can't misroute.
 - **No daemon** — the MCP server keeps an in-memory index (incremental, always fresh), so you get daemon-speed queries without a background process, staleness, or anything to crash
 - **Scale** — `codeloom --index` builds a persistent on-disk byte-offset index (469 files, 4538 symbols in ~1s), so large-repo queries load in milliseconds
 - **Correctness** — nested `.gitignore` merging, cache invalidation on `.gitignore` change, workspace-root import resolution (pyproject/package.json/go.mod), `--trace` isolation warning
@@ -67,6 +68,6 @@ So I built codeloom: a map of your repo for agents. One file, zero deps, no daem
 • `--plan "task"` → read these files, in this order
 • `--cross` → the real call path across files
 
-**5/6** The MCP server is zero-dependency too — pure stdlib JSON-RPC over stdio, 21 tools, with an in-memory index that's always fresh. Register it in Claude Code / Cursor / Codex and your agent calls codeloom natively. No `pip install`, no daemon, no stale index.
+**5/6** The MCP server is zero-dependency too — pure stdlib JSON-RPC over stdio, 23 tools, with an in-memory index that's always fresh. Register it in Claude Code / Cursor / Codex and your agent calls codeloom natively. No `pip install`, no daemon, no stale index.
 
-**6/6** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.18.0 released. 99% token savings, persistent index for scale, nested .gitignore, cache invalidation, workspace roots, trace safety — all handled. Go use it. Feedback welcome, especially on the task-relevance ranking and summary-first retrieval.
+**6/6** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.22.0 released. 99% token savings, no routing errors (single natural-language entry point), persistent index for scale, 17-language tree-sitter, nested .gitignore, cache invalidation, workspace roots, trace safety — all handled. Go use it. Feedback welcome, especially on the task-relevance ranking and summary-first retrieval.
