@@ -1959,6 +1959,24 @@ def render_get_symbol(files, root, symbol, context_lines=2, summary=False):
     buf.write(f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
               f"bytes {loc['start_byte']}-{loc['end_byte']}  ~{loc['tokens']} tokens\n\n")
     buf.write(loc["source"] + "\n")
+    # full-source PLUS call-graph context — beats jcodemunch's raw source,
+    # which gives the implementation but not what it calls / what calls it.
+    calls = build_call_graph_multi(files, root)
+    callees = set()
+    for caller, cs in calls.get(loc["module"], {}).items():
+        if caller == symbol:
+            callees |= cs
+    called_by = set()
+    for cm, funcs in calls.items():
+        for caller, cs in funcs.items():
+            if symbol in cs:
+                called_by.add(f"{cm}.{caller}")
+    if callees or called_by:
+        buf.write(f"\n# call context\n")
+        if callees:
+            buf.write(f"# calls: {', '.join(sorted(callees))}\n")
+        if called_by:
+            buf.write(f"# called by: {', '.join(sorted(called_by))}\n")
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
