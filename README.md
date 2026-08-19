@@ -479,6 +479,23 @@ resident, stored on disk, so heavy ops load in milliseconds instead of
 re-parsing. Measured on microsoft/vscode (12k files): `--deadcode` drops from
 10.3s (serial) to **4.8s** by loading from the graph.
 
+## The three parts (CLI + MCP + skill)
+
+For full agent use, codeloom is three pieces that work together:
+
+| Piece | What it is | Role |
+|---|---|---|
+| **`codeloom.py`** (CLI) | The engine | Does the actual analysis |
+| **`codeloom-mcp.py`** (MCP server) | The tool interface | Lets the agent *call* codeloom as a native tool |
+| **`skills/codeloom/SKILL.md`** (skill) | The procedural knowledge | Tells the agent *how* to use codeloom — which command for which task, the workflow, the pitfalls |
+
+The CLI is the engine; the MCP server is what makes codeloom a first-class agent
+tool (native tool calls, the resident in-memory graph, the natural-language
+`codeloom_ask` entry point); the skill is what turns it from "a tool the agent
+*could* call" into "a tool the agent *uses correctly*" — knowing when to run
+`--task` vs `--impact` vs `--pack`. All three are zero-dependency and ship in
+the repo.
+
 ## MCP server (agents call codeloom natively)
 
 `codeloom-mcp.py` is a **zero-dependency MCP server** (stdlib JSON-RPC over
@@ -495,18 +512,20 @@ stdio — no `mcp` package, no daemon). Register it with any MCP-capable agent:
 }
 ```
 
-Exposes twenty-one tools: `codeloom_map`, `codeloom_graph`, `codeloom_focus`,
+Exposes twenty-five tools: `codeloom_map`, `codeloom_graph`, `codeloom_focus`,
 `codeloom_calls`, `codeloom_diff`, `codeloom_impact`, `codeloom_task`,
-`codeloom_plan`, `codeloom_cross`, `codeloom_search`, `codeloom_usages`,
-`codeloom_grep`, `codeloom_read`, `codeloom_explain`, `codeloom_similar`,
-`codeloom_deadcode`, `codeloom_get_symbol`, `codeloom_snippet`,
-`codeloom_incremental`, `codeloom_verify`, `codeloom_trace`. Your agent can build
+`codeloom_plan`, `codeloom_pack`, `codeloom_cross`, `codeloom_search`,
+`codeloom_usages`, `codeloom_grep`, `codeloom_read`, `codeloom_explain`,
+`codeloom_similar`, `codeloom_deadcode`, `codeloom_get_symbol`,
+`codeloom_snippet`, `codeloom_incremental`, `codeloom_verify`,
+`codeloom_trace`, `codeloom_ask` (single natural-language entry point),
+`codeloom_framework`, `codeloom_session_report`. Your agent can build
 a mental model, trace execution flow across files, see what changed, predict
 blast radius, get a task-oriented reading plan, search any symbol, find where
 it's used, grep for snippets, read exact symbol source, explain a symbol, find
 refactoring candidates, detect dead code, retrieve token-counted snippets,
-extract byte ranges, verify a download, and capture runtime call edges —
-natively, no install, no index.
+extract byte ranges, verify a download, capture runtime call edges, detect the
+framework, and summarize session cost — natively, no install, no index.
 
 ## How it works
 
@@ -736,6 +755,13 @@ keep it fast, keep it one file.
 A ready-to-load skill for using and maintaining codeloom ships in
 [`skills/codeloom/SKILL.md`](skills/codeloom/SKILL.md) — covers every flag, MCP
 wiring, the test suite, re-recording the demo GIF, and how to extend the tool.
+
+The skill is the third part of the full agent experience (CLI + MCP + skill):
+it tells the agent *how* to use codeloom correctly — which command for which
+task, the workflow, and the pitfalls — so it uses `--task`/`--impact`/`--pack`
+at the right times instead of guessing. Install it into your agent's skill
+directory (e.g. `~/.hermes/skills/software-development/codeloom/`) to make
+codeloom a first-class tool your agent uses well.
 
 ## License
 
