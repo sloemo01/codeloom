@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.22.0"
+SERVER_VERSION = "0.23.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -420,6 +420,22 @@ TOOLS: List[Dict[str, Any]] = [
             "required": ["query"],
         },
     },
+    {
+        "name": "codeloom_framework",
+        "description": (
+            "Detect the web/app framework (Next.js, FastAPI, Django, Laravel, "
+            "Express, etc.) and surface its structure: entry points, routes, "
+            "models, config, and conventions. Framework-level understanding, "
+            "not just language-level."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+        },
+    },
 ]
 
 
@@ -613,6 +629,9 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     # deterministically — the agent never has to pick among 22 tools.
     if name == "codeloom_ask":
         return _route_ask(args, root, max_files)
+
+    if name == "codeloom_framework":
+        return {"content": [{"type": "text", "text": codeloom.render_framework(root, max_files)}]}
 
     if name == "codeloom_map":
         m = codeloom.build_map(root, True, max_files)

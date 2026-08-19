@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.22.0"
+VERSION = "0.23.0"
 
 # --------------------------------------------------------------------------- #
 # Optional progressive-enhancement backends.
@@ -710,6 +710,176 @@ def build_map(root: str, want_outline: bool, max_files: int) -> dict:
         "entry_points": entry_points(files),
         "tree": tree,
     }
+
+# --------------------------------------------------------------------------- #
+# Framework-aware intelligence (--framework)
+# --------------------------------------------------------------------------- #
+
+# Detect the web/app framework from manifest files, then surface its structure:
+# entry points, routes, models, config, conventions. This is the "framework
+# level" understanding jcodemunch users asked for (#201) — zero-dep, in-file.
+FRAMEWORK_MANIFESTS = {
+    "package.json": "node",
+    "pyproject.toml": "python",
+    "requirements.txt": "python",
+    "go.mod": "go",
+    "composer.json": "php",
+    "Cargo.toml": "rust",
+    "Gemfile": "ruby",
+    "pom.xml": "java",
+    "build.gradle": "java",
+}
+
+def detect_framework(root: str) -> Optional[str]:
+    """Detect the primary framework from manifest files + directory conventions."""
+    # 1. manifest-based detection
+    for manifest, lang in FRAMEWORK_MANIFESTS.items():
+        path = os.path.join(root, manifest)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError:
+            continue
+        if manifest == "package.json":
+            if '"next"' in text or '"next/' in text:
+                return "Next.js"
+            if '"nuxt' in text:
+                return "Nuxt"
+            if '"react' in text or '"react-dom' in text:
+                return "React"
+            if '"vue' in text:
+                return "Vue"
+            if '"express' in text:
+                return "Express"
+            if '"fastify' in text:
+                return "Fastify"
+            if '"svelte' in text:
+                return "Svelte"
+            return "Node.js"
+        if manifest == "pyproject.toml":
+            if "fastapi" in text:
+                return "FastAPI"
+            if "django" in text:
+                return "Django"
+            if "flask" in text:
+                return "Flask"
+            if "starlette" in text:
+                return "Starlette"
+            return "Python"
+        if manifest == "composer.json":
+            if "laravel" in text:
+                return "Laravel"
+            if "symfony" in text:
+                return "Symfony"
+            return "PHP"
+        if manifest == "go.mod":
+            return "Go"
+        if manifest == "Cargo.toml":
+            return "Rust"
+        if manifest == "Gemfile":
+            return "Ruby on Rails" if "rails" in text else "Ruby"
+        if manifest == "pom.xml" or manifest == "build.gradle":
+            return "Java"
+        return lang
+    # 2. directory-convention fallback
+    if os.path.isdir(os.path.join(root, "app")) and os.path.isdir(os.path.join(root, "routes")):
+        return "Laravel"
+    if os.path.isdir(os.path.join(root, "pages")) and os.path.isdir(os.path.join(root, "components")):
+        return "Next.js"
+    if os.path.isdir(os.path.join(root, "src")) and os.path.isfile(os.path.join(root, "manage.py")):
+        return "Django"
+    return None
+
+def _find_framework_files(root: str, patterns: List[str], max_files: int) -> List[str]:
+    """Find files matching glob patterns (routes, models, config, etc.)."""
+    import fnmatch
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        # skip heavy dirs
+        dirnames[:] = [d for d in dirnames if d not in (".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build")]
+        for fn in filenames:
+            full = os.path.join(dirpath, fn)
+            rel = os.path.relpath(full, root)
+            if any(fnmatch.fnmatch(rel, p) for p in patterns):
+                found.append(rel)
+                if len(found) >= max_files:
+                    return found
+    return found
+
+def render_framework(root: str, max_files: int) -> str:
+    """Emit a framework-aware structural overview: framework, entry points,
+    routes, models, config, conventions."""
+    framework = detect_framework(root)
+    buf = io.StringIO()
+    buf.write(f"# codeloom --framework\n")
+    buf.write(f"framework: {framework or 'unknown'}\n\n")
+
+    # entry points
+    files: List[str] = []
+    gi = os.path.join(root, ".gitignore")
+    rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+    _walk(root, rules, max_files, files)
+    eps = entry_points(files)
+    if eps:
+        buf.write("## Entry points\n")
+        for e in eps[:10]:
+            buf.write(f"  {e}\n")
+        buf.write("\n")
+
+    # framework-specific structure
+    if framework in ("Next.js", "Nuxt", "Vue", "React", "Svelte"):
+        pages = _find_framework_files(root, ["pages/**", "app/**", "components/**", "routes/**"], max_files)
+        if pages:
+            buf.write("## Routes / pages / components\n")
+            for p in pages[:20]:
+                buf.write(f"  {p}\n")
+            buf.write("\n")
+    elif framework in ("FastAPI", "Flask", "Starlette", "Django"):
+        routes = _find_framework_files(root, ["**/routes*.py", "**/urls*.py", "**/views*.py", "**/api*.py", "**/models*.py", "**/schemas*.py"], max_files)
+        if routes:
+            buf.write("## Routes / views / models\n")
+            for r in routes[:20]:
+                buf.write(f"  {r}\n")
+            buf.write("\n")
+    elif framework in ("Laravel", "Symfony"):
+        routes = _find_framework_files(root, ["routes/**", "app/Http/Controllers/**", "app/Models/**", "config/**"], max_files)
+        if routes:
+            buf.write("## Routes / controllers / models / config\n")
+            for r in routes[:20]:
+                buf.write(f"  {r}\n")
+            buf.write("\n")
+    elif framework in ("Express", "Fastify"):
+        routes = _find_framework_files(root, ["**/routes*.js", "**/routes*.ts", "**/controllers/**", "**/models/**"], max_files)
+        if routes:
+            buf.write("## Routes / controllers / models\n")
+            for r in routes[:20]:
+                buf.write(f"  {r}\n")
+            buf.write("\n")
+
+    # config files
+    configs = _find_framework_files(root, [".env*", "config/**", "*.config.js", "*.config.ts", "tsconfig.json", "next.config.*", "nuxt.config.*", "vite.config.*", "webpack.config.*"], max_files)
+    if configs:
+        buf.write("## Config\n")
+        for c in configs[:15]:
+            buf.write(f"  {c}\n")
+        buf.write("\n")
+
+    buf.write("## Conventions\n")
+    if framework in ("Next.js", "Nuxt"):
+        buf.write("  File-based routing: pages/ or app/ dir maps to URLs\n")
+    elif framework == "Django":
+        buf.write("  urls.py -> views.py -> models.py; settings in settings.py\n")
+    elif framework == "FastAPI":
+        buf.write("  routes defined via @app.get/@app.post decorators; Pydantic schemas\n")
+    elif framework == "Laravel":
+        buf.write("  routes/web.php + routes/api.php; Eloquent models in app/Models\n")
+    elif framework == "Express":
+        buf.write("  app.use() middleware chain; routes in routes/ or inline\n")
+    else:
+        buf.write("  (no framework-specific conventions detected)\n")
+    return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
 # Call-graph intelligence (Python stdlib `ast`, zero deps)
@@ -2787,6 +2957,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--yes", action="store_true", help="with --install-grammars, actually run pip install")
     p.add_argument("--index", action="store_true", help="build + save a persistent byte-offset index (scale)")
     p.add_argument("--index-status", action="store_true", help="show persistent index status/freshness")
+    p.add_argument("--framework", action="store_true", help="detect the web/app framework and surface its structure (routes, models, config, conventions)")
     p.add_argument("--version", action="version", version=f"codeloom {VERSION}")
     args = p.parse_args(argv)
 
@@ -2800,6 +2971,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     # --index-status: show persistent index status
     if args.index_status:
         print(render_index_status(root))
+        return 0
+
+    # --framework: detect the web/app framework and surface its structure
+    if args.framework:
+        print(render_framework(root, args.max_files))
         return 0
 
     # --index: build + save the persistent index

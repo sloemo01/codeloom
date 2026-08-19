@@ -609,6 +609,24 @@ class TestCodeLoom(unittest.TestCase):
         self.assertIn("pip install", out)
         self.assertIn("--yes", out)
 
+    def test_framework_detection(self):
+        # detect FastAPI from pyproject.toml
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, "pyproject.toml"), "w") as f:
+                f.write("[project]\ndependencies = [\"fastapi\"]\n")
+            self.assertEqual(codeloom.detect_framework(tmp), "FastAPI")
+            # detect Express from package.json
+            with open(os.path.join(tmp, "package.json"), "w") as f:
+                f.write('{"dependencies": {"express": "^4.0.0"}}\n')
+            self.assertEqual(codeloom.detect_framework(tmp), "Express")
+            # render_framework emits structure
+            out = codeloom.render_framework(tmp, 100)
+            self.assertIn("framework:", out)
+            self.assertIn("Express", out)
+        finally:
+            shutil.rmtree(tmp)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -151,6 +151,7 @@ python3 codeloom.py --index-status /path/to/repo
 | `--install-grammars --yes` | actually run pip install (one-command) |
 | `--index` | build + save a persistent byte-offset index (scale) |
 | `--index-status` | show persistent index status/freshness |
+| `--framework` | detect the web/app framework + surface routes/models/config/conventions |
 | `--json` | machine-readable JSON |
 | `--write FILE` | write map to FILE |
 | `--no-outline` | skip per-file one-liners (faster) |
@@ -226,7 +227,7 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (43 tests).
+- `python3 tests.py` → `OK` (44 tests).
 - `codeloom --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codeloom --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codeloom --task "text" <root>` returns a ranked module list.
