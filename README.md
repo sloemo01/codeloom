@@ -624,7 +624,7 @@ keep it fast, keep it one file.
 
 ## Agent skill
 
-A ready-to-load Hermes skill for using and maintaining codeloom ships in
+A ready-to-load skill for using and maintaining codeloom ships in
 [`skills/codeloom/SKILL.md`](skills/codeloom/SKILL.md) — covers every flag, MCP
 wiring, the test suite, re-recording the demo GIF, and how to extend the tool.
 
