@@ -597,6 +597,7 @@ task-awareness** — the 80% case for everyday agent use.
 | **Dead code (`--deadcode`)** | **yes** | **no** | **no** |
 | **Runtime trace (`--trace`)** | **yes** | **no** | **no** |
 | Git-aware `--diff` | **yes — always fresh** | partial (`get_changed_symbols`) | no |
+| **Tool surface** | **24 tools + 1 entry point** (`codeloom_ask`) | 6 router tools over **91 actions** (users say 30+) | varies |
 | MCP server | **yes — zero-dep, 24 tools** | yes | yes |
 | Offline | yes | yes | varies |
 
@@ -605,6 +606,16 @@ not *task-orientation engines*. codeloom does retrieval (token-shaving, byte
 offsets) *and* tells the agent what matters, what breaks, and what to read
 first — the reasoning the search tools don't do. And it's the fastest possible
 structural context, in one file, in under a second, always fresh.
+
+**On tool count (verified by driving the actual jcodemunch server):** jcodemunch
+exposes **6 MCP tools** (`set_tool_tier`, `announce_model`, `jcodemunch_guide`,
+`order`, `menu`, `route`) that route to **91 internal actions** (`index_repo`,
+`search_symbols`, `get_symbol_source`, etc.) — and its own users report it as
+"30 tools" over the 50-tool limit (#297). codeloom has **24 MCP tools** and,
+critically, **1 natural-language entry point** (`codeloom_ask`) that routes
+deterministically — so the agent's effective surface is **1 tool**, not
+6-over-91 or 30. That's the routing complexity that causes jcodemunch's 30%
+misfire, and it's the thing codeloom's design eliminates.
 
 ## What jcodemunch users asked for — and codeloom delivers
 
