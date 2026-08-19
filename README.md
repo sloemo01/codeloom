@@ -113,7 +113,9 @@ codemap --get-symbol X       # token-counted symbol snippet (byte offsets + toke
 codemap --snippet P S E      # extract bytes S-E from file P
 codemap --incremental        # show files changed since last run (hash-based cache)
 codemap --verify FILE        # print SHA-256 of a file (security check)
-codemap --trace CMD          # run a command, record runtime call edges
+codemap --trace CMD          # run a command, record runtime call edges (needs --force)
+codemap --force              # acknowledge --trace executes code (isolation warning)
+codemap --install-grammars   # install tree-sitter grammars (opt-in precision)
 codemap --no-outline         # skip per-file one-liners (faster)
 codemap --max-files 2000     # cap traversal (default 5000)
 ```
@@ -444,24 +446,36 @@ now has an **optional progressive-enhancement backend** that removes it when the
 richer tool is present — the zero-dep core always works, and the precision
 ceiling rises when you opt in:
 
-- **Regex multi-language analysis is best-effort.** *Removed by:* install
-  `tree-sitter` + language grammars (`pip install tree-sitter tree-sitter-python
-  tree-sitter-javascript tree-sitter-typescript tree-sitter-go tree-sitter-rust`).
+- **Regex multi-language analysis is best-effort.** *Removed by:* `codemap
+  --install-grammars` (or `pip install tree-sitter tree-sitter-python ...`).
   codemap then uses real AST parsing for those languages instead of regex.
   Verified: `export function helper` (missed by regex) is caught by tree-sitter.
-- **Static analysis misses runtime wiring.** *Removed by:* `codemap --trace CMD`
-  runs a command (e.g. your test suite) under `sys.settrace` and records the
-  ACTUAL call edges — capturing dynamic imports and monkeypatching that no
-  static analyzer (including tree-sitter) can see. Opt-in because it executes code.
+- **Static analysis misses runtime wiring.** *Removed by:* `codemap --trace CMD
+  --force` runs a command (e.g. your test suite) under `sys.settrace` and
+  records the ACTUAL call edges — capturing dynamic imports and monkeypatching
+  that no static analyzer (including tree-sitter) can see. `--force` is required
+  because `--trace` executes code; run it in an isolated sandbox/CI job.
 - **Task scoring is a heuristic.** *Removed by:* set `CODEmap_EMBED_BASE_URL` +
   `CODEmap_EMBED_API_KEY` (OpenAI-compatible) or install `sentence-transformers`.
   codemap then uses real semantic embeddings for `--task` relevance instead of
   token overlap.
 - **Import resolution is heuristic.** Handles common layouts, namespace packages,
-  and source-root-relative imports; unusual `sys.path` setups may mis-resolve.
+  source-root-relative imports, and multi-root workspaces (via `pyproject.toml` /
+  `package.json` / `go.mod`); unusual `sys.path` setups may still mis-resolve.
 - **No persistent index.** codemap is always-fresh (reads files live) rather
   than maintaining a background index. `--incremental` mitigates repeated-run
   cost, but it's not a daemon-backed knowledge graph.
+
+## Correctness
+
+- **Nested `.gitignore`** — codemap merges subdirectory `.gitignore` files as it
+  walks (gitignore semantics), so a nested ignore is honored.
+- **Cache invalidation** — the incremental cache tracks `.gitignore` hashes; if
+  a `.gitignore` changes, the cached file list is invalidated and re-walked.
+- **Workspace roots** — imports resolve against detected package roots
+  (`pyproject.toml` / `package.json` / `go.mod`), handling multi-root monorepos.
+- **`--trace` safety** — requires `--force` (it executes code); run in an
+  isolated sandbox/CI job.
 
 If you need tree-sitter precision, a persistent knowledge graph, or snippet-level
 code search, the heavyweight tools (semble, codebase-memory-mcp) are genuinely
@@ -531,6 +545,10 @@ the fastest way to answer "what is this project, actually?"
 - [x] Byte-range snippet extraction (`--snippet`)
 - [x] Token-consumption benchmark (`benchmarks/run.py --tokens`)
 - [x] In-memory index in MCP server (incremental, always fresh — no daemon)
+- [x] Nested `.gitignore` merging + cache invalidation on `.gitignore` change
+- [x] Workspace-root import resolution (pyproject/package.json/go.mod)
+- [x] `--trace` isolation warning (`--force` required)
+- [x] `--install-grammars` (one-command opt-in tree-sitter installer)
 - [x] Persistent parsed cache (repeated runs skip re-parsing)
 - [x] Benchmark harness + CI + release script (trust/credibility)
 - [x] Incremental mode (`--incremental`, hash-based cache)

@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.15.0"
+VERSION = "0.16.0"
 
 # --------------------------------------------------------------------------- #
 # Optional progressive-enhancement backends.
@@ -87,6 +87,41 @@ def _ts_parse(path: str, ext: str):
         return tree.root_node
     except Exception:
         return None
+
+def install_grammars() -> str:
+    """One-command opt-in installer for tree-sitter language grammars.
+    Keeps the single-file zero-dep core; grammars are an optional precision
+    upgrade. Prints the pip command to run."""
+    pkgs = [
+        "tree-sitter",
+        "tree-sitter-python",
+        "tree-sitter-javascript",
+        "tree-sitter-typescript",
+        "tree-sitter-go",
+        "tree-sitter-rust",
+        "tree-sitter-java",
+        "tree-sitter-c",
+        "tree-sitter-cpp",
+        "tree-sitter-c-sharp",
+        "tree-sitter-ruby",
+        "tree-sitter-php",
+        "tree-sitter-swift",
+        "tree-sitter-kotlin",
+        "tree-sitter-dart",
+        "tree-sitter-lua",
+    ]
+    cmd = "pip install " + " ".join(pkgs)
+    return (
+        "codemap --install-grammars\n"
+        "==========================\n"
+        "Installs optional tree-sitter language grammars for precise multi-language\n"
+        "AST parsing (instead of the regex/brace-matching fallback).\n\n"
+        "This is OPT-IN — codemap works fully without it (zero-dep, single file).\n"
+        "Run:\n\n"
+        f"  {cmd}\n\n"
+        "After installing, codemap auto-detects the grammars and uses real AST\n"
+        "parsing for those languages. No config needed.\n"
+    )
 
 def _ts_function_names(root_node) -> set:
     """Extract function/class names from a tree-sitter tree (best-effort)."""
@@ -523,7 +558,9 @@ class Node:
 def _walk(root: str, rules: List[GitignoreRule], max_files: int, files: List[str],
           _visited: Optional[set] = None) -> None:
     """Collect file paths, respecting ignores, capped by max_files.
-    Guards against symlink loops by tracking visited real paths."""
+    Guards against symlink loops by tracking visited real paths.
+    Merges nested .gitignore files as it descends (gitignore semantics:
+    a subdirectory's .gitignore adds rules scoped to that directory)."""
     if len(files) >= max_files:
         return
     if _visited is None:
@@ -536,6 +573,10 @@ def _walk(root: str, rules: List[GitignoreRule], max_files: int, files: List[str
         entries = sorted(os.listdir(root))
     except OSError:
         return
+    # merge a nested .gitignore if present (rules scoped to this dir)
+    nested_gi = os.path.join(root, ".gitignore")
+    if os.path.isfile(nested_gi):
+        rules = rules + parse_gitignore(nested_gi)
     for e in entries:
         if e.startswith(".") and e not in (".gitignore", ".env.example"):
             continue
@@ -652,6 +693,7 @@ def _resolve_import(target: str, importer_mod: str, root: str, module_map: dict)
       2. importer-relative: resolve against the importer's package prefix
       3. drop trailing segments (pkg.module -> pkg)
       4. suffix match against known modules (core.engine matches src.core.engine)
+      5. workspace-root match: try each detected workspace root as a base
     """
     if target.startswith("."):
         # relative import — handled by caller via parse_module; skip here
@@ -686,7 +728,47 @@ def _resolve_import(target: str, importer_mod: str, root: str, module_map: dict)
             # prefer shallowest (fewest segments above the match)
             if best is None or len(msegs) < len(best.split(".")):
                 best = mod
-    return best
+    if best:
+        return best
+
+    # 5. workspace-root match: try each detected workspace root as a base.
+    # Handles multi-root workspaces (monorepos) where imports resolve against
+    # a package root (pyproject.toml / package.json / go.mod) rather than the
+    # repo root. e.g. 'packages/foo/src/bar' imports 'baz' -> 'packages/foo/src/baz'.
+    for ws in _workspace_roots(root):
+        cand = f"{ws}.{target}"
+        if cand in module_map:
+            return cand
+    return None
+
+
+def _workspace_roots(root: str) -> List[str]:
+    """Detect workspace/package roots from package metadata files. Returns
+    dotted module prefixes (e.g. 'packages.foo.src') that imports may resolve
+    against. Cached per root."""
+    if not hasattr(_workspace_roots, "_cache"):
+        _workspace_roots._cache = {}
+    if root in _workspace_roots._cache:
+        return _workspace_roots._cache[root]
+    roots: List[str] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        if ".git" in dirpath or ".venv" in dirpath or "node_modules" in dirpath:
+            continue
+        # a package root is a dir with a manifest and a src/ or package dir
+        has_manifest = any(f in filenames for f in ("pyproject.toml", "package.json", "go.mod"))
+        if not has_manifest:
+            continue
+        # the package's source root is <dir>/src (Python) or <dir> (JS/Go)
+        src_dir = os.path.join(dirpath, "src")
+        if os.path.isdir(src_dir):
+            rel = os.path.relpath(src_dir, root)
+            roots.append(rel.replace(os.sep, "."))
+        else:
+            rel = os.path.relpath(dirpath, root)
+            if rel != ".":
+                roots.append(rel.replace(os.sep, "."))
+    _workspace_roots._cache[root] = roots
+    return roots
 
 def parse_module(path: str, root: str, module_map: dict) -> dict:
     """Return {defs, imports} for a single Python file."""
@@ -1788,7 +1870,7 @@ def load_cache(root: str) -> dict:
             return data
     except (OSError, json.JSONDecodeError):
         pass
-    return {"version": CACHE_VERSION, "files": {}}
+    return {"version": CACHE_VERSION, "files": {}, "gitignore": {}}
 
 def save_cache(root: str, cache: dict) -> None:
     """Persist the incremental cache."""
@@ -1798,8 +1880,32 @@ def save_cache(root: str, cache: dict) -> None:
     except OSError:
         pass
 
-def changed_files(files: List[str], cache: dict) -> List[str]:
-    """Return files whose content hash changed vs the cache (or are new)."""
+def _gitignore_hash(root: str) -> str:
+    """Hash all .gitignore files under root (root + nested). A change here
+    invalidates the cached file list."""
+    import hashlib
+    h = hashlib.sha256()
+    for dirpath, dirnames, filenames in os.walk(root):
+        if ".git" in dirpath or ".venv" in dirpath or "node_modules" in dirpath:
+            continue
+        if ".gitignore" in filenames:
+            p = os.path.join(dirpath, ".gitignore")
+            try:
+                with open(p, "rb") as f:
+                    h.update(p.encode())
+                    h.update(f.read())
+            except OSError:
+                pass
+    return h.hexdigest()
+
+def changed_files(files: List[str], cache: dict, root: str = None) -> List[str]:
+    """Return files whose content hash changed vs the cache (or are new).
+    If a .gitignore changed, treat all files as changed (the file set may
+    have shifted)."""
+    if root is not None:
+        gi_hash = _gitignore_hash(root)
+        if cache.get("gitignore", {}).get("hash") != gi_hash:
+            return list(files)  # .gitignore changed -> re-walk everything
     changed = []
     for f in files:
         h = _file_hash(f)
@@ -1807,10 +1913,12 @@ def changed_files(files: List[str], cache: dict) -> List[str]:
             changed.append(f)
     return changed
 
-def update_cache(files: List[str], cache: dict) -> None:
+def update_cache(files: List[str], cache: dict, root: str = None) -> None:
     """Update the cache with current file hashes."""
     for f in files:
         cache.setdefault("files", {})[f] = {"hash": _file_hash(f)}
+    if root is not None:
+        cache.setdefault("gitignore", {})["hash"] = _gitignore_hash(root)
 
 def cached_symbols(files: List[str], root: str, cache: dict) -> dict:
     """Build a symbol index, reusing cached parsed data for unchanged files.
@@ -1844,7 +1952,7 @@ def cached_symbols(files: List[str], root: str, cache: dict) -> dict:
 def render_incremental(files: List[str], root: str, max_files: int) -> str:
     """Show which files changed since the last run (incremental mode)."""
     cache = load_cache(root)
-    changed = changed_files(files, cache)
+    changed = changed_files(files, cache, root)
     buf = io.StringIO()
     buf.write(f"# codemap --incremental — {len(changed)} changed file(s) since last run\n")
     if not changed:
@@ -1854,7 +1962,7 @@ def render_incremental(files: List[str], root: str, max_files: int) -> str:
         for c in sorted(changed):
             buf.write(f"  {os.path.relpath(c, root)}\n")
     # update cache so next run is incremental
-    update_cache(files, cache)
+    update_cache(files, cache, root)
     save_cache(root, cache)
     return buf.getvalue()
 
@@ -2315,13 +2423,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--incremental", action="store_true", help="show files changed since last run (hash-based cache)")
     p.add_argument("--verify", metavar="FILE", help="print SHA-256 of a file (security check)")
     p.add_argument("--trace", nargs="+", metavar="CMD", help="run a command under sys.settrace, record runtime call edges")
+    p.add_argument("--force", action="store_true", help="acknowledge --trace executes code (isolation warning)")
+    p.add_argument("--install-grammars", action="store_true", help="install tree-sitter language grammars (opt-in precision)")
     p.add_argument("--version", action="version", version=f"codemap {VERSION}")
     args = p.parse_args(argv)
 
     root = os.path.abspath(args.root)
 
+    # --install-grammars: opt-in tree-sitter grammar installer
+    if args.install_grammars:
+        print(install_grammars())
+        return 0
+
     # --trace: runtime call edges (static blind spots)
     if args.trace:
+        if not args.force:
+            print("WARNING: --trace EXECUTES the given command. It may have side "
+                  "effects (network, files, etc.).\n"
+                  "Run in an isolated sandbox/container/CI job, or re-run with "
+                  "--force to acknowledge and proceed.\n"
+                  "Aborting (use --force to override).")
+            return 1
         print(render_trace(args.trace, root))
         return 0
 

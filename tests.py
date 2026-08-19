@@ -445,6 +445,68 @@ class TestCodemap(unittest.TestCase):
         self.assertIn("bytes", s)
         self.assertGreater(s["bytes"], 0)
 
+    def test_nested_gitignore(self):
+        # a nested .gitignore should exclude files in its directory
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, ".gitignore"), "w") as f:
+                f.write("*.log\n")
+            os.makedirs(os.path.join(tmp, "sub"))
+            with open(os.path.join(tmp, "sub", ".gitignore"), "w") as f:
+                f.write("secret.txt\n")
+            with open(os.path.join(tmp, "a.py"), "w") as f:
+                f.write("x = 1\n")
+            with open(os.path.join(tmp, "sub", "secret.txt"), "w") as f:
+                f.write("secret\n")
+            with open(os.path.join(tmp, "sub", "keep.py"), "w") as f:
+                f.write("y = 2\n")
+            rules = codemap.parse_gitignore(os.path.join(tmp, ".gitignore"))
+            files = []
+            codemap._walk(tmp, rules, 100, files)
+            rels = [os.path.relpath(f, tmp) for f in files]
+            self.assertIn("a.py", rels)
+            self.assertIn(os.path.join("sub", "keep.py"), rels)
+            self.assertNotIn(os.path.join("sub", "secret.txt"), rels)
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_gitignore_cache_invalidation(self):
+        # changing .gitignore should invalidate the cache (all files changed)
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, ".gitignore"), "w") as f:
+                f.write("*.log\n")
+            with open(os.path.join(tmp, "a.py"), "w") as f:
+                f.write("x = 1\n")
+            cache = codemap.load_cache(tmp)
+            files = [os.path.join(tmp, "a.py")]
+            # first run: all changed
+            changed = codemap.changed_files(files, cache, tmp)
+            self.assertEqual(len(changed), 1)
+            codemap.update_cache(files, cache, tmp)
+            # second run: no change
+            changed2 = codemap.changed_files(files, cache, tmp)
+            self.assertEqual(len(changed2), 0)
+            # change .gitignore -> all changed again
+            with open(os.path.join(tmp, ".gitignore"), "w") as f:
+                f.write("*.py\n")
+            changed3 = codemap.changed_files(files, cache, tmp)
+            self.assertEqual(len(changed3), 1)
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_workspace_roots(self):
+        # a pyproject.toml with src/ should be detected as a workspace root
+        tmp = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(tmp, "packages", "foo", "src"))
+            with open(os.path.join(tmp, "packages", "foo", "pyproject.toml"), "w") as f:
+                f.write("[project]\nname = 'foo'\n")
+            roots = codemap._workspace_roots(tmp)
+            self.assertIn("packages.foo.src", roots)
+        finally:
+            shutil.rmtree(tmp)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

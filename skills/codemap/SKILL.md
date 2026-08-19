@@ -102,8 +102,11 @@ python3 codemap.py --incremental /path/to/repo
 # Security check (SHA-256)
 python3 codemap.py --verify codemap.py
 
-# Runtime trace (captures dynamic imports/monkeypatching)
-python3 codemap.py --trace tests.py /path/to/repo
+# Runtime trace (captures dynamic imports/monkeypatching; needs --force)
+python3 codemap.py --trace tests.py /path/to/repo --force
+
+# Install tree-sitter grammars (opt-in precision)
+python3 codemap.py --install-grammars
 ```
 
 ## Quick Reference
@@ -133,7 +136,9 @@ python3 codemap.py --trace tests.py /path/to/repo
 | `--snippet P S E` | extract bytes S-E from file P |
 | `--incremental` | files changed since last run (hash cache) |
 | `--verify FILE` | print SHA-256 of a file |
-| `--trace CMD` | run a command, record runtime call edges |
+| `--trace CMD` | run a command, record runtime call edges (needs --force) |
+| `--force` | acknowledge --trace executes code (isolation warning) |
+| `--install-grammars` | install tree-sitter grammars (opt-in precision) |
 | `--json` | machine-readable JSON |
 | `--write FILE` | write map to FILE |
 | `--no-outline` | skip per-file one-liners (faster) |
@@ -207,7 +212,7 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (34 tests).
+- `python3 tests.py` → `OK` (37 tests).
 - `codemap --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codemap --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codemap --task "text" <root>` returns a ranked module list.
