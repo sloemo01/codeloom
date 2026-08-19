@@ -32,7 +32,7 @@ import codemap  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codemap-mcp"
-SERVER_VERSION = "0.12.0"
+SERVER_VERSION = "0.13.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -252,6 +252,53 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "codemap_explain",
+        "description": (
+            "Generate a plain-English explanation of a symbol's role using its AST "
+            "signature + call graph. Template-based, no LLM needed. Returns a summary, "
+            "what it calls, and what calls it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "symbol": {"type": "string", "description": "Symbol name to explain"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["symbol"],
+        },
+    },
+    {
+        "name": "codemap_similar",
+        "description": (
+            "Find functions/classes with a structurally similar signature (same "
+            "param count) for refactoring. Returns candidates across the codebase."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "symbol": {"type": "string", "description": "Symbol to find similar ones for"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["symbol"],
+        },
+    },
+    {
+        "name": "codemap_deadcode",
+        "description": (
+            "Find functions/classes defined in the codebase but never called. "
+            "Uses the call graph to detect dead code."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+        },
+    },
+    {
         "name": "codemap_incremental",
         "description": (
             "Show which files changed since the last run, using a hash-based "
@@ -416,6 +463,18 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if not symbol:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
         text = codemap.render_read(files, root, symbol)
+    elif name == "codemap_explain":
+        symbol = args.get("symbol")
+        if not symbol:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
+        text = codemap.render_explain(files, root, symbol)
+    elif name == "codemap_similar":
+        symbol = args.get("symbol")
+        if not symbol:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
+        text = codemap.render_similar(files, root, symbol)
+    elif name == "codemap_deadcode":
+        text = codemap.render_deadcode(files, root)
     elif name == "codemap_incremental":
         text = codemap.render_incremental(files, root, max_files)
     elif name == "codemap_verify":

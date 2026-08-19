@@ -381,6 +381,36 @@ class TestCodemap(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
+    def test_explain_symbol(self):
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        info = codemap.explain_symbol(files, self.repo, "Engine")
+        self.assertIsNotNone(info)
+        self.assertEqual(info["kind"], "class")
+        self.assertIn("module", info)
+
+    def test_similar_symbols(self):
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        results = codemap.similar_symbols(files, self.repo, "run")
+        # run has 1 param (self, fn) -> 1 non-self param; find others with 1 param
+        self.assertIsInstance(results, list)
+
+    def test_dead_code(self):
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        dead = codemap.dead_code(files, self.repo)
+        self.assertIsInstance(dead, list)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

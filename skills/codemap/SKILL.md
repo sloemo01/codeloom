@@ -81,6 +81,15 @@ python3 codemap.py --grep "retry" /path/to/repo
 # Token-efficient read (exact symbol source via AST / tree-sitter / brace-match)
 python3 codemap.py --read Engine /path/to/repo
 
+# Plain-English explanation of a symbol (no LLM)
+python3 codemap.py --explain Engine /path/to/repo
+
+# Find structurally similar functions/classes (refactoring)
+python3 codemap.py --similar run /path/to/repo
+
+# Find dead code (defined but never called)
+python3 codemap.py --deadcode /path/to/repo
+
 # Incremental mode (hash-based cache, no daemon)
 python3 codemap.py --incremental /path/to/repo
 
@@ -111,6 +120,9 @@ python3 codemap.py --trace tests.py /path/to/repo
 | `--usages X` | find where a symbol is used (call sites + snippet) |
 | `--grep X` | search file contents for a snippet (ranked + context) |
 | `--read X` | extract exact source of a symbol (AST / tree-sitter / brace-match) |
+| `--explain X` | plain-English explanation of a symbol (no LLM) |
+| `--similar X` | find structurally similar functions/classes (refactoring) |
+| `--deadcode` | find functions defined but never called |
 | `--incremental` | files changed since last run (hash cache) |
 | `--verify FILE` | print SHA-256 of a file |
 | `--trace CMD` | run a command, record runtime call edges |
@@ -149,8 +161,8 @@ python3 codemap.py --trace tests.py /path/to/repo
 3. Tools exposed: `codemap_map`, `codemap_graph`, `codemap_focus`,
    `codemap_calls`, `codemap_diff`, `codemap_impact`, `codemap_task`,
    `codemap_plan`, `codemap_cross`, `codemap_search`, `codemap_usages`,
-   `codemap_grep`, `codemap_read`, `codemap_incremental`, `codemap_verify`,
-   `codemap_trace`.
+   `codemap_grep`, `codemap_read`, `codemap_explain`, `codemap_similar`,
+   `codemap_deadcode`, `codemap_incremental`, `codemap_verify`, `codemap_trace`.
 
 ### 3. Run the test suite
 ```bash
@@ -186,7 +198,7 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (28 tests).
+- `python3 tests.py` → `OK` (31 tests).
 - `codemap --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codemap --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codemap --task "text" <root>` returns a ranked module list.
@@ -195,6 +207,9 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 - `codemap --usages <symbol> <root>` returns call sites + snippet.
 - `codemap --grep <query> <root>` returns ranked snippet matches.
 - `codemap --read <symbol> <root>` returns exact symbol source.
+- `codemap --explain <symbol> <root>` returns a summary + call graph.
+- `codemap --similar <symbol> <root>` returns refactoring candidates.
+- `codemap --deadcode <root>` returns unused symbols.
 - `codemap --incremental <root>` returns changed files (hash cache).
 - `codemap --trace <cmd> <root>` returns runtime call edges (or none).
 - MCP smoke test returns `serverInfo` name `codemap-mcp`.

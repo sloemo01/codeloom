@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.12.0"
+VERSION = "0.13.0"
 
 # --------------------------------------------------------------------------- #
 # Optional progressive-enhancement backends.
@@ -1427,6 +1427,161 @@ def render_read(files: List[str], root: str, symbol: str) -> str:
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
+# --explain: plain-English explanation of a symbol (AST + call graph, no LLM)
+# --------------------------------------------------------------------------- #
+
+def explain_symbol(files, root, symbol):
+    """Generate a plain-English explanation of a symbol's role using its AST
+    signature + call graph. Template-based, no LLM needed."""
+    result = read_symbol(files, root, symbol)
+    if result is None:
+        return None
+    mod = result["module"]
+    calls = build_call_graph_multi(files, root)
+    callees = set()
+    for caller, cs in calls.get(mod, {}).items():
+        if caller == symbol:
+            callees |= cs
+    called_by = set()
+    for caller_mod, funcs in calls.items():
+        for caller, cs in funcs.items():
+            if symbol in cs:
+                called_by.add(f"{caller_mod}.{caller}")
+    source = result["source"]
+    kind = result["kind"]
+    summary = ""
+    lines = [l.strip() for l in source.splitlines() if l.strip()]
+    if lines:
+        import re as _re
+        doc = _re.search(r'["\']{3}(.*?)["\']{3}', source, _re.DOTALL)
+        if doc:
+            summary = doc.group(1).strip().split("\n")[0][:120]
+        else:
+            summary = lines[0][:120]
+    return {
+        "module": mod, "kind": kind, "line": result["line"],
+        "summary": summary, "callees": sorted(callees), "called_by": sorted(called_by),
+    }
+
+def render_explain(files, root, symbol):
+    info = explain_symbol(files, root, symbol)
+    buf = io.StringIO()
+    buf.write(f"# explain: {symbol}\n")
+    if info is None:
+        buf.write("Symbol not found.\n")
+        return buf.getvalue()
+    buf.write(f"{info['module']}:{info['line']}  [{info['kind']}]\n\n")
+    buf.write(f"Summary: {info['summary'] or '(no docstring)'}\n")
+    buf.write(f"\nCalls ({len(info['callees'])}):\n")
+    for c in info["callees"]:
+        buf.write(f"  {c}\n")
+    buf.write(f"\nCalled by ({len(info['called_by'])}):\n")
+    for c in info["called_by"]:
+        buf.write(f"  {c}\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
+# --similar: find structurally similar functions/classes (for refactoring)
+# --------------------------------------------------------------------------- #
+
+def _signature_shape(source):
+    """Extract a signature shape: (name, param_count)."""
+    import re as _re
+    m = _re.search(r"(?:def|class|func|function)\s+(\w+)\s*\(([^)]*)\)", source)
+    if not m:
+        return None
+    name = m.group(1)
+    params = [p.strip() for p in m.group(2).split(",") if p.strip()]
+    params = [p for p in params if p not in ("self", "cls")]
+    return (name, len(params))
+
+def similar_symbols(files, root, symbol, limit=10):
+    """Find functions/classes with a similar signature shape (same param count)."""
+    target = read_symbol(files, root, symbol)
+    if target is None:
+        return []
+    target_shape = _signature_shape(target["source"])
+    if target_shape is None:
+        return []
+    _, target_params = target_shape
+    candidates = []
+    import re as _re
+    for f in files:
+        ext = os.path.splitext(f)[1].lower()
+        if ext not in CALL_LANG_RULES:
+            continue
+        mod = module_name_of(f, root)
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for m in _re.finditer(r"(?:def|class|func|function)\s+(\w+)\s*\(([^)]*)\)", text):
+            name = m.group(1)
+            if name == symbol:
+                continue
+            params = [p.strip() for p in m.group(2).split(",") if p.strip()]
+            params = [p for p in params if p not in ("self", "cls")]
+            if len(params) == target_params:
+                candidates.append({"module": mod, "name": name, "params": len(params)})
+    return candidates[:limit]
+
+def render_similar(files, root, symbol, limit=10):
+    results = similar_symbols(files, root, symbol, limit)
+    buf = io.StringIO()
+    buf.write(f"# similar: {symbol}\n")
+    if not results:
+        buf.write("No structurally similar symbols found.\n")
+        return buf.getvalue()
+    buf.write(f"{len(results)} symbol(s) with the same signature shape:\n\n")
+    for r in results:
+        buf.write(f"  {r['module']}.{r['name']}  ({r['params']} params)\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
+# --deadcode: find functions defined but never called
+# --------------------------------------------------------------------------- #
+
+def dead_code(files, root):
+    """Find functions/classes defined in the codebase but never called."""
+    calls = build_call_graph_multi(files, root)
+    defined = set()
+    called = set()
+    for mod, funcs in calls.items():
+        for caller, callees in funcs.items():
+            defined.add(f"{mod}.{caller}")
+            called |= callees
+    index = build_symbol_index(files, root)
+    for name, locs in index.items():
+        for loc in locs:
+            defined.add(f"{loc['module']}.{name}")
+    dead = []
+    for d in sorted(defined):
+        is_called = False
+        for mod, funcs in calls.items():
+            for caller, callees in funcs.items():
+                if d.split(".")[-1] in callees:
+                    is_called = True
+                    break
+            if is_called:
+                break
+        if not is_called:
+            dead.append({"symbol": d})
+    return dead
+
+def render_deadcode(files, root):
+    dead = dead_code(files, root)
+    buf = io.StringIO()
+    buf.write(f"# dead code — {len(dead)} symbol(s) defined but never called\n")
+    if not dead:
+        buf.write("No dead code found.\n")
+        return buf.getvalue()
+    buf.write("\n")
+    for d in dead:
+        buf.write(f"  {d['symbol']}\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
 # Incremental / indexed mode (hash-based cache, no daemon)
 # --------------------------------------------------------------------------- #
 
@@ -1978,6 +2133,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--usages", metavar="SYMBOL", help="find where a symbol is used (not just defined)")
     p.add_argument("--grep", metavar="QUERY", help="search file contents for a snippet (ranked + context)")
     p.add_argument("--read", metavar="SYMBOL", help="extract exact source of a function/class/method (token-efficient)")
+    p.add_argument("--explain", metavar="SYMBOL", help="plain-English explanation of a symbol (AST + call graph)")
+    p.add_argument("--similar", metavar="SYMBOL", help="find structurally similar functions/classes (refactoring)")
+    p.add_argument("--deadcode", action="store_true", help="find functions defined but never called")
     p.add_argument("--incremental", action="store_true", help="show files changed since last run (hash-based cache)")
     p.add_argument("--verify", metavar="FILE", help="print SHA-256 of a file (security check)")
     p.add_argument("--trace", nargs="+", metavar="CMD", help="run a command under sys.settrace, record runtime call edges")
@@ -2015,8 +2173,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(render_incremental(files, root, args.max_files))
         return 0
 
-    # --cross / --search / --usages / --grep / --read: deep structural intelligence
-    if args.cross or args.search or args.usages or args.grep or args.read:
+    # --cross / --search / --usages / --grep / --read / --explain / --similar / --deadcode
+    if args.cross or args.search or args.usages or args.grep or args.read \
+       or args.explain or args.similar or args.deadcode:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
@@ -2039,6 +2198,18 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.read:
             print(render_read(files, root, args.read))
+            return 0
+
+        if args.explain:
+            print(render_explain(files, root, args.explain))
+            return 0
+
+        if args.similar:
+            print(render_similar(files, root, args.similar))
+            return 0
+
+        if args.deadcode:
+            print(render_deadcode(files, root))
             return 0
 
         if args.cross:
