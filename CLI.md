@@ -73,7 +73,7 @@ codeloom [OPTIONS] [ROOT]
 
 | Flag | Description |
 |---|---|
-| `--index` | Build persistent byte-offset index |
+| `--index` | Build persistent knowledge graph (symbols + call/import edges) |
 | `--index-status` | Index freshness |
 | `--verify FILE` | SHA-256 checksum |
 | `--install-grammars --yes` | Install tree-sitter grammars (25 languages) |

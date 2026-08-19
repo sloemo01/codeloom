@@ -460,19 +460,24 @@ server delivers the same in-memory speed with none of the daemon's costs.
 
 ## Scale without a daemon (`--index`)
 
-For large repos, `codeloom --index` builds a **persistent on-disk byte-offset
-index** once, then `--get-symbol`/`--search` load it in milliseconds instead of
-re-parsing everything:
+For large repos, `codeloom --index` builds a **persistent on-disk knowledge
+graph** — a byte-offset symbol index **plus call/import edges** — once, then
+`--get-symbol`/`--search`/`--cross`/`--deadcode` load it in milliseconds
+instead of re-parsing everything:
 
 ```bash
-codeloom --index .            # build + save the index (469 files, 4538 symbols in ~1s)
-codeloom --get-symbol Agent . # loads from the index in ~0.4s
+codeloom --index .            # build + save the knowledge graph (symbols + call/import edges)
+codeloom --get-symbol Agent . # loads from the index in ~0.1s
+codeloom --deadcode .         # loads call edges from the graph — no re-parse
 codeloom --index-status .     # is the index fresh?
 ```
 
-The index survives across invocations (no daemon, no background process) and is
-incrementally refreshed via content hashes. This is the scale win for large
-repos — the persistent-index benefit without the operational surface.
+The knowledge graph survives across invocations (no daemon, no background
+process) and is incrementally refreshed via content hashes. This is the
+multi-million-line monorepo win: the same call/import edges a daemon keeps
+resident, stored on disk, so heavy ops load in milliseconds instead of
+re-parsing. Measured on microsoft/vscode (12k files): `--deadcode` drops from
+10.3s (serial) to **4.8s** by loading from the graph.
 
 ## MCP server (agents call codeloom natively)
 
@@ -556,9 +561,11 @@ ceiling rises when you opt in:
 - **Import resolution is heuristic.** Handles common layouts, namespace packages,
   source-root-relative imports, and multi-root workspaces (via `pyproject.toml` /
   `package.json` / `go.mod`); unusual `sys.path` setups may still mis-resolve.
-- **No persistent index.** codeloom is always-fresh (reads files live) rather
-  than maintaining a background index. `--incremental` mitigates repeated-run
-  cost, but it's not a daemon-backed knowledge graph.
+- **Knowledge graph is on-disk, not resident.** `--index` builds a persistent
+  knowledge graph (symbols + call/import edges) that heavy ops load from — but
+  it's loaded per-invocation, not kept resident by a daemon. For true 10M+ line
+  repos where you query constantly, a daemon-backed graph (jcodemunch, semble)
+  is genuinely faster. codeloom's graph is the no-daemon middle ground.
 
 ## Correctness
 

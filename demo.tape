@@ -29,3 +29,13 @@ Type "codeloom --explain Engine ."
 Enter
 Sleep 1s
 Sleep 500ms
+
+Type "codeloom --index ."
+Enter
+Sleep 1s
+Sleep 500ms
+
+Type "codeloom --deadcode ."
+Enter
+Sleep 1s
+Sleep 500ms

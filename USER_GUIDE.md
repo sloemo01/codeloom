@@ -91,8 +91,9 @@ codeloom --framework .
 ## Scale
 
 ```bash
-codeloom --index .          # build persistent index (469 files in ~1s)
+codeloom --index .          # build persistent knowledge graph (symbols + call/import edges)
 codeloom --get-symbol X .   # loads from index in milliseconds
+codeloom --deadcode .       # loads call edges from the graph — no re-parse
 codeloom --index-status .   # is the index fresh?
 ```
 
