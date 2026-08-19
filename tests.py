@@ -196,7 +196,8 @@ class TestCodemap(unittest.TestCase):
                     files.append(os.path.join(root, f))
         plan = codemap.build_plan(files, self.repo, "add retry to engine")
         self.assertIn("Read these files", plan)
-        self.assertIn("src/core/engine.py", plan)
+        # cross-platform: check for the module name, not a hardcoded path separator
+        self.assertIn("engine.py", plan)
 
     def test_cross_call_graph(self):
         files = []
