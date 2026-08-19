@@ -11,7 +11,7 @@ so it renders inline on both platforms.
 
 ## Show HN post
 
-**Title:** Show HN: codeloom — 99% token savings on code retrieval, in one stdlib file
+**Title:** Show HN: codeloom — a code-embedded task brief for agents, in one stdlib file
 
 **Body:**
 
@@ -21,34 +21,33 @@ I kept hitting this, so I built codeloom: one file, zero dependencies, no daemon
 
 ![codeloom demo](https://raw.githubusercontent.com/sloemo01/codeloom/main/demo.gif)
 
+**The one thing that matters: `--pack` is a code-embedded task brief, not a ranked list.**
+
+```bash
+codeloom --pack "fix the login bug" .
+```
+
+returns a self-contained, ~1.6k-token brief with the **actual `login()` source embedded** (byte-precise, capped ~40 lines), the call path, the impact list, and what's safe to touch. An agent pastes it once and works — **zero retrieval calls on the core path**. That's the difference between "where does 'login' appear" (the search tools) and "what code actually runs when a login happens" (codeloom).
+
 What it does:
-- **99%+ token savings** — `--get-symbol` is summary-first by default (signature + docstring + call graph, not full source). Measured on browser-use: `Agent` (huge class) 3,689→10 tokens (99.7%), `click` 6,954→16 (99.8%), `extract` 2,558→31 (98.8%). `--full` opt-in for the implementation.
-- **Task-aware** — `codeloom --task "fix the login bug"` → ranked reading list; `--impact X` → what breaks if you change X; `--plan "task"` → prioritized read order
-- **Cross-file call graph** — `codeloom --cross` → real execution flow across modules (AST-resolved)
-- **Search** — `--search` (symbol index + snippet), `--usages` (call sites), `--grep` (snippet search), `--read` (exact symbol source, multi-language)
-- **Understanding** — `--explain` (plain-English, no LLM), `--similar` (refactoring candidates), `--deadcode` (unused symbols)
-- **Change-aware** — `--diff` (structure of changed files), `--incremental` (hash-based cache)
-- **Runtime truth** — `--trace CMD` (captures dynamic imports/monkeypatching static analysis misses)
-- **MCP server** — `codeloom-mcp.py` is a zero-dep MCP server with 25 tools, so agents call it natively
-- **No routing errors** — `codeloom_ask` is a single natural-language entry point that routes deterministically and is fail-safe: every query returns useful context, never an error. The agent never picks among 25 tools (or jcodemunch's 91), so it can't misroute.
-- **Local observability** — `codeloom --session` logs each call (tokens, cost) to a local file; `--session-report` summarizes it. No network, no daemon, no telemetry that phones home.
-- **Framework-aware** — `codeloom --framework` detects the web/app framework (Next.js, FastAPI, Django, Laravel, Express) and surfaces routes, models, config, and conventions
-- **25 languages** — `--install-grammars --yes` gives tree-sitter precision across 25 languages (Python, JS/TS, Go, Rust, Java, C/C++, C#, Ruby, PHP, Swift, Kotlin, Dart, Lua, bash, Elixir, OCaml, Scala, Haskell, Zig, Perl, F#, PowerShell)
-- **No daemon** — the MCP server keeps an in-memory index (incremental, always fresh), so you get daemon-speed queries without a background process, staleness, or anything to crash
-- **Scale** — `codeloom --index` builds a persistent on-disk **knowledge graph** (symbols + call/import edges) that heavy ops load from. Measured on microsoft/vscode (12,422 files): indexed queries **0.08s**, deadcode **4.8s** (down from 10.3s). The MCP server keeps the graph **resident in memory** — daemon-speed, no daemon, nothing to crash.
-- **Correctness** — nested `.gitignore` merging, cache invalidation on `.gitignore` change, workspace-root import resolution (pyproject/package.json/go.mod), `--trace` isolation warning
+- **Code-embedded task brief** — `--pack` embeds the real code, not names. Measured on fastapi: `fix the login bug` → ~1,655 tokens, 10 code blocks embedded, only oversized symbols point to `--full`.
+- **Edit-relevance ranking** — `--task`/`--plan`/`--pack` rank by anchor → call-path walk, not keyword overlap. `session.py` ranks above `constants.py` for "fix the login bug" because it's on the login call path.
+- **99%+ token savings** — `--get-symbol` is summary-first by default (signature + docstring + call graph, not full source). Measured on browser-use: `Agent` (huge class) 3,689→10 tokens (99.7%), `click` 6,954→16 (99.8%). `--full` opt-in for the implementation.
+- **Zero-install, zero-telemetry, offline** — one stdlib file, no `pip install`, no model downloads, no license validation, no telemetry that phones home. The heavyweight tools can't say that.
+- **Git-diffable** — `codeloom --write MAP.md` produces a reviewable text artifact you commit and diff in PRs. jcodemunch's index is a binary blob.
+- **CI action** — `codeloom --install-agents .` writes AGENTS.md + a GitHub Action that runs `--pack` on every PR and posts the brief as a comment. One line to add.
+- **MCP server** — zero-dep, 25 tools, resident in-memory knowledge graph (daemon-speed, no daemon).
+- **25 languages** — `--install-grammars --yes` gives tree-sitter precision.
 
 The whole thing is Python stdlib only. No `pip install`, no indexing daemon, no GPU. Copy one file into your repo, point your agent at it, done.
 
-**Why 99% and not "95%"?** Because summary-first retrieval makes *every* retrieval cheap — including huge symbols that full-source tools (jcodemunch included) can't handle. The benchmark is honest and reproducible: `benchmarks/run.py --tokens`.
-
-Why not just use the existing tools (semble, codebase-memory-mcp, jcodemunch)? They're great at retrieval — but they're search engines, not task-orientation engines. codeloom does retrieval *and* tells the agent what matters, what breaks, and what to read first. Plus it's the fastest possible structural context, in one file, in under a second, always fresh (no stale index).
+**Why not just use the existing tools (semble, codebase-memory-mcp, jcodemunch)?** They're great at retrieval — but they're search engines, not task-orientation engines. They answer "where is this symbol?" codeloom answers "what code actually runs for this task?" — and embeds it. Plus it's the fastest possible structural context, in one file, in under a second, always fresh (no stale index).
 
 Drop the output into your `AGENTS.md` and every future session auto-loads the map before touching anything.
 
 Repo: https://github.com/sloemo01/codeloom
 
-Would love feedback — especially on the task-relevance ranking and the summary-first retrieval.
+Would love feedback — especially on the edit-relevance ranking and the code-embedded brief.
 
 ---
 
@@ -58,19 +57,52 @@ Would love feedback — especially on the task-relevance ranking and the summary
 
 So I built codeloom: a map of your repo for agents. One file, zero deps, no daemon, 100% local. Under a second.
 
-**2/6** The pitch in one line: every structural-intelligence tool for agents makes you install a daemon. codeloom gives you the map, the import graph, the cross-file call graph, search, and an MCP server — in one stdlib file, in under a second.
+**2/6** The pitch in one line: the search tools answer "where is this symbol?" codeloom answers "what code actually runs for this task?" — and embeds it.
 
-**3/6** 99%+ token savings on retrieval — the part that saves your context window:
-• `--get-symbol X` → summary-first (signature + docstring + call graph), not full source
-• Measured: `Agent` (huge class) 3,689→10 tokens (99.7%), `click` 6,954→16 (99.8%)
-• `--full` opt-in when you need the implementation
+`codeloom --pack "fix the login bug"` returns a ~1.6k-token brief with the actual `login()` source embedded, the call path, the impact list, and what's safe to touch. An agent pastes it once and works — zero retrieval on the core path.
 
-**4/6** The part the search tools don't do — task-orientation:
-• `--task "fix the login bug"` → ranked reading list
-• `--impact X` → what breaks if you change X
-• `--plan "task"` → read these files, in this order
-• `--cross` → the real call path across files
+**3/6** The ranking is edit-relevance, not keyword overlap:
+• anchor the task ("login") → walk the call graph both directions
+• `session.py` ranks above `constants.py` for "fix the login bug" because it's on the login call path
+• that's "what code runs" vs "where does the word appear"
 
-**5/6** The MCP server is zero-dependency too — pure stdlib JSON-RPC over stdio, 25 tools, with an in-memory index that's always fresh. Register it in Claude Code / Cursor / Codex and your agent calls codeloom natively. No `pip install`, no daemon, no stale index.
+**4/6** Zero-install, zero-telemetry, offline — one stdlib file, no pip, no model downloads, no license checks, no telemetry that phones home. The heavyweight tools can't say that.
 
-**6/6** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.26.0 released. 99% token savings, no routing errors (single natural-language entry point), local observability, framework-aware, 25-language tree-sitter, knowledge-graph scale (0.08s queries, resident in-memory graph — daemon-speed, no daemon), persistent index, nested .gitignore, cache invalidation, workspace roots, trace safety — all handled. Go use it. Feedback welcome, especially on the task-relevance ranking and summary-first retrieval.
+**5/6** Git-diffable + CI action:
+• `codeloom --write MAP.md` → a reviewable text artifact you commit and diff in PRs (their index is a binary blob)
+• `codeloom --install-agents .` → writes AGENTS.md + a GitHub Action that posts the `--pack` brief on every PR. One line.
+
+**6/6** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.26.0 released. Code-embedded task brief, edit-relevance ranking, 99% token savings, resident in-memory knowledge graph (daemon-speed, no daemon), 25-language tree-sitter. Go use it. Feedback welcome, especially on the edit-relevance ranking and the code-embedded brief.
+
+---
+
+## Reddit post (r/ClaudeAI, r/LocalLLaMA, r/ExperiencedDevs)
+
+**Title:** I built a tool that gives AI coding agents a code-embedded task brief — not a ranked list of files
+
+**Body:**
+
+Every coding agent (Claude Code, Cursor, Codex) has the same problem: before it can do anything, it has to figure out what your codebase even *is*. So it greps, reads whole files, burns 40k+ tokens building context — then forgets what it learned.
+
+I built codeloom to fix that. One stdlib file, zero deps, no daemon, 100% local.
+
+**The thing that matters: `--pack` is a code-embedded task brief, not a ranked list.**
+
+```bash
+codeloom --pack "fix the login bug" .
+```
+
+returns a self-contained ~1.6k-token brief with the **actual `login()` source embedded** (byte-precise, capped ~40 lines), the call path, the impact list, and what's safe to touch. An agent pastes it once and works — zero retrieval calls on the core path.
+
+The ranking is **edit-relevance**, not keyword overlap: it anchors the task ("login"), walks the call graph both directions, and ranks the execution path. `session.py` ranks above `constants.py` for "fix the login bug" because it's on the login call path — not because it has more word matches.
+
+Also:
+- **Zero-install, zero-telemetry, offline** — one file, no pip, no model downloads, no license checks, no telemetry that phones home
+- **Git-diffable** — `codeloom --write MAP.md` is a reviewable text artifact you commit and diff in PRs
+- **CI action** — `codeloom --install-agents .` writes AGENTS.md + a GitHub Action that posts the `--pack` brief on every PR
+- **MCP server** — zero-dep, 25 tools, resident in-memory knowledge graph (daemon-speed, no daemon)
+- **25 languages** — `--install-grammars --yes` gives tree-sitter precision
+
+Repo: https://github.com/sloemo01/codeloom
+
+Would love feedback — especially on the edit-relevance ranking and the code-embedded brief.

@@ -3187,8 +3187,52 @@ AGENTS_BLOCK = """<!-- codeloom: auto-generated. Run `codeloom` to refresh. -->
 Before editing anything, run `codeloom` and read the output to build a mental model of the repo.
 """
 
+# The codeloom-map CI workflow that --install-agents writes (set-and-forget).
+# Runs --pack on every PR and posts the task brief as a comment.
+CI_WORKFLOW = """name: codeloom-map
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  map:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run codeloom --pack on the PR
+        id: pack
+        run: |
+          TASK="${{ github.event.pull_request.title }}"
+          if [ -z "$TASK" ]; then TASK="review this pull request"; fi
+          python codeloom.py --pack "$TASK" . > /tmp/codeloom-brief.md 2>&1 || true
+      - name: Post the brief as a PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let brief = fs.readFileSync('/tmp/codeloom-brief.md', 'utf8');
+            if (brief.length > 60000) brief = brief.slice(0, 60000) + '\\n... (truncated)';
+            const body = '## codeloom task brief\\n\\n' + brief;
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+"""
+
 def install_agents(root: str) -> str:
-    """Write or update AGENTS.md with a codeloom instruction block."""
+    """Write or update AGENTS.md with a codeloom instruction block, and write
+    the codeloom-map CI workflow (set-and-forget onboarding)."""
     path = os.path.join(root, "AGENTS.md")
     block = AGENTS_BLOCK
     if os.path.isfile(path):
@@ -3200,15 +3244,25 @@ def install_agents(root: str) -> str:
             content = _re.sub(r"<!-- codeloom: auto-generated.*?-->\n.*?\n", block, content, flags=_re.DOTALL)
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
-            return f"updated {path}"
+            msg = f"updated {path}"
         else:
             with open(path, "a", encoding="utf-8") as f:
                 f.write("\n" + block)
-            return f"appended to {path}"
+            msg = f"appended to {path}"
     else:
         with open(path, "w", encoding="utf-8") as f:
             f.write(block)
-        return f"created {path}"
+        msg = f"created {path}"
+    # write the codeloom-map CI workflow (set-and-forget)
+    ci_path = os.path.join(root, ".github", "workflows", "codeloom-map.yml")
+    try:
+        os.makedirs(os.path.dirname(ci_path), exist_ok=True)
+        with open(ci_path, "w", encoding="utf-8") as f:
+            f.write(CI_WORKFLOW)
+        msg += f"; wrote {ci_path}"
+    except OSError:
+        pass
+    return msg
 
 # --------------------------------------------------------------------------- #
 # Token-cost reporting

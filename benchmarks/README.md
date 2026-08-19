@@ -80,6 +80,32 @@ python3 benchmarks/run.py --repo /tmp/bench-fastapi --tokens
 | Works air-gapped | **yes** | no (needs install) |
 | Daemon/background process | **no** | yes |
 
+## The load-once benchmark (the one that matters)
+
+The plan's thesis: you can't beat jcodemunch on retrieval, but you can make
+retrieval irrelevant for the load-once, task-shaped workflow. `benchmarks/load_once.py`
+measures whether `--pack` produces a **self-contained, code-embedded task brief**
+that lets an agent work with zero retrieval on the core path.
+
+```bash
+python3 benchmarks/load_once.py --repo /path/to/repo --task "fix the login bug"
+```
+
+Result on fastapi (`fix the login bug`):
+
+```
+brief size: 6622 chars, ~1655 tokens
+embedded code blocks: 10
+oversized-symbol pointers (--full): 10
+RESULT: PASS — the brief embeds the task's core code and only points to
+--full for oversized symbols (per the plan's contract).
+```
+
+The brief embeds the actual `login()` source (byte-precise, capped ~40 lines),
+the call path, and the impact list. An agent pastes it once and works. This is
+the difference between "where does 'login' appear" (jcodemunch, retrieval-shaped)
+and "what code actually runs when a login happens" (codeloom, task-shaped).
+
 ## The honest caveat
 
 CodeLoom is a **complement, not a replacement**, for the heavy tools. If you

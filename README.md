@@ -23,6 +23,17 @@ then it forgets what it learned.
 that your agent reads in a second to build a mental model *before* touching
 anything. No install. No daemon. No GPU. Runs 100% on your machine.
 
+**Zero-install, zero-telemetry, offline.** codeloom is a single stdlib file you
+copy in — no `pip install`, no model downloads, no license validation, no
+telemetry that phones home. It reads your files, computes the structure, prints
+it, and exits. The heavyweight tools (jcodemunch, semble) can't say that: they
+ship telemetry, model downloads, and license checks. codeloom has none of it.
+
+**Git-diffable.** `codeloom --write MAP.md` produces a reviewable text artifact
+you commit and diff in PRs — the map changes visibly when the code changes.
+jcodemunch's index is a binary blob you can't review or diff. codeloom's map is
+a file your team can read, review, and version.
+
 ## Agent reasoning, not just retrieval
 
 The search tools (jcodemunch, semble, codebase-memory-mcp) answer one question:
@@ -495,6 +506,22 @@ tool (native tool calls, the resident in-memory graph, the natural-language
 *could* call" into "a tool the agent *uses correctly*" — knowing when to run
 `--task` vs `--impact` vs `--pack`. All three are zero-dependency and ship in
 the repo.
+
+## CI action (one-line onboarding)
+
+Add codeloom to a repo in one command — it writes `AGENTS.md` **and** the
+`codeloom-map` GitHub Action that runs `--pack` on every PR and posts the task
+brief as a comment:
+
+```bash
+codeloom --install-agents .
+# writes AGENTS.md + .github/workflows/codeloom-map.yml
+```
+
+The action uses the PR title as the task, runs `codeloom --pack`, and posts the
+code-embedded brief as a PR comment — so every PR gets a task-shaped map of what
+it touches, automatically. jcodemunch can't ship this as a one-liner; codeloom
+does.
 
 ## MCP server (agents call codeloom natively)
 
