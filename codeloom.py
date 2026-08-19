@@ -180,6 +180,48 @@ def read_files_parallel(files: List[str], parallel: bool = False) -> dict:
         results = pool.map(_read_file_worker, [(f, exts[f]) for f in files])
     return {path: text for path, text in results}
 
+def _scan_calls_worker(args):
+    """Module-level worker: scan one file's text for call edges.
+    Returns (module, {caller: set(callees)}) or (module, None) if skipped."""
+    f, text, root, all_defined = args
+    ext = os.path.splitext(f)[1].lower()
+    if ext not in CALL_LANG_RULES:
+        return (None, None)
+    mod = module_name_of(f, root)
+    if text is None:
+        return (mod, None)
+    # tree-sitter fast-path
+    ts_root = _ts_parse(f, ext)
+    if ts_root is not None:
+        edges = {}
+        for caller, callee in _ts_call_edges(ts_root):
+            if callee in all_defined and callee != caller:
+                edges.setdefault(caller, set()).add(callee)
+        return (mod, {k: v for k, v in edges.items() if v})
+    # string/comment-aware scanner
+    def_re, _ = CALL_LANG_RULES[ext]
+    clean = _strip_strings_comments(text, ext)
+    clean_lines = clean.splitlines()
+    current_func = None
+    edges = {}
+    for line, clean_line in zip(text.splitlines(), clean_lines):
+        dm = re.match(def_re, clean_line)
+        if dm:
+            name = next((g for g in dm.groups() if g), None)
+            current_func = name
+            edges.setdefault(current_func, set())
+            for cm in re.finditer(r"\b(\w+)\s*\(", clean_line):
+                callee = cm.group(1)
+                if callee in all_defined and callee != current_func:
+                    edges[current_func].add(callee)
+            continue
+        if current_func:
+            for cm in re.finditer(r"\b(\w+)\s*\(", clean_line):
+                callee = cm.group(1)
+                if callee in all_defined and callee != current_func:
+                    edges[current_func].add(callee)
+    return (mod, {k: v for k, v in edges.items() if v})
+
 def install_grammars(do_install: bool = False) -> str:
     """One-command opt-in installer for tree-sitter language grammars.
     Keeps the single-file zero-dep core; grammars are an optional precision
@@ -2128,11 +2170,12 @@ def render_similar(files, root, symbol, limit=10):
 # --deadcode: find functions defined but never called
 # --------------------------------------------------------------------------- #
 
-def dead_code(files, root, texts=None, index=None):
+def dead_code(files, root, texts=None, index=None, parallel=False):
     """Find functions/classes defined in the codebase but never called.
     O(n) — builds a called-set once, then each symbol lookup is O(1).
-    `index` is an optional persistent index (symbols) to avoid re-parsing."""
-    calls = build_call_graph_multi(files, root, texts=texts)
+    `index` is an optional persistent index (symbols) to avoid re-parsing.
+    `parallel` parallelizes the call-edge scan (--parallel)."""
+    calls = build_call_graph_multi(files, root, texts=texts, parallel=parallel)
     defined = set()
     called = set()
     for mod, funcs in calls.items():
@@ -2156,8 +2199,8 @@ def dead_code(files, root, texts=None, index=None):
             dead.append({"symbol": d})
     return dead
 
-def render_deadcode(files, root, texts=None, index=None):
-    dead = dead_code(files, root, texts=texts, index=index)
+def render_deadcode(files, root, texts=None, index=None, parallel=False):
+    dead = dead_code(files, root, texts=texts, index=index, parallel=parallel)
     buf = io.StringIO()
     buf.write(f"# dead code — {len(dead)} symbol(s) defined but never called\n")
     if not dead:
@@ -2853,13 +2896,14 @@ def _scan_defs(text: str, ext: str) -> set:
             found.add(name)
     return found
 
-def build_call_graph_multi(files: List[str], root: str, texts: Optional[dict] = None) -> dict:
+def build_call_graph_multi(files: List[str], root: str, texts: Optional[dict] = None, parallel: bool = False) -> dict:
     """Multi-language call graph. {module: {func: set(called_funcs)}}.
     Uses tree-sitter for precise AST parsing when a grammar is available;
     falls back to a string/comment-aware scanner (more precise than raw regex)
     otherwise. Only reports calls to functions defined in the codebase
     (builtins filtered). `texts` is an optional {path: content} cache so
-    callers can pre-read files in parallel (--parallel)."""
+    callers can pre-read files in parallel (--parallel). `parallel` parallelizes
+    the call-edge scan across processes (stdlib multiprocessing)."""
     # First pass: collect defined function names per module.
     defined: dict = {}
     for f in files:
@@ -2892,6 +2936,18 @@ def build_call_graph_multi(files: List[str], root: str, texts: Optional[dict] = 
 
     # Second pass: find calls, keep only repo-defined callees.
     calls: dict = {}
+    if parallel and len(files) >= 50:
+        import multiprocessing as mp
+        # pre-read files (or reuse texts cache)
+        if texts is None:
+            texts = read_files_parallel(files, parallel=True)
+        args_list = [(f, texts.get(f), root, all_defined) for f in files]
+        with mp.Pool() as pool:
+            results = pool.map(_scan_calls_worker, args_list)
+        for mod, edges in results:
+            if mod is not None and edges:
+                calls[mod] = edges
+        return calls
     for f in files:
         ext = os.path.splitext(f)[1].lower()
         if ext not in CALL_LANG_RULES:
@@ -3310,7 +3366,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             pidx = ensure_fresh_index(root, args.max_files)
             if args.parallel:
                 texts = read_files_parallel(files, parallel=True)
-                print(render_deadcode(files, root, texts=texts, index=pidx))
+                print(render_deadcode(files, root, texts=texts, index=pidx, parallel=True))
             else:
                 print(render_deadcode(files, root, index=pidx))
             return 0
