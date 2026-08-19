@@ -474,10 +474,13 @@ now has an **optional progressive-enhancement backend** that removes it when the
 richer tool is present — the zero-dep core always works, and the precision
 ceiling rises when you opt in:
 
-- **Regex multi-language analysis is best-effort.** *Removed by:* `codemap
-  --install-grammars` (or `pip install tree-sitter tree-sitter-python ...`).
-  codemap then uses real AST parsing for those languages instead of regex.
-  Verified: `export function helper` (missed by regex) is caught by tree-sitter.
+- **Regex multi-language analysis is best-effort.** *Improved:* codemap now uses
+  a **string/comment-aware scanner** that strips strings and comments before
+  matching, so it doesn't false-positive on `helper()` inside a string or
+  comment. *Removed by:* `codemap --install-grammars` (or `pip install
+  tree-sitter tree-sitter-python ...`). codemap then uses real AST parsing for
+  those languages instead of regex. Verified: `export function helper` (missed
+  by regex) is caught by tree-sitter.
 - **Static analysis misses runtime wiring.** *Removed by:* `codemap --trace CMD
   --force` runs a command (e.g. your test suite) under `sys.settrace` and
   records the ACTUAL call edges — capturing dynamic imports and monkeypatching
@@ -571,6 +574,7 @@ the fastest way to answer "what is this project, actually?"
 - [x] Dead-code detection (`--deadcode`)
 - [x] Token-counted symbol retrieval (`--get-symbol`, byte offsets + tokens)
 - [x] Summary-first retrieval (`--get-symbol` default, 95%+ token savings)
+- [x] String/comment-aware scanner (precise zero-dep multi-language parsing)
 - [x] Byte-range snippet extraction (`--snippet`)
 - [x] Token-consumption benchmark (`benchmarks/run.py --tokens`)
 - [x] In-memory index in MCP server (incremental, always fresh — no daemon)

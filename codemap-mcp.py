@@ -32,7 +32,7 @@ import codemap  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codemap-mcp"
-SERVER_VERSION = "0.18.0"
+SERVER_VERSION = "0.19.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)

@@ -547,6 +547,26 @@ class TestCodemap(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
+    def test_scanner_skips_strings_comments(self):
+        # a call inside a string or comment should NOT be detected
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, "app.js"), "w") as f:
+                f.write("function helper() { return 1; }\n"
+                        "function main() {\n"
+                        "  // comment mentioning helper() but not a real call\n"
+                        "  const msg = 'calling helper() here is a string';\n"
+                        "  return helper();\n"
+                        "}\n")
+            files = [os.path.join(tmp, "app.js")]
+            calls = codemap.build_call_graph_multi(files, tmp)
+            # main should call helper exactly once (the real call)
+            self.assertIn("helper", calls.get("app", {}).get("main", set()))
+            # the string/comment references should not create extra edges
+            self.assertEqual(len(calls.get("app", {}).get("main", set())), 1)
+        finally:
+            shutil.rmtree(tmp)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.18.0"
+VERSION = "0.19.0"
 
 # --------------------------------------------------------------------------- #
 # Optional progressive-enhancement backends.
@@ -2346,11 +2346,106 @@ CALL_LANG_RULES: dict = {
     ".dart": (r"^\s*(?:void|int|String|bool|double|List|Map|dynamic|Future|Stream|final|var|const|)\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
 }
 
+# String/comment-aware scanner: strips strings and comments (preserving line
+# structure) so regexes only match REAL code, not text inside strings/comments.
+# This is the precision win over raw regex — it eliminates false positives like
+# `helper()` appearing inside a string literal or a comment.
+def _strip_strings_comments(text: str, ext: str) -> str:
+    """Return a copy of `text` with string literals and comments replaced by
+    spaces (same length, same newlines), so regexes match only real code."""
+    out = list(text)
+    i = 0
+    n = len(text)
+    hash_comment = ext in (".py", ".rb", ".sh", ".lua", ".go", ".rs", ".dart", ".php", ".kt", ".swift")
+    slash_comment = ext in (".js", ".ts", ".jsx", ".tsx", ".java", ".c", ".h", ".cpp", ".hpp", ".cs", ".go", ".rs", ".kt", ".swift", ".dart", ".php")
+    while i < n:
+        c = text[i]
+        if c == "#" and hash_comment:
+            while i < n and text[i] != "\n":
+                out[i] = " "
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "/" and slash_comment:
+            while i < n and text[i] != "\n":
+                out[i] = " "
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*" and slash_comment:
+            out[i] = " "; out[i + 1] = " "
+            i += 2
+            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                out[i] = " "
+                i += 1
+            if i + 1 < n:
+                out[i] = " "; out[i + 1] = " "
+                i += 2
+            continue
+        if c in ("'", '"'):
+            quote = c
+            out[i] = " "
+            i += 1
+            while i < n:
+                if text[i] == "\\":
+                    out[i] = " "
+                    if i + 1 < n:
+                        out[i + 1] = " "
+                        i += 2
+                    continue
+                if text[i] == quote:
+                    out[i] = " "
+                    i += 1
+                    break
+                out[i] = " "
+                i += 1
+            continue
+        if c == "`" and ext in (".js", ".ts", ".jsx", ".tsx"):
+            out[i] = " "
+            i += 1
+            while i < n:
+                if text[i] == "\\":
+                    out[i] = " "
+                    if i + 1 < n:
+                        out[i + 1] = " "
+                        i += 2
+                    continue
+                if text[i] == "`":
+                    out[i] = " "
+                    i += 1
+                    break
+                out[i] = " "
+                i += 1
+            continue
+        i += 1
+    return "".join(out)
+
+def _scan_calls(text: str, ext: str, all_defined: set) -> set:
+    """Find calls to repo-defined functions in `text`, skipping strings/comments."""
+    clean = _strip_strings_comments(text, ext)
+    call_re = r"\b(\w+)\s*\("
+    found = set()
+    for m in re.finditer(call_re, clean):
+        callee = m.group(1)
+        if callee in all_defined:
+            found.add(callee)
+    return found
+
+def _scan_defs(text: str, ext: str) -> set:
+    """Find function/class definition names in `text`, skipping strings/comments."""
+    clean = _strip_strings_comments(text, ext)
+    def_re, _ = CALL_LANG_RULES[ext]
+    found = set()
+    for m in re.finditer(def_re, clean, re.MULTILINE):
+        name = next((g for g in m.groups() if g), None)
+        if name:
+            found.add(name)
+    return found
+
 def build_call_graph_multi(files: List[str], root: str) -> dict:
     """Multi-language call graph. {module: {func: set(called_funcs)}}.
     Uses tree-sitter for precise AST parsing when a grammar is available;
-    falls back to regex otherwise. Only reports calls to functions defined in
-    the codebase (builtins filtered)."""
+    falls back to a string/comment-aware scanner (more precise than raw regex)
+    otherwise. Only reports calls to functions defined in the codebase
+    (builtins filtered)."""
     # First pass: collect defined function names per module.
     defined: dict = {}
     for f in files:
@@ -2401,24 +2496,26 @@ def build_call_graph_multi(files: List[str], root: str) -> dict:
                 text = fh.read()
         except OSError:
             continue
-        def_re, call_re = CALL_LANG_RULES[ext]
-        # find each function body and the calls within it
-        lines = text.splitlines()
+        def_re, _ = CALL_LANG_RULES[ext]
+        # find each function body and the calls within it, using the
+        # string/comment-aware scanner (no false positives from strings/comments)
+        clean = _strip_strings_comments(text, ext)
+        clean_lines = clean.splitlines()
         current_func = None
-        for line in lines:
-            dm = re.match(def_re, line)
+        for line, clean_line in zip(text.splitlines(), clean_lines):
+            dm = re.match(def_re, clean_line)
             if dm:
                 name = next((g for g in dm.groups() if g), None)
                 current_func = name
                 calls[mod].setdefault(current_func, set())
                 # also scan the def line itself for calls (e.g. one-liners)
-                for cm in re.finditer(call_re, line):
+                for cm in re.finditer(r"\b(\w+)\s*\(", clean_line):
                     callee = cm.group(1)
                     if callee in all_defined and callee != current_func:
                         calls[mod][current_func].add(callee)
                 continue
             if current_func:
-                for cm in re.finditer(call_re, line):
+                for cm in re.finditer(r"\b(\w+)\s*\(", clean_line):
                     callee = cm.group(1)
                     if callee in all_defined and callee != current_func:
                         calls[mod][current_func].add(callee)
