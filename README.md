@@ -302,6 +302,23 @@ excluded from the headline because codeloom only resolved a subset of the
 queried symbols there (2/5 and 3/4), so their "100%" is not a fair comparison.
 Full methodology in [`benchmarks/`](benchmarks/README.md).
 
+**Side-by-side vs jcodemunch** (same repo, same symbols, retrieval tokens —
+`benchmarks/side_by_side.py` drives both tools via MCP):
+
+| symbol | codeloom | jcodemunch | codeloom wins |
+|---|---|---|---|
+| `Body` | 13 | 89 | YES |
+| `Cookie` | 13 | 810 | YES |
+| `File` | 13 | 821 | YES |
+| `Header` | 5 | 95 | YES |
+
+The honest caveat: codeloom returns a **summary** (signature + docstring +
+call graph) by default, while jcodemunch's `get_symbol_source` returns **full
+source** — so codeloom wins on token count by design (summary-first is the
+point). You opt into `--full` when you need the implementation. Symbols
+jcodemunch's fuzzy search couldn't cleanly resolve are excluded — only
+both-resolved symbols are reported.
+
 ## Task-aware intelligence (`--task`, `--impact`, `--plan`)
 
 The competitors are all *retrieval* tools — they help an agent **find** things.
