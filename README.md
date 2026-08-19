@@ -587,24 +587,6 @@ offsets) *and* tells the agent what matters, what breaks, and what to read
 first — the reasoning the search tools don't do. And it's the fastest possible
 structural context, in one file, in under a second, always fresh.
 
-## When to use codeloom vs jcodemunch
-
-| | codeloom | jcodemunch |
-|---|---|---|
-| **Best for** | single-session agent work, ephemeral queries, one-off repo audits | long-term index, repeated queries on the same codebase, production scale |
-| **Setup** | one file, copy it | pip + index + daemon |
-| **Freshness** | always live (reads files) | stale until re-indexed |
-| **Offline / air-gapped** | yes | no (needs install) |
-| **Task-orientation** | yes (`--task`/`--plan`/`--pack`) | no (retrieval only) |
-| **Context packing** | yes (`--pack`, single-shot) | no |
-
-**The honest positioning:** codeloom isn't trying to beat jcodemunch at being a
-retrieval engine — jcodemunch has won that (persistent index, 158-language
-tree-sitter, production scale). codeloom owns a *different workflow*: **load
-the whole context once, work offline, always fresh, zero setup.** For one-off
-repo audits and ephemeral agent sessions, codeloom is the faster, fresher,
-zero-friction choice.
-
 ## For humans too
 
 codeloom isn't just for agents. Onboarding to a new codebase, auditing a repo
