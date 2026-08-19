@@ -2061,11 +2061,14 @@ def build_persistent_index(files: List[str], root: str) -> dict:
     return build_byte_index(files, root)
 
 def save_persistent_index(root: str, index: dict, files: List[str]) -> None:
-    """Save the persistent index with per-file mtimes for incremental refresh."""
+    """Save the persistent index with per-file (mtime, size) for incremental
+    refresh. Size is tracked because Windows mtime has ~2s resolution, so a
+    quick append may not change mtime — but it always changes size."""
     data = {
         "version": INDEX_VERSION,
         "root": root,
-        "files": {f: os.path.getmtime(f) for f in files if os.path.isfile(f)},
+        "files": {f: (os.path.getmtime(f), os.path.getsize(f))
+                  for f in files if os.path.isfile(f)},
         "symbols": index,
     }
     try:
@@ -2087,14 +2090,15 @@ def load_persistent_index(root: str) -> Optional[dict]:
 
 def index_is_fresh(root: str, pidx: dict) -> bool:
     """Check whether the persistent index is fresh (no files changed since).
-    Uses mtime (cheap stat) rather than full hashing so the check is O(1)-ish
-    and doesn't defeat the fast-path."""
+    Compares (mtime, size) — size catches quick appends that Windows mtime
+    (2s resolution) would miss. Cheap stat, doesn't defeat the fast-path."""
     files = pidx.get("files", {})
-    for path, mtime in files.items():
+    for path, meta in files.items():
         if not os.path.isfile(path):
             return False
         try:
-            if os.path.getmtime(path) != mtime:
+            cur = (os.path.getmtime(path), os.path.getsize(path))
+            if cur != tuple(meta):
                 return False
         except OSError:
             return False
