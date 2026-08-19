@@ -5,7 +5,7 @@ so it renders inline on both platforms.
 
 - Demo GIF: `https://raw.githubusercontent.com/sloemo01/codeloom/main/demo.gif`
 - Repo: `https://github.com/sloemo01/codeloom`
-- Latest release: `https://github.com/sloemo01/codeloom/releases/tag/v0.23.0`
+- Latest release: `https://github.com/sloemo01/codeloom/releases/tag/v0.24.0`
 
 ---
 
@@ -29,8 +29,9 @@ What it does:
 - **Understanding** — `--explain` (plain-English, no LLM), `--similar` (refactoring candidates), `--deadcode` (unused symbols)
 - **Change-aware** — `--diff` (structure of changed files), `--incremental` (hash-based cache)
 - **Runtime truth** — `--trace CMD` (captures dynamic imports/monkeypatching static analysis misses)
-- **MCP server** — `codeloom-mcp.py` is a zero-dep MCP server with 24 tools, so agents call it natively
-- **No routing errors** — `codeloom_ask` is a single natural-language entry point that routes deterministically and is fail-safe: every query returns useful context, never an error. The agent never picks among 24 tools (or jcodemunch's 91), so it can't misroute.
+- **MCP server** — `codeloom-mcp.py` is a zero-dep MCP server with 25 tools, so agents call it natively
+- **No routing errors** — `codeloom_ask` is a single natural-language entry point that routes deterministically and is fail-safe: every query returns useful context, never an error. The agent never picks among 25 tools (or jcodemunch's 91), so it can't misroute.
+- **Local observability** — `codeloom --session` logs each call (tokens, cost) to a local file; `--session-report` summarizes it. No network, no daemon, no telemetry that phones home.
 - **Framework-aware** — `codeloom --framework` detects the web/app framework (Next.js, FastAPI, Django, Laravel, Express) and surfaces routes, models, config, and conventions
 - **25 languages** — `--install-grammars --yes` gives tree-sitter precision across 25 languages (Python, JS/TS, Go, Rust, Java, C/C++, C#, Ruby, PHP, Swift, Kotlin, Dart, Lua, bash, Elixir, OCaml, Scala, Haskell, Zig, Perl, F#, PowerShell)
 - **No daemon** — the MCP server keeps an in-memory index (incremental, always fresh), so you get daemon-speed queries without a background process, staleness, or anything to crash
@@ -70,6 +71,6 @@ So I built codeloom: a map of your repo for agents. One file, zero deps, no daem
 • `--plan "task"` → read these files, in this order
 • `--cross` → the real call path across files
 
-**5/6** The MCP server is zero-dependency too — pure stdlib JSON-RPC over stdio, 24 tools, with an in-memory index that's always fresh. Register it in Claude Code / Cursor / Codex and your agent calls codeloom natively. No `pip install`, no daemon, no stale index.
+**5/6** The MCP server is zero-dependency too — pure stdlib JSON-RPC over stdio, 25 tools, with an in-memory index that's always fresh. Register it in Claude Code / Cursor / Codex and your agent calls codeloom natively. No `pip install`, no daemon, no stale index.
 
-**6/6** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.23.0 released. 99% token savings, no routing errors (single natural-language entry point), framework-aware, 25-language tree-sitter, persistent index for scale, nested .gitignore, cache invalidation, workspace roots, trace safety — all handled. Go use it. Feedback welcome, especially on the task-relevance ranking and summary-first retrieval.
+**6/6** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.24.0 released. 99% token savings, no routing errors (single natural-language entry point), local observability, framework-aware, 25-language tree-sitter, persistent index for scale, nested .gitignore, cache invalidation, workspace roots, trace safety — all handled. Go use it. Feedback welcome, especially on the task-relevance ranking and summary-first retrieval.
