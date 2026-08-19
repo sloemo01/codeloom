@@ -1,0 +1,140 @@
+---
+name: codemap
+description: "Use and maintain codemap: map, graph, calls, diff, MCP."
+version: 0.1.0
+author: Nehal (sloemo01), Hermes Agent
+license: MIT
+platforms: [linux, macos, windows]
+metadata:
+  hermes:
+    tags: [codemap, codebase, ai-agents, mcp, structural-intelligence]
+    related_skills: [community-signal-research, deep-web-research]
+---
+
+# codemap Skill
+
+codemap is a single-file, zero-dependency, no-daemon tool that gives AI coding
+agents a structural model of a repo (tree + outlines + import graph + call graph
++ git diff) in under a second. This skill covers how to run it, wire it into
+agents via MCP, and maintain/extend the repo.
+
+## When to Use
+
+- User asks to map a codebase, trace imports, or see what changed in a repo.
+- User asks to wire codemap into Claude Code / Cursor / Codex / Gemini (MCP).
+- User asks to extend codemap, run its tests, or re-record its demo GIF.
+- Don't use for: general codebase questions that don't need structural output.
+
+## Prerequisites
+
+- Python 3.8+ (stdlib only — no pip deps).
+- Repo files: `codemap.py`, `codemap-mcp.py`, `tests.py`, `demo.tape`,
+  `README.md`, `LAUNCH.md`.
+- `codemap` symlinked to `~/bin/codemap` (macOS/Linux) for bare-command use.
+- `vhs` (charmbracelet) installed via `brew install vhs` to re-record the GIF.
+
+## How to Run
+
+```bash
+# Map a repo (tree + outlines + entry points)
+python3 codemap.py /path/to/repo
+
+# Import dependency graph
+python3 codemap.py --graph /path/to/repo
+
+# Focus one module: what it needs + what needs it
+python3 codemap.py --graph --focus core.engine /path/to/repo
+
+# Function-level call graph (multi-language)
+python3 codemap.py --calls --focus core.engine /path/to/repo
+
+# Git-aware: structure of files changed vs HEAD
+python3 codemap.py --diff /path/to/repo
+
+# One-command agent setup
+python3 codemap.py --install-agents /path/to/repo
+
+# Token-cost estimate
+python3 codemap.py --cost /path/to/repo
+```
+
+## Quick Reference
+
+| Flag | Purpose |
+|---|---|
+| `(none)` | tree + per-module one-liners + entry points |
+| `--graph` | Python import dependency graph |
+| `--graph --focus X` | deps + dependents of module X |
+| `--calls` | function-level call graph (multi-language) |
+| `--calls --focus X` | calls inside one module |
+| `--diff` | structure of files changed vs git HEAD |
+| `--install-agents` | write/update AGENTS.md with a codemap block |
+| `--cost` | append token-cost estimate |
+| `--json` | machine-readable JSON |
+| `--write FILE` | write map to FILE |
+| `--no-outline` | skip per-file one-liners (faster) |
+| `--max-files N` | cap traversal (default 5000) |
+
+`--focus` accepts a file path, package dir, or dotted module name
+(`browser_use/agent`, `browser_use/agent/service.py`, `agent.service`).
+
+## Procedure
+
+### 1. Map a repo for an agent
+1. Run `codemap <root>` (or `--graph`, `--calls`, `--diff` as needed).
+2. Confirm output shows the tree/outlines/graph and a file count.
+3. Point the agent at the output, or write it to `AGENTS.md` via `--install-agents`.
+
+### 2. Wire into an agent via MCP
+1. Register `codemap-mcp.py` in the agent's MCP config:
+   ```json
+   { "codemap": { "command": "python3", "args": ["/path/to/codemap-mcp.py"] } }
+   ```
+   (Windows: `"command": "python"`.)
+2. Verify with a smoke test:
+   ```bash
+   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+     | python3 codemap-mcp.py
+   ```
+   Expect `serverInfo` with name `codemap-mcp`.
+3. Tools exposed: `codemap_map`, `codemap_graph`, `codemap_focus`,
+   `codemap_calls`, `codemap_diff`.
+
+### 3. Run the test suite
+```bash
+python3 tests.py
+```
+Expect `OK` (currently 11 tests). Add tests for any new feature.
+
+### 4. Re-record the demo GIF
+1. Edit `demo.tape` to showcase the features you want (map, graph+focus, calls, diff).
+2. Ensure the demo repo (`demo-repo/`) is a git repo with a committed baseline
+   and a real change so `--diff` has output.
+3. Run `vhs demo.tape` (with `~/bin` on PATH so `codemap` resolves).
+4. Verify a late frame with `vision_analyze` (extract via ffmpeg) before committing.
+
+### 5. Extend codemap
+- New CLI flag: add to `argparse` in `main()`, implement the logic, add a test.
+- New MCP tool: add to `TOOLS` list + a branch in `call_tool()` in `codemap-mcp.py`.
+- Bump `VERSION` in `codemap.py` and `SERVER_VERSION` in `codemap-mcp.py`.
+- Update `README.md` (usage, feature table, roadmap) and `LAUNCH.md` if launch copy changes.
+
+## Pitfalls
+
+- `--diff` requires the target to be a git repo with a committed baseline;
+  otherwise it reports "No changes vs HEAD."
+- `--calls` uses lightweight regex (not tree-sitter) — less precise than
+  codebase-memory-mcp but zero-dep. Good enough for structural understanding.
+- The call graph filters to repo-defined functions only; builtins/stdlib are
+  dropped as noise.
+- `--focus` suffix-matches dotted names (e.g. `core.engine` → `src.core.engine`).
+- The current session's skill loader is cached — a newly created skill isn't
+  visible until a new session.
+- Windows: use `python` not `python3`; paths use `\`.
+
+## Verification
+
+- `python3 tests.py` → `OK` (11 tests).
+- `codemap --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
+- MCP smoke test returns `serverInfo` name `codemap-mcp`.
+- `demo.gif` exists and a late frame shows the intended feature output.

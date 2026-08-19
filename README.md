@@ -235,6 +235,12 @@ PRs welcome. The whole thing is one file — easy to read, easy to test. Run the
 suite with `python3 tests.py`. Ideas that fit the ethos: keep it zero-dependency,
 keep it fast, keep it one file.
 
+## Agent skill
+
+A ready-to-load Hermes skill for using and maintaining codemap ships in
+[`skills/codemap/SKILL.md`](skills/codemap/SKILL.md) — covers every flag, MCP
+wiring, the test suite, re-recording the demo GIF, and how to extend the tool.
+
 ## License
 
 MIT — do whatever you want with it.
