@@ -80,6 +80,9 @@ python3 codemap.py --incremental /path/to/repo
 
 # Security check (SHA-256)
 python3 codemap.py --verify codemap.py
+
+# Runtime trace (captures dynamic imports/monkeypatching)
+python3 codemap.py --trace tests.py /path/to/repo
 ```
 
 ## Quick Reference
@@ -102,10 +105,16 @@ python3 codemap.py --verify codemap.py
 | `--usages X` | find where a symbol is used (call sites + snippet) |
 | `--incremental` | files changed since last run (hash cache) |
 | `--verify FILE` | print SHA-256 of a file |
+| `--trace CMD` | run a command, record runtime call edges |
 | `--json` | machine-readable JSON |
 | `--write FILE` | write map to FILE |
 | `--no-outline` | skip per-file one-liners (faster) |
 | `--max-files N` | cap traversal (default 5000) |
+
+**Optional precision backends** (auto-enabled when present, zero-dep otherwise):
+- `tree-sitter` + grammars → precise multi-language AST parsing
+- `CODEmap_EMBED_BASE_URL`/`CODEmap_EMBED_API_KEY` or `sentence-transformers` → semantic task scoring
+- `--trace` → runtime call edges (static blind spots)
 
 `--focus` accepts a file path, package dir, or dotted module name
 (`browser_use/agent`, `browser_use/agent/service.py`, `agent.service`).
@@ -132,7 +141,7 @@ python3 codemap.py --verify codemap.py
 3. Tools exposed: `codemap_map`, `codemap_graph`, `codemap_focus`,
    `codemap_calls`, `codemap_diff`, `codemap_impact`, `codemap_task`,
    `codemap_plan`, `codemap_cross`, `codemap_search`, `codemap_usages`,
-   `codemap_incremental`, `codemap_verify`.
+   `codemap_incremental`, `codemap_verify`, `codemap_trace`.
 
 ### 3. Run the test suite
 ```bash
@@ -168,7 +177,7 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (22 tests).
+- `python3 tests.py` → `OK` (24 tests).
 - `codemap --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codemap --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codemap --task "text" <root>` returns a ranked module list.
@@ -176,5 +185,6 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 - `codemap --search <symbol> <root>` returns symbol locations + snippet.
 - `codemap --usages <symbol> <root>` returns call sites + snippet.
 - `codemap --incremental <root>` returns changed files (hash cache).
+- `codemap --trace <cmd> <root>` returns runtime call edges (or none).
 - MCP smoke test returns `serverInfo` name `codemap-mcp`.
 - `demo.gif` exists and a late frame shows the intended feature output.

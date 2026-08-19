@@ -32,7 +32,7 @@ import codemap  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codemap-mcp"
-SERVER_VERSION = "0.8.0"
+SERVER_VERSION = "0.9.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -246,6 +246,23 @@ TOOLS: List[Dict[str, Any]] = [
             "required": ["path"],
         },
     },
+    {
+        "name": "codemap_trace",
+        "description": (
+            "Run a command (e.g. a test script) under sys.settrace and record the "
+            "ACTUAL runtime call edges. Captures dynamic imports and monkeypatching "
+            "that static analysis misses. Opt-in because it executes code."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "command": {"type": "array", "items": {"type": "string"},
+                            "description": "Command to run, e.g. ['tests.py']"},
+            },
+            "required": ["command"],
+        },
+    },
 ]
 
 
@@ -362,6 +379,11 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if not path:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'path' argument"}]}
         text = codemap.render_verify(path)
+    elif name == "codemap_trace":
+        command = args.get("command")
+        if not command:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'command' argument"}]}
+        text = codemap.render_trace(list(command), root)
     else:
         return {"isError": True, "content": [{"type": "text", "text": f"unknown tool: {name}"}]}
 

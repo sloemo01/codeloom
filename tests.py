@@ -294,6 +294,31 @@ class TestCodemap(unittest.TestCase):
         self.assertIn("src.cli", mods)
         self.assertIn("src.core.engine", mods)
 
+    def test_tree_sitter_backend(self):
+        # tree-sitter should catch 'export function' that regex misses
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, "util.js"), "w") as f:
+                f.write("export function helper() { return 1; }\nfunction main() { helper(); }\n")
+            files = [os.path.join(tmp, "util.js")]
+            calls = codemap.build_call_graph_multi(files, tmp)
+            # if tree-sitter is available, helper should be found
+            if codemap._TS_AVAILABLE:
+                self.assertIn("helper", calls.get("util", {}).get("main", set()))
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_embedding_backend_graceful(self):
+        # without an embedding backend, task_relevance should still work
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        results = codemap.task_relevance(files, self.repo, "retry logic")
+        self.assertTrue(results)
+        self.assertEqual(results[0]["module"], "src.utils.retry")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

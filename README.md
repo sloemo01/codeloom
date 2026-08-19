@@ -99,6 +99,7 @@ codemap --search SYMBOL      # search the symbol index (definitions + snippet)
 codemap --usages SYMBOL      # find where a symbol is used (call sites + snippet)
 codemap --incremental        # show files changed since last run (hash-based cache)
 codemap --verify FILE        # print SHA-256 of a file (security check)
+codemap --trace CMD          # run a command, record runtime call edges
 codemap --no-outline         # skip per-file one-liners (faster)
 codemap --max-files 2000     # cap traversal (default 5000)
 ```
@@ -270,13 +271,14 @@ stdio — no `mcp` package, no daemon). Register it with any MCP-capable agent:
 }
 ```
 
-Exposes thirteen tools: `codemap_map`, `codemap_graph`, `codemap_focus`,
+Exposes fourteen tools: `codemap_map`, `codemap_graph`, `codemap_focus`,
 `codemap_calls`, `codemap_diff`, `codemap_impact`, `codemap_task`,
 `codemap_plan`, `codemap_cross`, `codemap_search`, `codemap_usages`,
-`codemap_incremental`, `codemap_verify`. Your agent can build a mental model,
-trace execution flow across files, see what changed, predict blast radius, get
-a task-oriented reading plan, search any symbol, find where it's used, and
-verify a download — natively, no install, no index.
+`codemap_incremental`, `codemap_verify`, `codemap_trace`. Your agent can build
+a mental model, trace execution flow across files, see what changed, predict
+blast radius, get a task-oriented reading plan, search any symbol, find where
+it's used, verify a download, and capture runtime call edges — natively, no
+install, no index.
 
 ## How it works
 
@@ -303,23 +305,28 @@ codemap is a single Python file using only the standard library:
 No indexing daemon, no background process, no network. It reads your files,
 computes the structure, prints it, and exits.
 
-## Known limits (honest)
+## Known limits (honest) — and how each is removed
 
-codemap trades precision for its single-file/zero-dep design. These are
-deliberate, documented tradeoffs — not bugs:
+codemap trades precision for its single-file/zero-dep design. But every limit
+now has an **optional progressive-enhancement backend** that removes it when the
+richer tool is present — the zero-dep core always works, and the precision
+ceiling rises when you opt in:
 
-- **Regex multi-language analysis is best-effort.** The non-Python call graph
-  and import detection use regex, not tree-sitter. It will miss some language
-  idioms (dynamic dispatch, higher-order calls) and can mis-attribute calls.
-  Python analysis uses precise `ast` and is much more accurate.
-- **Static analysis misses runtime wiring.** Dynamic imports, monkeypatching,
-  and import-time tricks aren't visible to any static analyzer — including
-  tree-sitter tools. codemap is for *structure*, not guaranteed correctness.
-- **Import resolution is heuristic.** It handles common layouts, namespace
-  packages, and source-root-relative imports, but unusual `sys.path` setups
-  may mis-resolve. The suffix-match fallback covers most cases.
-- **Task scoring is a heuristic.** Token overlap + graph centrality is fast and
-  effective, but won't match semantic-embedding relevance for nuanced tasks.
+- **Regex multi-language analysis is best-effort.** *Removed by:* install
+  `tree-sitter` + language grammars (`pip install tree-sitter tree-sitter-python
+  tree-sitter-javascript tree-sitter-typescript tree-sitter-go tree-sitter-rust`).
+  codemap then uses real AST parsing for those languages instead of regex.
+  Verified: `export function helper` (missed by regex) is caught by tree-sitter.
+- **Static analysis misses runtime wiring.** *Removed by:* `codemap --trace CMD`
+  runs a command (e.g. your test suite) under `sys.settrace` and records the
+  ACTUAL call edges — capturing dynamic imports and monkeypatching that no
+  static analyzer (including tree-sitter) can see. Opt-in because it executes code.
+- **Task scoring is a heuristic.** *Removed by:* set `CODEmap_EMBED_BASE_URL` +
+  `CODEmap_EMBED_API_KEY` (OpenAI-compatible) or install `sentence-transformers`.
+  codemap then uses real semantic embeddings for `--task` relevance instead of
+  token overlap.
+- **Import resolution is heuristic.** Handles common layouts, namespace packages,
+  and source-root-relative imports; unusual `sys.path` setups may mis-resolve.
 - **No persistent index.** codemap is always-fresh (reads files live) rather
   than maintaining a background index. `--incremental` mitigates repeated-run
   cost, but it's not a daemon-backed knowledge graph.
@@ -382,6 +389,9 @@ the fastest way to answer "what is this project, actually?"
 - [x] Full `.gitignore` support (negation, anchoring, `**`, dir-only)
 - [x] Symlink loop protection + Windows-safe path handling
 - [x] Security check (`--verify`, SHA-256)
+- [x] Optional tree-sitter backend (multi-language precision)
+- [x] Optional embedding backend (task-scoring precision)
+- [x] Runtime trace mode (`--trace`, static blind spots)
 - [ ] Persistent knowledge-graph index (daemon-backed, for monorepos)
 
 ## Benchmarks

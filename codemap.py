@@ -29,7 +29,279 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.8.0"
+VERSION = "0.9.0"
+
+# --------------------------------------------------------------------------- #
+# Optional progressive-enhancement backends.
+# codemap stays zero-dependency by default, but gets dramatically more precise
+# when richer tools are present. Each backend is gated on a `try: import` so
+# the core always works with stdlib only. See README "Known limits" for how
+# each limit is removed.
+# --------------------------------------------------------------------------- #
+
+# --- Optional tree-sitter backend (multi-language precision) ----------------
+# If tree_sitter + a language grammar are importable, use real AST parsing for
+# that language instead of regex. Falls back to regex when absent.
+_TS_AVAILABLE = False
+_TS_LANG = {}  # ext -> (Language, query-for-functions)
+try:
+    import tree_sitter
+    from tree_sitter import Language, Parser  # noqa: F401
+    _TS_AVAILABLE = True
+except ImportError:
+    _TS_AVAILABLE = False
+
+def _ts_grammar_for(ext: str):
+    """Return a tree-sitter Language for a file extension, or None."""
+    if not _TS_AVAILABLE:
+        return None
+    try:
+        if ext == ".py":
+            import tree_sitter_python
+            return Language(tree_sitter_python.language())
+        if ext in (".js", ".jsx"):
+            import tree_sitter_javascript
+            return Language(tree_sitter_javascript.language())
+        if ext in (".ts", ".tsx"):
+            import tree_sitter_typescript
+            return Language(tree_sitter_typescript.language())
+        if ext == ".go":
+            import tree_sitter_go
+            return Language(tree_sitter_go.language())
+        if ext == ".rs":
+            import tree_sitter_rust
+            return Language(tree_sitter_rust.language())
+    except Exception:
+        return None
+    return None
+
+def _ts_parse(path: str, ext: str):
+    """Parse a file with tree-sitter, returning the root node or None."""
+    lang = _ts_grammar_for(ext)
+    if lang is None:
+        return None
+    try:
+        parser = Parser(lang)
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            tree = parser.parse(f.read().encode("utf-8"))
+        return tree.root_node
+    except Exception:
+        return None
+
+def _ts_function_names(root_node) -> set:
+    """Extract function/class names from a tree-sitter tree (best-effort)."""
+    names = set()
+    if root_node is None:
+        return names
+    def walk(node):
+        t = node.type
+        if t in ("function_definition", "function_declaration", "method_definition",
+                 "class_declaration", "struct_item", "impl_item", "func_declaration",
+                 "func_literal", "method_declaration", "type_declaration"):
+            # find the name child
+            for child in node.children:
+                if child.type in ("identifier", "name", "type_identifier", "field_identifier"):
+                    names.add(child.text.decode("utf-8", "replace"))
+                    break
+        for child in node.children:
+            walk(child)
+    walk(root_node)
+    return names
+
+def _ts_call_edges(root_node) -> set:
+    """Extract (caller, callee) pairs from a tree-sitter tree (best-effort)."""
+    edges = set()
+    if root_node is None:
+        return edges
+    def walk(node):
+        if node.type in ("function_definition", "function_declaration", "method_definition",
+                         "func_declaration", "method_declaration"):
+            caller = None
+            for child in node.children:
+                if child.type in ("identifier", "name", "field_identifier"):
+                    caller = child.text.decode("utf-8", "replace")
+                    break
+            if caller:
+                for sub in node.children:
+                    _collect_calls(sub, caller, edges)
+        for child in node.children:
+            walk(child)
+    walk(root_node)
+    return edges
+
+def _collect_calls(node, caller, edges):
+    """Recursively collect call targets within a function body."""
+    if node.type in ("call_expression", "call", "function_call"):
+        # find the function name
+        for child in node.children:
+            if child.type in ("identifier", "field_identifier", "name"):
+                callee = child.text.decode("utf-8", "replace")
+                edges.add((caller, callee))
+                break
+    for child in node.children:
+        _collect_calls(child, caller, edges)
+
+# --- Optional embedding backend (task-scoring precision) --------------------
+# If an embedding source is available, use real semantic similarity for --task
+# relevance instead of token overlap. Sources (checked in order):
+#   1. local sentence-transformers (if installed)
+#   2. an OpenAI-compatible API via CODEmap_EMBED_BASE_URL + CODEmap_EMBED_API_KEY
+_EMBED_AVAILABLE = False
+try:
+    import numpy  # noqa: F401
+    _EMBED_AVAILABLE = True
+except ImportError:
+    _EMBED_AVAILABLE = False
+
+def _embedding_backend():
+    """Return a callable text->vector, or None if no backend available."""
+    # 1. local sentence-transformers
+    try:
+        from sentence_transformers import SentenceTransformer
+        _model = SentenceTransformer("all-MiniLM-L6-v2")
+        def _local(texts):
+            vecs = _model.encode(texts)
+            return [v.tolist() for v in vecs]
+        return _local
+    except Exception:
+        pass
+    # 2. OpenAI-compatible API
+    base = os.environ.get("CODEmap_EMBED_BASE_URL")
+    key = os.environ.get("CODEmap_EMBED_API_KEY")
+    if base and key:
+        import urllib.request
+        def _api(texts):
+            req = urllib.request.Request(
+                base.rstrip("/") + "/embeddings",
+                data=json.dumps({"model": os.environ.get("CODEmap_EMBED_MODEL", "text-embedding-3-small"),
+                                 "input": texts}).encode(),
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            return [d["embedding"] for d in data["data"]]
+        return _api
+    return None
+
+def _cosine_sim(a, b):
+    """Cosine similarity between two vectors (stdlib, no numpy needed)."""
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(x * x for x in b) ** 0.5
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+# --- Optional runtime-trace mode (static blind spots) ----------------------
+# Static analysis can't see dynamic imports/monkeypatching. --trace runs a
+# command (e.g. the test suite) under sys.settrace and records the ACTUAL call
+# edges at runtime. Opt-in because it executes code.
+_TRACE_WRAPPER = r'''
+import sys, json, os
+
+# A sys.settrace tracer that records (caller, callee) edges for functions
+# defined in the target codebase. Writes edges to a temp file on exit.
+_edges = set()
+_caller_stack = []
+
+def _trace(frame, event, arg):
+    if event == "call":
+        code = frame.f_code
+        caller = _caller_stack[-1] if _caller_stack else None
+        callee = (code.co_filename, code.co_name)
+        if caller:
+            _edges.add((caller, callee))
+        _caller_stack.append(callee)
+    elif event == "return":
+        if _caller_stack:
+            _caller_stack.pop()
+    return _trace
+
+def _run():
+    sys.settrace(_trace)
+    try:
+        # run the target script
+        import runpy
+        script = sys.argv[1]
+        sys.argv = sys.argv[1:]
+        runpy.run_path(script, run_name="__main__")
+    finally:
+        sys.settrace(None)
+        out = os.environ.get("CODEmap_TRACE_OUT", "")
+        if out:
+            with open(out, "w") as f:
+                json.dump(list(_edges), f)
+
+if __name__ == "__main__":
+    _run()
+'''
+
+def _trace_call_edges(command: List[str], cwd: str) -> dict:
+    """Run a command under sys.settrace, recording (caller, callee) edges.
+    Returns {module: {caller: set(callee)}} for codebase-defined functions.
+    Uses a wrapper script that installs a tracer and runs the target."""
+    import subprocess
+    import tempfile
+    if not command:
+        return {}
+    # write the wrapper to a temp file
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+        f.write(_TRACE_WRAPPER)
+        wrapper = f.name
+    out_path = os.path.join(tempfile.gettempdir(), "codemap_trace_out.json")
+    env = dict(os.environ)
+    env["CODEmap_TRACE_OUT"] = out_path
+    try:
+        subprocess.run(
+            [sys.executable, wrapper] + command,
+            cwd=cwd, env=env, timeout=60, capture_output=True,
+        )
+        with open(out_path, "r") as f:
+            raw_edges = json.load(f)
+    except Exception:
+        raw_edges = []
+    finally:
+        try:
+            os.unlink(wrapper)
+            os.unlink(out_path)
+        except OSError:
+            pass
+    # group edges by module (relative to cwd)
+    result: dict = {}
+    for (caller_file, caller_name), (callee_file, callee_name) in raw_edges:
+        # skip stdlib/site-packages/frozen modules
+        if caller_file.startswith("<") or callee_file.startswith("<"):
+            continue
+        if "site-packages" in caller_file or "site-packages" in callee_file:
+            continue
+        if "dist-packages" in caller_file or "dist-packages" in callee_file:
+            continue
+        try:
+            cmod = os.path.relpath(caller_file, cwd)
+            callee_mod = os.path.relpath(callee_file, cwd)
+        except ValueError:
+            continue
+        # only keep codebase-defined (relative paths, not outside the repo)
+        if cmod.startswith("..") or callee_mod.startswith(".."):
+            continue
+        result.setdefault(cmod, {}).setdefault(caller_name, set()).add(callee_name)
+    return result
+
+def render_trace(command: List[str], cwd: str) -> str:
+    """Render the runtime call edges from --trace."""
+    edges = _trace_call_edges(command, cwd)
+    buf = io.StringIO()
+    buf.write(f"# runtime trace: {' '.join(command)}\n")
+    if not edges:
+        buf.write("No codebase-defined call edges recorded (or command produced none).\n")
+        return buf.getvalue()
+    total = sum(len(c) for c in edges.values())
+    buf.write(f"{len(edges)} modules, {total} callers\n\n")
+    for mod, funcs in sorted(edges.items()):
+        for caller, callees in sorted(funcs.items()):
+            if callees:
+                buf.write(f"  {mod}.{caller}() -> {', '.join(sorted(callees))}\n")
+    return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
 # Language / structure detection
@@ -1158,12 +1430,30 @@ def _module_tokens(path: str) -> set:
 def task_relevance(files: List[str], root: str, task: str, top: int = 10) -> List[dict]:
     """Rank modules by relevance to a task string. Score = token overlap (weighted
     by module-name matches) + graph centrality bonus. Uses the multi-language
-    import graph so non-Python modules participate too."""
+    import graph so non-Python modules participate too.
+
+    If an embedding backend is available (local sentence-transformers or an
+    OpenAI-compatible API via CODEmap_EMBED_* env vars), semantic similarity
+    replaces token overlap for much better relevance ranking."""
     task_tokens = _tokenize(task)
     if not task_tokens:
         return []
     # build multi-language import graph for centrality
     graph = build_graph_multi(files, root)
+
+    # optional embedding backend
+    embed = _embedding_backend()
+    embed_vectors = None
+    if embed is not None:
+        try:
+            # embed the task + each module's first ~200 chars
+            texts = [task] + [_module_preview(f) for f in files]
+            vecs = embed(texts)
+            task_vec = vecs[0]
+            embed_vectors = {f: vecs[i + 1] for i, f in enumerate(files)}
+        except Exception:
+            embed_vectors = None
+
     scored = []
     for f in files:
         ext = os.path.splitext(f)[1].lower()
@@ -1172,18 +1462,31 @@ def task_relevance(files: List[str], root: str, task: str, top: int = 10) -> Lis
         mod = module_name_of(f, root)
         toks = _module_tokens(f)
         overlap = len(task_tokens & toks)
-        if overlap == 0:
+        if overlap == 0 and embed_vectors is None:
             continue
         # module-name match bonus: if the module name itself matches a task token
         mod_tokens = _tokenize(mod)
         name_bonus = len(task_tokens & mod_tokens) * 3
         # centrality: how many modules depend on this one (transitively)
         centrality = len(reachable(graph, mod, "in"))
-        score = overlap * 2 + name_bonus + min(centrality, 10)
+        if embed_vectors is not None:
+            # semantic similarity dominates when embeddings are available
+            sim = _cosine_sim(task_vec, embed_vectors.get(f, []))
+            score = sim * 100 + name_bonus + min(centrality, 10)
+        else:
+            score = overlap * 2 + name_bonus + min(centrality, 10)
         scored.append({"module": mod, "path": f, "score": score,
                        "overlap": overlap, "centrality": centrality})
     scored.sort(key=lambda s: (-s["score"], s["module"]))
     return scored[:top]
+
+def _module_preview(path: str, max_chars: int = 200) -> str:
+    """Return a short preview of a module's content for embedding."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read(max_chars)
+    except OSError:
+        return ""
 
 def render_task(files: List[str], root: str, task: str, top: int = 10) -> str:
     results = task_relevance(files, root, task, top)
@@ -1301,8 +1604,10 @@ CALL_LANG_RULES: dict = {
 }
 
 def build_call_graph_multi(files: List[str], root: str) -> dict:
-    """Multi-language call graph via regex. {module: {func: set(called_funcs)}}.
-    Only reports calls to functions defined in the codebase (builtins filtered)."""
+    """Multi-language call graph. {module: {func: set(called_funcs)}}.
+    Uses tree-sitter for precise AST parsing when a grammar is available;
+    falls back to regex otherwise. Only reports calls to functions defined in
+    the codebase (builtins filtered)."""
     # First pass: collect defined function names per module.
     defined: dict = {}
     for f in files:
@@ -1311,6 +1616,11 @@ def build_call_graph_multi(files: List[str], root: str) -> dict:
             continue
         mod = module_name_of(f, root)
         defined[mod] = set()
+        # tree-sitter fast-path for precise function names
+        ts_root = _ts_parse(f, ext)
+        if ts_root is not None:
+            defined[mod] = _ts_function_names(ts_root)
+            continue
         try:
             with open(f, "r", encoding="utf-8", errors="replace") as fh:
                 text = fh.read()
@@ -1334,6 +1644,15 @@ def build_call_graph_multi(files: List[str], root: str) -> dict:
             continue
         mod = module_name_of(f, root)
         calls[mod] = {}
+        # tree-sitter fast-path for precise call edges
+        ts_root = _ts_parse(f, ext)
+        if ts_root is not None:
+            for caller, callee in _ts_call_edges(ts_root):
+                if callee in all_defined and callee != caller:
+                    calls[mod].setdefault(caller, set()).add(callee)
+            # drop empty callers
+            calls[mod] = {k: v for k, v in calls[mod].items() if v}
+            continue
         try:
             with open(f, "r", encoding="utf-8", errors="replace") as fh:
                 text = fh.read()
@@ -1459,10 +1778,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--usages", metavar="SYMBOL", help="find where a symbol is used (not just defined)")
     p.add_argument("--incremental", action="store_true", help="show files changed since last run (hash-based cache)")
     p.add_argument("--verify", metavar="FILE", help="print SHA-256 of a file (security check)")
+    p.add_argument("--trace", nargs="+", metavar="CMD", help="run a command under sys.settrace, record runtime call edges")
     p.add_argument("--version", action="version", version=f"codemap {VERSION}")
     args = p.parse_args(argv)
 
     root = os.path.abspath(args.root)
+
+    # --trace: runtime call edges (static blind spots)
+    if args.trace:
+        print(render_trace(args.trace, root))
+        return 0
 
     # --verify: checksum for security
     if args.verify:
