@@ -31,6 +31,11 @@ from typing import List, Optional, Set, Tuple
 
 VERSION = "0.26.0"
 
+# Adaptive full-source threshold: symbols at or below this many tokens return
+# their actual implementation by default (no --full needed); larger symbols
+# stay summary-first to avoid a token dump. ~40 tokens ≈ a small function.
+ADAPTIVE_FULL_THRESHOLD = 40
+
 # --------------------------------------------------------------------------- #
 # Optional progressive-enhancement backends.
 # codeloom stays zero-dependency by default, but gets dramatically more precise
@@ -1992,13 +1997,19 @@ def get_snippet_by_offset(path, start_byte, end_byte):
     snippet = text[start_byte:end_byte]
     return {"text": snippet, "tokens": estimate_tokens(snippet), "bytes": len(snippet.encode("utf-8"))}
 
-def render_get_symbol(files, root, symbol, context_lines=2, summary=False):
+def render_get_symbol(files, root, symbol, context_lines=2, summary=False, adaptive=False):
     loc = get_symbol(files, root, symbol, context_lines)
     buf = io.StringIO()
     buf.write(f"# get_symbol: {symbol}\n")
     if loc is None:
         buf.write("Symbol not found.\n")
         return buf.getvalue()
+    # adaptive: return the actual implementation when it's cheap (small symbol),
+    # summary only for large symbols. Strictly better than jcodemunch — you get
+    # the implementation immediately for small symbols (like jcodemunch) PLUS
+    # call context, and you don't get a token dump for huge symbols.
+    if adaptive and loc.get("tokens", 0) <= ADAPTIVE_FULL_THRESHOLD:
+        summary = False
     if summary:
         # summary-first: signature + docstring + call graph, NOT full source.
         # This is the 95%+ token-savings lever — huge symbols return a tiny
@@ -3275,6 +3286,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                               f"~{loc.get('tokens',0)} tokens\n\n"
                               f"{loc.get('source','')}\n")
                         return 0
+                    # adaptive: small symbols return the implementation by default
+                    if loc.get("tokens", 0) <= ADAPTIVE_FULL_THRESHOLD:
+                        print(f"# get_symbol: {args.get_symbol}\n"
+                              f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
+                              f"bytes {loc.get('start_byte',0)}-{loc.get('end_byte',0)}  "
+                              f"~{loc.get('tokens',0)} tokens\n\n"
+                              f"{loc.get('source','')}\n")
+                        return 0
                     # render summary directly from the index loc (no re-parse)
                     sig = loc.get("source", "").split("\n")[0][:60] or args.get_symbol
                     print(f"# get_symbol: {args.get_symbol}\n"
@@ -3353,13 +3372,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.get_symbol:
             # summary-first by default; --full returns the full source
             use_summary = not args.full
+            # adaptive: small symbols return the implementation by default
+            if not args.full:
+                use_summary = "adaptive"
             # use persistent index if present (fast path), else build fresh
             pidx = load_persistent_index(root)
             if pidx is not None:
                 locs = pidx.get("symbols", {}).get(args.get_symbol)
                 if locs:
                     loc = locs[0]
-                    if use_summary:
+                    if use_summary == "adaptive":
+                        # adaptive: full source if small, summary if large
+                        if loc.get("tokens", 0) <= ADAPTIVE_FULL_THRESHOLD:
+                            print(f"# get_symbol: {args.get_symbol}\n"
+                                  f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
+                                  f"bytes {loc['start_byte']}-{loc['end_byte']}  ~{loc['tokens']} tokens\n\n"
+                                  f"{loc['source']}\n")
+                        else:
+                            print(render_get_symbol(files, root, args.get_symbol, summary=True))
+                    elif use_summary:
                         print(render_get_symbol(files, root, args.get_symbol, summary=True))
                     else:
                         print(f"# get_symbol: {args.get_symbol}\n"
@@ -3367,7 +3398,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                               f"bytes {loc['start_byte']}-{loc['end_byte']}  ~{loc['tokens']} tokens\n\n"
                               f"{loc['source']}\n")
                     return 0
-            print(render_get_symbol(files, root, args.get_symbol, summary=use_summary))
+            print(render_get_symbol(files, root, args.get_symbol, summary=(use_summary is True), adaptive=(use_summary == "adaptive")))
             return 0
 
         if args.search:
