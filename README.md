@@ -288,6 +288,20 @@ retrieval vs a grep-and-read baseline:
 Summary-first retrieval turns the huge-symbol case (which used to *lose* 983%
 tokens) into a 99%+ win. That's the honest 95%+ claim — measured, not marketed.
 
+**On jcodemunch's own benchmark corpus** (the repos it benchmarks against):
+
+| repo | symbols found | baseline (grep+read) | codeloom | savings |
+|---|---|---|---|---|
+| **fastapi** | 5/5 | 665,765 | 7,465 | **98.9%** |
+| express | 2/5 | 17,806 | ~0 | (partial — see note) |
+| gin | 3/4 | 2,227 | ~0 | (partial — see note) |
+
+The honest headline is **fastapi: 98.9%** — a real, large repo (329 files)
+where codeloom found all 5 queried symbols. The express/gin figures are
+excluded from the headline because codeloom only resolved a subset of the
+queried symbols there (2/5 and 3/4), so their "100%" is not a fair comparison.
+Full methodology in [`benchmarks/`](benchmarks/README.md).
+
 ## Task-aware intelligence (`--task`, `--impact`, `--plan`)
 
 The competitors are all *retrieval* tools — they help an agent **find** things.
