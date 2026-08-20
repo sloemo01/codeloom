@@ -10,7 +10,7 @@ Everything codeloom can do, in one place. Zero-dependency, single file, no daemo
 | `codeloom --json` | Machine-readable JSON map for tooling |
 | `codeloom --write MAP.md` | Write the map to a file |
 | `codeloom --no-outline` | Skip per-file one-liners (faster) |
-| `codeloom --max-files N` | Cap traversal (default 5000) |
+| `codeloom --max-files N` | Cap traversal (default 20000) |
 
 ## Structural intelligence
 

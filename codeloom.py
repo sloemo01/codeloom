@@ -12,7 +12,7 @@ Usage:
     codeloom /path/to/repo         # map a specific repo
     codeloom --write MAP.md        # also write to MAP.md (gitignored-friendly)
     codeloom --json                # machine-readable JSON for tooling
-    codeloom --max-files 2000      # cap traversal (default 5000)
+    codeloom --max-files 20000     # cap traversal (default 20000)
 
 Runs 100% locally. No network, no API keys, no GPU.
 """
@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.48.0"
+VERSION = "0.49.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols

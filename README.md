@@ -34,8 +34,9 @@ to re-learn the codebase. No install. No daemon. No GPU. Runs 100% on your machi
 **Zero-install, zero-telemetry, offline.** codeloom is a single stdlib file you
 copy in — no `pip install`, no model downloads, no license validation, no
 telemetry that phones home. It reads your files, computes the structure, prints
-it, and exits. The heavyweight tools (jcodemunch, semble) can't say that: they
-ship telemetry, model downloads, and license checks. codeloom has none of it.
+it, and exits. The heavyweight tools (jcodemunch, codegraph, codebase-memory-mcp)
+can't say that: they ship telemetry, model downloads, and license checks.
+codeloom has none of it.
 
 **Git-diffable.** `codeloom --write MAP.md` produces a reviewable text artifact
 you commit and diff in PRs — the map changes visibly when the code changes.
@@ -44,7 +45,7 @@ a file your team can read, review, and version.
 
 ## Agent reasoning, not just retrieval
 
-The search tools (jcodemunch, semble, codebase-memory-mcp) answer one question:
+The search tools (jcodemunch, codegraph, codebase-memory-mcp) answer one question:
 *"Where is this symbol?"* codeloom answers the questions that actually matter
 when an agent is working:
 
@@ -194,7 +195,7 @@ codeloom --install-grammars   # install tree-sitter grammars (opt-in precision)
 codeloom --index              # build + save a persistent byte-offset index (scale)
 codeloom --index-status       # show persistent index status/freshness
 codeloom --no-outline         # skip per-file one-liners (faster)
-codeloom --max-files 2000     # cap traversal (default 5000)
+codeloom --max-files 20000    # cap traversal (default 20000; raise for 10M+ LOC monorepos)
 ```
 
 ## Deep structural intelligence (`--cross`, `--search`)
@@ -245,8 +246,8 @@ codeloom --grep "retry" .
 ```
 
 Ranking: exact-word matches first, then substring, then case-insensitive.
-This closes the snippet-search gap — the one thing semble does that codeloom
-previously didn't.
+This closes the snippet-search gap — the one thing codebase-memory-mcp does
+that codeloom previously didn't.
 
 ## Token-efficient read (`--read`)
 
@@ -477,7 +478,7 @@ official codeloom and not tampered with:
 
 ```bash
 codeloom --verify codeloom.py
-# sha256: bd4b63de974d2b1411d11847ff6d541a60f9252482da030e5bdcfd4f1c1262ef
+# sha256: <current release checksum — see GitHub releases>
 ```
 
 ## Why no daemon (the MCP server is better)
@@ -595,17 +596,27 @@ stdio — no `mcp` package, no daemon). Register it with any MCP-capable agent:
 }
 ```
 
-Exposes twenty-five tools: `codeloom_map`, `codeloom_graph`, `codeloom_focus`,
+Exposes **53 tools**: `codeloom_map`, `codeloom_graph`, `codeloom_focus`,
 `codeloom_calls`, `codeloom_diff`, `codeloom_impact`, `codeloom_task`,
 `codeloom_plan`, `codeloom_pack`, `codeloom_cross`, `codeloom_search`,
 `codeloom_usages`, `codeloom_grep`, `codeloom_read`, `codeloom_explain`,
 `codeloom_similar`, `codeloom_deadcode`, `codeloom_get_symbol`,
 `codeloom_snippet`, `codeloom_incremental`, `codeloom_verify`,
 `codeloom_trace`, `codeloom_ask` (single natural-language entry point),
-`codeloom_framework`, `codeloom_session_report`. Your agent can build
+`codeloom_framework`, `codeloom_session_report`, `codeloom_watch`,
+`codeloom_loom`, `codeloom_remember`, `codeloom_churn`,
+`codeloom_hybrid_search`, `codeloom_seen`, `codeloom_cross_repo`,
+`codeloom_architecture`, `codeloom_heatmap`, `codeloom_explain_topic`,
+`codeloom_docs`, `codeloom_refactor`, `codeloom_rename`,
+`codeloom_bug_predict`, `codeloom_timeline`, `codeloom_dedup`,
+`codeloom_plugin_sdk`, `codeloom_lsp`, `codeloom_lsp_symbol`,
+`codeloom_langs`, `codeloom_graph_html`, `codeloom_find`,
+`codeloom_context_diff`, `codeloom_check_edit`, `codeloom_check_delete`,
+`codeloom_resume`, `codeloom_precision`, and more. Your agent can build
 a mental model, trace execution flow across files, see what changed, predict
-blast radius, get a task-oriented reading plan, search any symbol, find where
-it's used, grep for snippets, read exact symbol source, explain a symbol, find
+blast radius, get a task-oriented reading plan or one-shot task brief
+(`--ask`), search any symbol, find where it's used, grep for snippets, read
+exact symbol source, explain a symbol, check a rename's blast radius, find
 refactoring candidates, detect dead code, retrieve token-counted snippets,
 extract byte ranges, verify a download, capture runtime call edges, detect the
 framework, and summarize session cost — natively, no install, no index.
@@ -616,7 +627,7 @@ codeloom is a single Python file using only the standard library:
 
 - **Tree + outlines** — walks the repo, respects `.gitignore` (full pattern
   support: negation, anchoring, `**`, dir-only), guards against symlink loops,
-  and reads the top-level declarations of each file across 18 languages.
+  and reads the top-level declarations of each file across 130+ extensions.
 - **Import graph** — parses Python with the built-in `ast` module to resolve
   absolute, relative, importer-relative, and source-root-relative imports into
   a dependency graph. Non-Python languages (JS/TS, Go, Rust, Java, C/C++, C#,
@@ -738,7 +749,7 @@ structural context, in one file, in under a second, always fresh.
 exposes **6 MCP tools** (`set_tool_tier`, `announce_model`, `jcodemunch_guide`,
 `order`, `menu`, `route`) that route to **91 internal actions** (`index_repo`,
 `search_symbols`, `get_symbol_source`, etc.) — and its own users report it as
-"30 tools" over the 50-tool limit (#297). codeloom has **24 MCP tools** and,
+"30 tools" over the 50-tool limit (#297). codeloom has **53 MCP tools** and,
 critically, **1 natural-language entry point** (`codeloom_ask`) that routes
 deterministically — so the agent's effective surface is **1 tool**, not
 6-over-91 or 30. That's the routing complexity that causes jcodemunch's 30%
@@ -751,7 +762,7 @@ codeloom's design answers them:
 
 | User pain (jcodemunch issue) | codeloom |
 |---|---|
-| **Too many tools** (#297: 109 tools across jMunch, over the 50 limit) | **24 tools + 1 entry point** (`codeloom_ask`) |
+| **Too many tools** (#297: 109 tools across jMunch, over the 50 limit) | **53 tools + 1 entry point** (`codeloom_ask`) |
 | **Token overhead on grep tasks** (#142: 1.31x more tokens, 2.43x cache reads) | **summary-first `--get-symbol` + `--pack`** (token-minimal by design) |
 | **Framework-aware intelligence** (#201: Laravel/Next.js conventions) | **`--framework`** (detects framework + routes/models/config/conventions) |
 | **Install friction** (#308, #273: PyPI unavailable, hook support) | **one file, copy it** + `pip install codeloom` |

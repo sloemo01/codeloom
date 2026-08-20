@@ -18,7 +18,7 @@ codeloom [OPTIONS] [ROOT]
 | `--json` | Machine-readable JSON map |
 | `--write FILE` | Write the map to FILE |
 | `--no-outline` | Skip per-file one-liners (faster) |
-| `--max-files N` | Cap traversal (default 5000) |
+| `--max-files N` | Cap traversal (default 20000) |
 | `--version` | Print version |
 
 ## Structural

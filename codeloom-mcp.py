@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.48.0"
+SERVER_VERSION = "0.49.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -50,7 +50,7 @@ TOOLS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
         },
     },
@@ -64,7 +64,7 @@ TOOLS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
         },
     },
@@ -81,7 +81,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "module": {"type": "string", "description": "Module to focus on, e.g. 'core.engine' or 'src/core/engine.py'"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["module"],
         },
@@ -98,7 +98,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "module": {"type": "string", "description": "Optional: restrict to one module's calls"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
         },
     },
@@ -113,7 +113,7 @@ TOOLS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
         },
     },
@@ -129,7 +129,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "module": {"type": "string", "description": "Module to analyze, e.g. 'core.engine' or 'src/core/engine.py'"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["module"],
         },
@@ -146,7 +146,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "symbol": {"type": "string", "description": "Symbol to check, e.g. 'retry' or 'Engine'"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["symbol"],
         },
@@ -163,7 +163,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "symbol": {"type": "string", "description": "Function to check, e.g. 'retry' or 'Engine'"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["symbol"],
         },
@@ -180,7 +180,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "task": {"type": "string", "description": "Task description, e.g. 'fix the login bug'"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["task"],
         },
@@ -197,7 +197,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "task": {"type": "string", "description": "Task description"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["task"],
         },
@@ -216,7 +216,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "task": {"type": "string", "description": "Task description"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["task"],
         },
@@ -233,7 +233,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "module": {"type": "string", "description": "Optional: restrict to one module's calls"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
         },
     },
@@ -249,7 +249,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "symbol": {"type": "string", "description": "Symbol name to search, e.g. 'Engine' or 'run'"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["symbol"],
         },
@@ -265,7 +265,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "symbol": {"type": "string", "description": "Symbol name to find usages of"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["symbol"],
         },
@@ -282,7 +282,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "query": {"type": "string", "description": "Text to search for, e.g. 'retry' or 'class Engine'"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["query"],
         },
@@ -299,7 +299,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "symbol": {"type": "string", "description": "Symbol name to read, e.g. 'Engine' or 'run'"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["symbol"],
         },
@@ -316,7 +316,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "symbol": {"type": "string", "description": "Symbol name to explain"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["symbol"],
         },
@@ -333,7 +333,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "symbol": {"type": "string", "description": "Symbol name to inspect"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["symbol"],
         },
@@ -349,7 +349,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "symbol": {"type": "string", "description": "Symbol to find similar ones for"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["symbol"],
         },
@@ -364,7 +364,7 @@ TOOLS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
         },
     },
@@ -383,7 +383,7 @@ TOOLS: List[Dict[str, Any]] = [
                 "symbol": {"type": "string", "description": "Symbol name to retrieve"},
                 "full": {"type": "boolean", "description": "Return full source instead of summary (default false)"},
                 "context_lines": {"type": "integer", "description": "Surrounding lines to include (default 2)"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["symbol"],
         },
@@ -415,7 +415,7 @@ TOOLS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
         },
     },
@@ -466,7 +466,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "query": {"type": "string", "description": "Natural-language request"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["query"],
         },
@@ -485,7 +485,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "task": {"type": "string", "description": "The task, e.g. 'fix the auth bug'"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["task"],
         },
@@ -517,7 +517,7 @@ TOOLS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
         },
     },
@@ -533,7 +533,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "query": {"type": "string", "description": "Search query, e.g. 'parse cli args' or 'retry'"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["query"],
         },
@@ -580,7 +580,7 @@ TOOLS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
         },
     },
@@ -596,7 +596,7 @@ TOOLS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
         },
     },
@@ -610,7 +610,7 @@ TOOLS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
         },
     },
@@ -626,7 +626,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "topic": {"type": "string", "description": "The topic/domain, e.g. 'authentication'"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["topic"],
         },
@@ -642,7 +642,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "kind": {"type": "string", "description": "'readme' or 'arch' (default readme)"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
         },
     },
@@ -657,7 +657,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "symbol": {"type": "string", "description": "Symbol/area to refactor"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["symbol"],
         },
@@ -675,7 +675,7 @@ TOOLS: List[Dict[str, Any]] = [
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "old": {"type": "string", "description": "Current symbol name"},
                 "new": {"type": "string", "description": "New symbol name"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["old", "new"],
         },
@@ -693,7 +693,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "task": {"type": "string", "description": "The task, in plain language"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["task"],
         },
@@ -708,7 +708,7 @@ TOOLS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
         },
     },
@@ -736,7 +736,7 @@ TOOLS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
         },
     },
@@ -791,7 +791,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "symbol": {"type": "string", "description": "Symbol to resolve via LSP"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["symbol"],
         },
@@ -806,7 +806,7 @@ TOOLS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
         },
     },
@@ -821,7 +821,7 @@ TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "query": {"type": "string", "description": "Natural-language query, e.g. 'find where login starts'"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["query"],
         },
