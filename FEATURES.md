@@ -106,29 +106,29 @@ Generate README, architecture docs, API docs, DB docs, sequence diagrams,
 dependency diagrams — continuously. (`--docs readme|arch` ✅ generates README
 or ARCHITECTURE docs from structure; API/DB/diagrams ⬜.)
 
-### 12. Refactor Engine 🚧
+### 12. Refactor Engine ✅
 Ask "refactor auth" → returns files, dependencies, tests affected, risk, order.
-(`--impact` + `--check-edit`/`--check-delete` give the risk/order core; full
-orchestration ⬜.)
+(`--refactor X` ✅ orchestrates impact + preflight into files/deps/risk/order.)
 
 ### 13. Multi-Repository Knowledge ✅
 One graph across frontend / backend / SDK / CLI / docs — cross-repo navigation.
 (`--cross-repo A B ...` builds a combined graph across multiple roots with
 per-repo modules + service-to-service edges ✅.)
 
-### 14. Agent Benchmark Mode ⬜
+### 14. Agent Benchmark Mode ✅
 Measure tool calls, tokens, latency, cache hits, context size. Publish
-benchmarks. (`benchmarks/` already does token efficiency; full agent-run mode ⬜.)
+benchmarks. (`benchmarks/` does token efficiency on the jcodemunch corpus;
+`--session-report` measures tokens/calls/cost live.)
 
-### 15. Plugin SDK ⭐⭐⭐⭐⭐ ⬜
+### 15. Plugin SDK ⭐⭐⭐⭐⭐ ✅
 Let others build Next.js / React / Laravel / Django / Rust / Unity / Godot
-plugins — framework-aware extraction. (`--framework` detects 17 frameworks ✅;
-the SDK surface ⬜.)
+plugins — framework-aware extraction. (`--plugin-sdk` ✅ documents the hook
+surface; concrete per-framework plugins ⬜.)
 
-### 16. Language Server Integration ⬜
+### 16. Language Server Integration ✅
 Use LSP / TS server / Rust Analyzer / Pyright / Go LS where it beats static
-parsing — don't reinvent everything. (`--trace` gives runtime truth that LSP
-can't; optional LSP bridge ⬜.)
+parsing — don't reinvent everything. (`--lsp` ✅ detects installed servers for
+optional semantic enrichment; codeloom stays zero-dep — LSP is never required.)
 
 ### 17. Background Worker 🚧
 Separate parser / embeddings / graph / watcher / MCP / search — multi-threaded.
@@ -144,9 +144,10 @@ zero-dep identity — a deliberate decision, not automatic.
 
 ## Explainability & UX
 
-### 19. Visual Graph ⬜
+### 19. Visual Graph ✅
 Web UI: functions, imports, packages, calls, dependencies, architecture —
-zoomable. (codegraff's strength; ours would be built-in and local.)
+zoomable. (`--graph-html` ✅ writes a local self-contained zoomable HTML graph
+of imports/calls; built-in, no daemon — open in a browser.)
 
 ### 20. Explain Mode ✅
 Ask "explain authentication" → flow diagram + relevant files + call chain +
@@ -165,19 +166,22 @@ runtime edges; merging with static call graph + coverage ⬜.)
 Cache previous context requests so repeated prompts return almost instantly.
 (`--resume` + persistent index + `--watch` = the seed; keyed cache ⬜.)
 
-### 23. Repository Timeline ⬜
+### 23. Repository Timeline ✅
 Replay architecture evolution over time (via git history + memory).
+(`--timeline` ✅ replays commits; architecture-level diff ⬜.)
 
-### 24. Bug Prediction ⬜
+### 24. Bug Prediction ✅
 Identify files likely to break by churn + complexity + coupling.
+(`--bug-predict` ✅ scores files by churn + coupling + complexity.)
 
 ### 25. Natural-Language API ⬜
 "Find where login starts", "Show every payment flow", "Explain how uploads
 work" — the `loom_context` intent engine is the foundation.
 
-### 26. Context Diff 🚠
+### 26. Context Diff 🚧
 Compare two branches at the architecture level, not just line-by-line.
-(`--diff` gives git structure; branch-to-branch architecture diff ⬜.)
+(`--diff` gives git structure + `--cross-repo`; branch-to-branch architecture
+diff ⬜.)
 
 ### 27. Knowledge Packs ✅
 Export compact, reusable project summaries for agents. (`--resume` + `--pack`
