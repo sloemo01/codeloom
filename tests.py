@@ -593,6 +593,18 @@ class TestCodeLoom(unittest.TestCase):
         self.assertIn("Modules", resume)
         self.assertIn("Top call sites", resume)
 
+    def test_memory_remember_read(self):
+        # repository memory: remember persists, loom_context returns it
+        # use a temp dir to avoid polluting the real demo repo
+        import tempfile, shutil
+        td = tempfile.mkdtemp()
+        try:
+            codeloom.memory_remember(td, "ARCHITECTURE", "auth uses session tokens")
+            mem = codeloom.memory_read(td)
+            self.assertIn("session tokens", mem)
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+
     def test_edit_relevance(self):
         # edit-relevance ranks the call path, not just keyword matches
         files = []

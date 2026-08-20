@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.32.0"
+VERSION = "0.33.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -3278,6 +3278,134 @@ def render_pack(files: List[str], root: str, task: str, top: int = 8,
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
+# loom_context — the intent engine (the keystone)
+# --------------------------------------------------------------------------- #
+# Instead of exposing 40 tools, expose ONE: loom_context(task). It internally
+# decides what to read and returns LAYERED context (overview -> files ->
+# symbols -> code -> git + memory), so the agent gets everything for a task
+# in one call instead of orchestrating retrieval itself.
+
+# --- repository memory (persistent) -----------------------------------------
+
+def _memory_dir(root: str) -> str:
+    d = os.path.join(root, ".codeloom-memory")
+    if not os.path.isdir(d):
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError:
+            pass
+    return d
+
+def memory_read(root: str) -> str:
+    """Read the repository memory (architecture/patterns/decisions/conventions)."""
+    buf = io.StringIO()
+    d = _memory_dir(root)
+    for name in ("ARCHITECTURE", "DECISIONS", "PATTERNS", "CONVENTIONS"):
+        p = os.path.join(d, name + ".md")
+        if os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                    buf.write(f"### {name}\n{fh.read()}\n")
+            except OSError:
+                pass
+    return buf.getvalue()
+
+def memory_remember(root: str, section: str, note: str) -> str:
+    """Append a note to the repo memory. section in {ARCHITECTURE, DECISIONS, PATTERNS, CONVENTIONS}."""
+    section = section.upper()
+    if section not in ("ARCHITECTURE", "DECISIONS", "PATTERNS", "CONVENTIONS"):
+        section = "DECISIONS"
+    d = _memory_dir(root)
+    p = os.path.join(d, section + ".md")
+    try:
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(f"- {note}\n")
+        return f"remembered: {section} <- {note}"
+    except OSError as e:
+        return f"memory write failed: {e}"
+
+# git intelligence ---------------------------------------------------------
+def git_churn(root: str, files: List[str], limit: int = 8) -> str:
+    """Most-churned files (most git commits touching them) — instability signal."""
+    if not os.path.isdir(os.path.join(root, ".git")):
+        return "no git repo"
+    import subprocess
+    buf = io.StringIO()
+    buf.write("## Git churn (most-edited files)\n")
+    counts = {}
+    for f in files[:2000]:
+        rel = os.path.relpath(f, root)
+        try:
+            r = subprocess.run(["git", "-C", root, "log", "--oneline", "--", rel],
+                               capture_output=True, text=True, timeout=10)
+            n = len(r.stdout.strip().splitlines()) if r.stdout.strip() else 0
+            if n > 0:
+                counts[rel] = n
+        except Exception:
+            continue
+    top = sorted(counts.items(), key=lambda x: -x[1])[:limit]
+    for rel, n in top:
+        buf.write(f"  {rel} ({n} commits)\n")
+    return buf.getvalue()
+
+def render_loom_context(files: List[str], root: str, task: str, max_files: int = 5000) -> str:
+    """The intent engine: layered context for a task in one call.
+    Returns Overview -> Important files -> Relevant symbols -> Code ->
+    Impact -> Git churn -> Repository memory."""
+    buf = io.StringIO()
+    buf.write(f"# loom_context: {task}\n")
+    buf.write("# Layered context for the task — read top to bottom, descend only as deep as you need.\n\n")
+
+    # Layer 0: overview (map)
+    try:
+        m = build_map(root, True, max_files)
+        buf.write("## Overview\n")
+        buf.write(f"  {m['file_count']} files, {len(m['entry_points'])} entry points\n")
+        for e in m["entry_points"][:5]:
+            buf.write(f"    {os.path.relpath(e, root)}\n")
+        buf.write("\n")
+    except Exception:
+        pass
+
+    # Layer 1: important files (edit-relevance)
+    rel = []
+    try:
+        rel = edit_relevance(files, root, task, top=8)
+        buf.write("## Important files (edit-relevance ranked)\n")
+        for i, r in enumerate(rel, 1):
+            buf.write(f"  {i}. {r['path']}\n")
+        buf.write("\n")
+    except Exception:
+        pass
+
+    # Layer 2: the relevant code (pack — embedded, capped)
+    try:
+        buf.write(render_pack(files, root, task, top=5))
+        buf.write("\n")
+    except Exception:
+        pass
+
+    # Layer 3: git context (churn on important files)
+    try:
+        buf.write(git_churn(root, [r["path"] for r in rel] if rel else files))
+        buf.write("\n")
+    except Exception:
+        pass
+
+    # Layer 4: repository memory
+    try:
+        mem = memory_read(root)
+        if mem.strip():
+            buf.write("## Repository memory\n")
+            buf.write(mem + "\n")
+    except Exception:
+        pass
+
+    buf.write("## How to use\n")
+    buf.write("This is the complete context for the task. Descend only as deep as you need.\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
 # --diff: git-aware, structure of changed files
 # --------------------------------------------------------------------------- #
 
@@ -3833,6 +3961,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--plan", metavar="TEXT", help="emit a prioritized reading plan for a task")
     p.add_argument("--pack", metavar="TEXT", help="emit a single-shot context file for a task (reading order + impact + symbols)")
     p.add_argument("--resume", action="store_true", help="emit a compact structural snapshot to restore context after compaction")
+    p.add_argument("--loom", metavar="TEXT", help="intent engine: layered context for a task (overview->files->symbols->code->git->memory)")
+    p.add_argument("--remember", metavar="NOTE", help="append a note to repository memory (default DECISIONS); use --section ARCHITECTURE|DECISIONS|PATTERNS|CONVENTIONS")
+    p.add_argument("--section", metavar="NAME", default="DECISIONS", help="memory section for --remember")
+    p.add_argument("--churn", action="store_true", help="git churn: most-edited files (instability signal)")
     p.add_argument("--cross", action="store_true", help="show cross-file call graph (resolved across modules)")
     p.add_argument("--search", metavar="SYMBOL", help="search the symbol index for a function/class/method")
     p.add_argument("--usages", metavar="SYMBOL", help="find where a symbol is used (not just defined)")
@@ -4129,7 +4261,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
     # --impact / --task / --plan / --pack: task-aware intelligence
-    if args.impact or args.task or args.plan or args.pack or args.check_edit or args.check_delete or args.resume:
+    if args.impact or args.task or args.plan or args.pack or args.check_edit or args.check_delete or args.resume or args.loom or args.remember:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
@@ -4183,6 +4315,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.resume:
             print(render_resume(files, root, args.max_files))
             return 0
+
+        if args.loom:
+            print(render_loom_context(files, root, args.loom, args.max_files))
+            return 0
+
+        if args.remember:
+            print(memory_remember(root, args.section, args.remember))
+            return 0
+
+    if args.churn:
+        gi = os.path.join(root, ".gitignore")
+        rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+        files: List[str] = []
+        _walk(root, rules, args.max_files, files)
+        print(git_churn(root, files))
+        return 0
 
     # Call-graph mode (multi-language)
     if args.graph or args.calls:

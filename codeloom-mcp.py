@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.32.0"
+SERVER_VERSION = "0.33.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -455,6 +455,56 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "codeloom_loom",
+        "description": (
+            "The intent engine. Given a task in plain English, return LAYERED "
+            "context in one call: overview -> important files (edit-relevance) "
+            "-> relevant code (pack) -> git churn -> repository memory. This is "
+            "the keystone feature — the agent gets everything for a task without "
+            "orchestrating retrieval itself."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "task": {"type": "string", "description": "The task, e.g. 'fix the auth bug'"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["task"],
+        },
+    },
+    {
+        "name": "codeloom_remember",
+        "description": (
+            "Append a note to the repository's persistent memory (architecture "
+            "decisions, patterns, conventions). Future loom_context calls return "
+            "it. Section: ARCHITECTURE | DECISIONS | PATTERNS | CONVENTIONS."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "note": {"type": "string", "description": "The decision/pattern to remember"},
+                "section": {"type": "string", "description": "ARCHITECTURE|DECISIONS|PATTERNS|CONVENTIONS (default DECISIONS)"},
+            },
+            "required": ["note"],
+        },
+    },
+    {
+        "name": "codeloom_churn",
+        "description": (
+            "Git intelligence: the most-edited files (by commit count) — an "
+            "instability signal. Helps decide which files are risky to change."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+        },
+    },
+    {
         "name": "codeloom_framework",
         "description": (
             "Detect the web/app framework (Next.js, FastAPI, Django, Laravel, "
@@ -738,6 +788,24 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     if name == "codeloom_resume":
         f = _collect_files(root, max_files)
         text = codeloom.render_resume(f, root, max_files)
+
+    if name == "codeloom_loom":
+        task = args.get("task")
+        if not task:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'task' argument"}]}
+        f = _collect_files(root, max_files)
+        text = codeloom.render_loom_context(f, root, task, max_files)
+
+    if name == "codeloom_remember":
+        note = args.get("note")
+        section = args.get("section", "DECISIONS")
+        if not note:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'note' argument"}]}
+        text = codeloom.memory_remember(root, section, note)
+
+    if name == "codeloom_churn":
+        f = _collect_files(root, max_files)
+        text = codeloom.git_churn(root, f)
 
     if name == "codeloom_map":
         m = codeloom.build_map(root, True, max_files)
