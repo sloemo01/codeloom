@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.37.0"
+SERVER_VERSION = "0.38.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -729,6 +729,38 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "codeloom_find",
+        "description": (
+            "Natural-language flow discovery: 'find where login starts' / 'show "
+            "every payment flow'. Returns the domain's entry points + call flow."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "query": {"type": "string", "description": "Natural-language query, e.g. 'find where login starts'"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "codeloom_context_diff",
+        "description": (
+            "Branch-to-branch architecture-level diff: which modules changed "
+            "between two refs, not just lines."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "base": {"type": "string", "description": "Base ref (default main)"},
+                "head": {"type": "string", "description": "Head ref (default HEAD)"},
+            },
+            "required": ["base", "head"],
+        },
+    },
+    {
         "name": "codeloom_session_report",
         "description": (
             "Summarize the local session log: total calls, tokens, and estimated "
@@ -1024,6 +1056,16 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     elif name == "codeloom_graph_html":
         f = _collect_files(root, max_files)
         text = codeloom.render_graph_html(f, root)
+    elif name == "codeloom_find":
+        query = args.get("query")
+        if not query:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'query' argument"}]}
+        f = _collect_files(root, max_files)
+        text = codeloom.render_find(f, root, query, max_files)
+    elif name == "codeloom_context_diff":
+        base = args.get("base", "main")
+        head = args.get("head", "HEAD")
+        text = codeloom.render_context_diff(root, base, head)
     elif name == "codeloom_session_report":
         return {"content": [{"type": "text", "text": codeloom.render_session_report(root)}]}
 

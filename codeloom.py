@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.37.0"
+VERSION = "0.38.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -1409,6 +1409,102 @@ def render_dedup(root: str, files: List[str]) -> str:
         buf.write(f"  + {os.path.relpath(f, root)}\n")
     if len(new_files) > 20:
         buf.write(f"  ... (+{len(new_files)-20} more)\n")
+    return buf.getvalue()
+
+# 9 (full). Session dedupe INSIDE a response: suppress already-seen symbols ----
+def dedupe_symbols(files: List[str], root: str, symbol: str) -> bool:
+    """True if this symbol was already read this session (per the local log),
+    so the caller can skip re-embedding it. Session memory, single-response."""
+    import json as _json
+    path = _session_path(root)
+    if not os.path.isfile(path):
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    e = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                cmd = e.get("cmd", "")
+                if symbol in cmd:
+                    return True
+    except OSError:
+        pass
+    return False
+
+# 25. Natural-language API: flow discovery -------------------------------------
+def render_find(files: List[str], root: str, query: str, max_files: int = 5000) -> str:
+    """Natural-language flow discovery: 'where does X start', 'show every X
+    flow'. Uses edit-relevance to find the domain modules, then returns their
+    entry points + call flows."""
+    q = query.lower()
+    # extract the topic noun (drop question verbs)
+    import re as _re
+    stop = {"where", "does", "do", "the", "a", "an", "find", "show", "every",
+            "flow", "flows", "start", "starts", "how", "explain", "what", "is"}
+    topic = None
+    for tok in _re.findall(r"[A-Za-z_][\w]*", q):
+        if tok.lower() not in stop:
+            topic = tok
+            break
+    buf = io.StringIO()
+    buf.write(f"# find: {query}\n")
+    if not topic:
+        buf.write("  No topic detected. e.g. 'find where login starts'.\n")
+        return buf.getvalue()
+    rel = edit_relevance(files, root, topic, top=6)
+    if not rel:
+        buf.write(f"  No modules related to '{topic}'. Try --search for the symbol.\n")
+        return buf.getvalue()
+    graph = build_graph_multi(files, root)
+    buf.write(f"## Entry points for '{topic}'\n")
+    # modules whose name matches the topic are likely entry points
+    matches = [r for r in rel if topic in r["module"].lower() or topic in os.path.basename(r["path"]).lower()]
+    start = matches or rel
+    for i, r in enumerate(start[:4], 1):
+        buf.write(f"  {i}. {r['path']}\n")
+    buf.write("\n## Call flow (how it reaches the domain)\n")
+    seen = set()
+    for r in start[:4]:
+        m = r["module"]
+        for dep in sorted(graph.get(m, set())):
+            if dep not in seen:
+                seen.add(dep)
+                buf.write(f"  {m} -> {dep}\n")
+    buf.write("\n# Trace deeper: `codeloom --explain-topic \"<topic>\"` or `--loom \"<topic>\"`.\n")
+    return buf.getvalue()
+
+# 26. Context diff — branch-to-branch architecture diff ------------------------
+def render_context_diff(root: str, base: str = "main", head: str = "HEAD") -> str:
+    """Compare two branches at the architecture level: which modules/entry
+    points changed, not just lines. Uses git to list changed files between
+    branches, then maps them to modules and flags architecture-level change."""
+    import subprocess
+    buf = io.StringIO()
+    buf.write(f"# context diff: {base} -> {head}\n")
+    if not os.path.isdir(os.path.join(root, ".git")):
+        buf.write("  Not a git repo.\n")
+        return buf.getvalue()
+    try:
+        r = subprocess.run(["git", "-C", root, "diff", "--name-only", f"{base}...{head}"],
+                           capture_output=True, text=True, timeout=20)
+        changed = [l for l in r.stdout.strip().splitlines() if l]
+    except Exception:
+        changed = []
+    buf.write(f"## Changed files -> modules ({len(changed)} files)\n")
+    changed_mods = set()
+    for f in changed[:30]:
+        mod = f.replace(os.sep, "/")
+        if mod.endswith((".py", ".js", ".ts", ".go", ".rs")):
+            mod = mod.rsplit(".", 1)[0].replace("/", ".")
+        changed_mods.add(mod)
+        buf.write(f"  {mod}\n")
+    buf.write(f"\n  {len(changed_mods)} architecture-level module(s) touched\n")
+    buf.write("\n# Architecture-level: whole modules added/removed/changed, not lines.\n")
     return buf.getvalue()
 
 # 15. Plugin SDK ---------------------------------------------------------------
@@ -4567,6 +4663,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--plugin-sdk", action="store_true", help="show the plugin SDK surface for framework-aware extraction")
     p.add_argument("--lsp", action="store_true", help="show LSP bridge status (optional semantic enrichment)")
     p.add_argument("--graph-html", action="store_true", help="write a local zoomable HTML graph view (codeloom-graph.html)")
+    p.add_argument("--find", metavar="QUERY", help="natural-language flow discovery: 'find where login starts'")
+    p.add_argument("--context-diff", nargs=2, metavar=("BASE", "HEAD"), help="branch-to-branch architecture-level diff (e.g. main HEAD)")
     p.add_argument("--version", action="version", version=f"codeloom {VERSION}")
     args = p.parse_args(argv)
 
@@ -4665,6 +4763,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
         print(render_graph_html(files, root))
+        return 0
+
+    if args.find:
+        gi = os.path.join(root, ".gitignore")
+        rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+        files: List[str] = []
+        _walk(root, rules, args.max_files, files)
+        print(render_find(files, root, args.find, args.max_files))
+        return 0
+
+    if args.context_diff:
+        print(render_context_diff(root, args.context_diff[0], args.context_diff[1]))
         return 0
 
     # --session-report: summarize the local session log
