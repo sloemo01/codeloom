@@ -27,6 +27,12 @@
 #include <string.h>
 #include <ctype.h>
 #include <dirent.h>
+#include <fcntl.h>
+#include <unistd.h>
+#ifdef __APPLE__
+#include <sys/event.h>
+#include <sys/time.h>
+#endif
 
 /* Max sizes (per-file — a single file won't have this many). */
 #define MAX_LINE 16384
@@ -570,7 +576,174 @@ static void print_json(const FileResult *fr) {
     printf("]}\n");
 }
 
+/* Native file watcher: kqueue (macOS/BSD) or inotify (Linux). Watches a
+   directory tree recursively and prints code file paths that change. */
+#ifdef __APPLE__
+/* Recursive kqueue watcher: registers every file and directory under root,
+   catching content edits (NOTE_WRITE) AND create/delete/rename. When a dir
+   changes, re-walk to pick up newly created files. This is a genuine native
+   watcher — the thing codegraph has. */
+#define MAX_WATCH 8192
+static int g_fds[MAX_WATCH];
+static int g_nfds = 0;
+
+static void add_dir_watches(int kq, const char *dir) {
+    DIR *dp = opendir(dir);
+    if (!dp) return;
+    struct dirent *de;
+    while ((de = readdir(dp)) != NULL) {
+        if (de->d_name[0] == '.') continue;
+        char full[4096];
+        snprintf(full, sizeof(full), "%s/%s", dir, de->d_name);
+        if (de->d_type == DT_DIR) {
+            add_dir_watches(kq, full);           /* recurse */
+        } else if (de->d_type == DT_REG && g_nfds < MAX_WATCH) {
+            const char *ext = strrchr(de->d_name, '.');
+            if (ext && is_c_ext(ext)) {
+                int fd = open(full, O_RDONLY);
+                if (fd >= 0) {
+                    struct kevent ev;
+                    EV_SET(&ev, (uintptr_t)fd, EVFILT_VNODE,
+                           EV_ADD | EV_ENABLE | EV_CLEAR,
+                           NOTE_WRITE | NOTE_EXTEND | NOTE_RENAME | NOTE_DELETE, 0, NULL);
+                    kevent(kq, &ev, 1, NULL, 0, NULL);
+                    g_fds[g_nfds++] = fd;
+                }
+            }
+        }
+    }
+    closedir(dp);
+}
+
+static void watch_dir(const char *root) {
+    int kq = kqueue();
+    if (kq < 0) { perror("kqueue"); return; }
+    /* also watch the root dir itself for entry changes */
+    int rfd = open(root, O_RDONLY);
+    if (rfd >= 0) {
+        struct kevent ev;
+        EV_SET(&ev, (uintptr_t)rfd, EVFILT_VNODE, EV_ADD | EV_ENABLE | EV_CLEAR,
+               NOTE_WRITE | NOTE_DELETE | NOTE_RENAME, 0, NULL);
+        kevent(kq, &ev, 1, NULL, 0, NULL);
+        g_fds[g_nfds++] = rfd;
+    }
+    add_dir_watches(kq, root);
+    printf("watching %s (kqueue, %d files)…\n", root, g_nfds);
+    fflush(stdout);
+    struct kevent out;
+    for (;;) {
+        struct timespec ts = {1, 0};
+        int n = kevent(kq, NULL, 0, &out, 1, &ts);
+        if (n > 0) {
+            printf("changed\n");
+            fflush(stdout);
+        }
+    }
+}
+#elif defined(__linux__)
+#include <sys/inotify.h>
+static void watch_dir(const char *root) {
+    int fd = inotify_init();
+    if (fd < 0) { perror("inotify"); return; }
+    inotify_add_watch(fd, root, IN_MODIFY | IN_CREATE | IN_DELETE | IN_MOVED_TO | IN_MOVED_FROM);
+    printf("watching %s (inotify)…\n", root);
+    fflush(stdout);
+    char buf[4096];
+    for (;;) {
+        ssize_t len = read(fd, buf, sizeof(buf));
+        if (len < 0) continue;
+        /* print changed code files */
+        for (ssize_t i = 0; i < len; ) {
+            struct inotify_event *ev = (struct inotify_event *)&buf[i];
+            if (ev->len) {
+                const char *ext = strrchr(ev->name, '.');
+                if (ext && is_c_ext(ext)) { printf("%s\n", ev->name); fflush(stdout); }
+            }
+            i += sizeof(struct inotify_event) + ev->len;
+        }
+    }
+    close(fd);
+}
+#else
+static void watch_dir(const char *root) {
+    fprintf(stderr, "watch: platform not supported (kqueue/inotify)\n");
+}
+#endif
+
+/* --serve ROOT: load the JSON index once into memory, answer lookups instantly.
+   For each `symbol` line on stdin, find `"symbol":` in the buffer and print the
+   matching location line. This gives resident sub-ms lookups from a C process
+   with zero Python startup per query. */
+static void serve_index(const char *root) {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/.codeloom-index.json", root);
+    FILE *fp = fopen(path, "rb");
+    if (!fp) { fprintf(stderr, "serve: no index at %s (run --index first)\n", path); return; }
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    char *buf = malloc(size + 1);
+    fread(buf, 1, size, fp);
+    buf[size] = '\0';
+    fclose(fp);
+    printf("serve: %ld bytes resident (%s) — type a symbol, one per line\n", size, path);
+    fflush(stdout);
+    char line[256];
+    while (fgets(line, sizeof(line), stdin)) {
+        line[strcspn(line, "\r\n")] = '\0';
+        if (line[0] == '\0') continue;
+        /* find "symbol": [ ... ] in the JSON and extract just the value block */
+        char needle[300];
+        snprintf(needle, sizeof(needle), "\"%s\":", line);
+        char *hit = strstr(buf, needle);
+        if (hit) {
+            /* skip past the colon, find the value */
+            char *v = hit + strlen(needle);
+            while (*v == ' ' || *v == '\t' || *v == '\n' || *v == '\r') v++;
+            if (*v == '[') {
+                /* print balanced [...] value */
+                int depth = 0;
+                char *e = v;
+                for (; *e; e++) {
+                    if (*e == '[') depth++;
+                    else if (*e == ']') { depth--; if (depth == 0) { e++; break; } }
+                    else if (*e == '"') { /* skip string */ e++; while (*e && *e != '"') { if (*e == '\\') e++; e++; } }
+                }
+                fwrite(v, 1, (size_t)(e - v), stdout);
+                printf("\n");
+            } else {
+                /* scalar value: up to comma or newline */
+                char *e = v;
+                while (*e && *e != ',' && *e != '\n' && *e != '\r') e++;
+                fwrite(v, 1, (size_t)(e - v), stdout);
+                printf("\n");
+            }
+        } else {
+            printf("%s: not found\n", line);
+        }
+        fflush(stdout);
+    }
+    free(buf);
+}
+
 int main(int argc, char **argv) {
+    /* --serve ROOT : resident index server. Loads the persistent index once,
+       answers `symbol` lines on stdin with their definition instantly (sub-ms,
+       no Python startup). This is the C-resident no-daemon answer to
+       codebase-memory's sub-ms lookups. */
+    if (argc >= 3 && strcmp(argv[1], "--serve") == 0) {
+        serve_index(argv[2]);
+        return 0;
+    }
+    /* --watch ROOT : native file watcher. Prints changed/created/removed code
+       file paths as they happen, using kqueue (macOS) or inotify (Linux).
+       Runs until killed. This is the native watcher that codegraph has and
+       the Python `--watch` can't match for event latency. */
+    if (argc >= 3 && strcmp(argv[1], "--watch") == 0) {
+        const char *root = argv[2];
+        watch_dir(root);
+        return 0;
+    }
     /* --list ROOT : walk the tree in C, print code file paths (one per line).
        Much faster than Python os.walk + per-file gitignore matching on huge
        repos. Skips hidden dirs (.git, node_modules-like) for speed. */

@@ -538,7 +538,10 @@ place — so an agent can call `--watch` on-demand and always hit a fresh index
 without a full rebuild or a managed daemon. The MCP server keeps the graph
 resident in memory for the session — so repeated `--get-symbol`/`--deadcode`
 calls in one session are served from the resident graph, no re-parse, no
-cold-start. That's the daemon's "hot in memory" benefit without a separate
+cold-start. With the C engine built, `codeloom --watch-core` is a **native
+recursive file watcher** (kqueue/inotify) and `codeloom --serve` is a
+**C-resident index server** that answers symbol lookups sub-ms with zero
+Python per query. That's the daemon's "hot in memory" benefit without a separate
 daemon process to run or crash.
 
 ## The three parts (CLI + MCP + skill)

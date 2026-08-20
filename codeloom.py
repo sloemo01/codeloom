@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.44.0"
+VERSION = "0.45.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -5392,6 +5392,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--index", action="store_true", help="build + save a persistent byte-offset index (scale)")
     p.add_argument("--engine", choices=["py", "c"], default="py", help="scanning engine: py (pure-Python, default) or c (compiled codeloom_core, faster — build with cc -O3 -o codeloom_core codeloom_core.c)")
     p.add_argument("--watch", action="store_true", help="incremental daemon-less refresh: re-index only changed files, keep lookups near-resident")
+    p.add_argument("--watch-core", metavar="ROOT", help="native C file watcher (kqueue/inotify): print changed code files live")
+    p.add_argument("--serve", metavar="ROOT", help="C-resident index server: answer symbol lookups sub-ms (no Python per query)")
     p.add_argument("--index-status", action="store_true", help="show persistent index status/freshness")
     p.add_argument("--framework", action="store_true", help="detect the web/app framework and surface its structure (routes, models, config, conventions)")
     p.add_argument("--architecture", action="store_true", help="detect the architectural pattern (MVC/layered/DDD/monolith)")
@@ -5556,6 +5558,34 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.watch:
         # incremental daemon-less refresh: only changed files re-indexed
         print(refresh_index_incremental(root, args.max_files))
+        return 0
+
+    if args.watch_core:
+        # native C file watcher (kqueue on macOS / inotify on Linux)
+        core = _find_core()
+        if not core:
+            print("C core not built. Run: codeloom --build-core")
+            return 1
+        import subprocess as _sp
+        wroot = args.watch_core if args.watch_core != "." else root
+        try:
+            _sp.run([core, "--watch", wroot])
+        except KeyboardInterrupt:
+            pass
+        return 0
+
+    if args.serve:
+        # C-resident index server: sub-ms lookups, no Python per query
+        core = _find_core()
+        if not core:
+            print("C core not built. Run: codeloom --build-core")
+            return 1
+        import subprocess as _sp
+        sroot = args.serve if args.serve != "." else root
+        try:
+            _sp.run([core, "--serve", sroot])
+        except KeyboardInterrupt:
+            pass
         return 0
 
     # --get-symbol / --search / --hybrid-search: fast-path (no walk where possible)
