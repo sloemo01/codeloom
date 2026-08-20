@@ -107,8 +107,10 @@ Ask "refactor auth" → returns files, dependencies, tests affected, risk, order
 (`--impact` + `--check-edit`/`--check-delete` give the risk/order core; full
 orchestration ⬜.)
 
-### 13. Multi-Repository Knowledge ⬜
+### 13. Multi-Repository Knowledge ✅
 One graph across frontend / backend / SDK / CLI / docs — cross-repo navigation.
+(`--cross-repo A B ...` builds a combined graph across multiple roots with
+per-repo modules + service-to-service edges ✅.)
 
 ### 14. Agent Benchmark Mode ⬜
 Measure tool calls, tokens, latency, cache hits, context size. Publish
