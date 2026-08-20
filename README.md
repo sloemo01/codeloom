@@ -121,6 +121,9 @@ That's it. Under a second, zero setup, works offline. Cross-platform — macOS, 
 | `codeloom --plan "X"` | "Read these files, in this order, to do task X" |
 | `codeloom --pack "X"` | "Give me the whole context for task X, in one file" |
 | `codeloom --resume` | "Restore my structural map after a compaction" (compact snapshot) |
+| `codeloom --loom "task"` | Intent engine: layered context for a task (overview→files→code→git→memory) |
+| `codeloom --remember "note" --section X` | Append to persistent repository memory |
+| `codeloom --churn` | Git intelligence: most-edited files (instability signal) |
 | `codeloom --cross` | "What calls what, across files?" (resolved call graph) |
 | `codeloom --search X` | "Where is symbol X defined?" (symbol index + snippet) |
 | `codeloom --usages X` | "Where is symbol X used?" (call sites + snippet) |
@@ -791,6 +794,7 @@ python3 benchmarks/load_once.py --repo /path/to/repo --task "fix the login bug"
 ## Documentation
 
 - **[`CAPABILITIES.md`](CAPABILITIES.md)** — everything codeloom can do, in one place
+- **[`FEATURES.md`](FEATURES.md)** — the strategic feature map (intent engine, memory, git intelligence, all 27 features)
 - **[`USER_GUIDE.md`](USER_GUIDE.md)** — practical walkthrough for agent work
 - **[`CLI.md`](CLI.md)** — every command, flag, and argument
 - **[`SECURITY.md`](SECURITY.md)** — the trust model, verification, and what codeloom does NOT do
