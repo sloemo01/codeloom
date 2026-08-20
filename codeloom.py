@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.42.0"
+VERSION = "0.43.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -1539,6 +1539,86 @@ def render_plugin_sdk(root: str) -> str:
     return buf.getvalue()
 
 # 26. LSP bridge ---------------------------------------------------------------
+# 18b. LSP edge bridge -------------------------------------------------------
+# When a language server is installed, use its `textDocument/definition` to
+# resolve a symbol to its REAL definition (across files, incl. vendored/node
+# modules) — the edge static parsing can miss. Optional; zero-dep fallback.
+def _lsp_server_for(ext: str) -> Optional[str]:
+    import shutil
+    m = {
+        ".py": ("pyright-langserver", "pyright", "pylsp"),
+        ".ts": ("typescript-language-server", "typescript-language-server"),
+        ".tsx": ("typescript-language-server", "typescript-language-server"),
+        ".rs": ("rust-analyzer", "rust-analyzer"),
+        ".go": ("gopls", "gopls"),
+        ".c": ("clangd", "clangd"),
+        ".cpp": ("clangd", "clangd"),
+        ".hpp": ("clangd", "clangd"),
+    }
+    for cand in m.get(ext, ()):
+        p = shutil.which(cand)
+        if p:
+            return p
+    return None
+
+
+def lsp_definition(root: str, file: str, line: int, symbol: str) -> Optional[dict]:
+    """Resolve a symbol's real definition via LSP. Returns
+    {file, line, module} or None if no server / it fails. Best-effort."""
+    ext = os.path.splitext(file)[1].lower()
+    server = _lsp_server_for(ext)
+    if not server:
+        return None
+    import json
+    import subprocess
+    uri = "file://" + os.path.abspath(file)
+    # JSON-RPC initialize + textDocument/definition
+    init = {
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"processId": None, "rootUri": "file://" + os.path.abspath(root),
+                   "capabilities": {}},
+    }
+    opened = {
+        "jsonrpc": "2.0", "method": "textDocument/didOpen",
+        "params": {"textDocument": {"uri": uri, "languageId": "python", "version": 1, "text": ""}},
+    }
+    req = {
+        "jsonrpc": "2.0", "id": 2, "method": "textDocument/definition",
+        "params": {"textDocument": {"uri": uri},
+                   "position": {"line": max(0, line - 1), "character": 0}},
+    }
+    try:
+        proc = subprocess.Popen([server, "--stdio"],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL)
+        payload = "\n".join([json.dumps(init), json.dumps(opened), json.dumps(req)])
+        # LSP uses Content-Length headers
+        body = json.dumps(init).encode()
+        framed = b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body
+        # keep it simple: some servers accept newline-delimited JSON
+        import time
+        out = proc.communicate(input=(payload + "\n").encode(), timeout=15)[0]
+        proc.wait(timeout=5)
+        # parse the last response (id:2)
+        text = out.decode(errors="replace")
+        for block in text.split("\r\n\r\n"):
+            if '"id": 2' in block or '"id":2' in block:
+                import re
+                mres = re.search(r"\{.*\}", block, re.S)
+                if mres:
+                    data = json.loads(mres.group(0))
+                    if isinstance(data.get("result"), list) and data["result"]:
+                        loc = data["result"][0]
+                        return {"uri": loc.get("uri", ""),
+                                "line": loc.get("range", {}).get("start", {}).get("line", 0)}
+                    elif isinstance(data.get("result"), dict) and data["result"].get("uri"):
+                        loc = data["result"]
+                        return {"uri": loc["uri"], "line": loc.get("range", {}).get("start", {}).get("line", 0)}
+    except Exception:
+        pass
+    return None
+
+
 def render_lsp(root: str) -> str:
     """LSP integration: if a language server is available, use it for
     semantic resolution beyond static parsing. Optional — never required."""
@@ -1554,9 +1634,31 @@ def render_lsp(root: str) -> str:
     buf.write("  LSP gives precise symbol resolution (types, refs) that static\n")
     buf.write("  parsing can miss. codeloom stays zero-dep: LSP is an optional\n")
     buf.write("  enrichment when a server is already installed — never required.\n")
+    buf.write("  `lsp_definition()` starts the server and resolves a symbol's\n")
+    buf.write("  real definition across files when present.\n")
     return buf.getvalue()
 
-# 19. Visual graph -------------------------------------------------------------
+
+def render_lsp_symbol(files: List[str], root: str, symbol: str) -> str:
+    """Resolve a symbol's real definition via an installed LSP server.
+    Falls back to the static index if no server or it fails. Optional."""
+    buf = io.StringIO()
+    buf.write(f"# lsp-symbol: {symbol}\n")
+    index = build_byte_index(files, root)
+    locs = index.get(symbol)
+    if not locs:
+        buf.write("  Symbol not found in the static index.\n")
+        return buf.getvalue()
+    loc = locs[0]
+    path = loc.get("path") or os.path.join(root, loc.get("module", "").replace(".", os.sep) + ".py")
+    line = loc.get("line", 1)
+    res = lsp_definition(root, path, line, symbol)
+    if not res:
+        buf.write(f"  (no LSP server, or resolution failed) static: {loc['module']}:{line}\n")
+    else:
+        buf.write(f"  LSP resolved: {res.get('uri', '?')}:{res.get('line', 0) + 1}\n")
+        buf.write("  (LSP gives the real cross-file definition static parsing may miss.)\n")
+    return buf.getvalue()
 def render_graph_html(files: List[str], root: str) -> str:
     """Local zoomable HTML graph view (functions/imports/calls). No daemon —
     writes a self-contained HTML file the user opens in a browser."""
@@ -5191,6 +5293,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--dedup", action="store_true", help="session dedupe: skip already-read files, show the new delta")
     p.add_argument("--plugin-sdk", action="store_true", help="show the plugin SDK surface for framework-aware extraction")
     p.add_argument("--lsp", action="store_true", help="show LSP bridge status (optional semantic enrichment)")
+    p.add_argument("--lsp-symbol", metavar="SYMBOL", help="resolve a symbol's real definition via an installed LSP server (optional)")
     p.add_argument("--graph-html", action="store_true", help="write a local zoomable HTML graph view (codeloom-graph.html)")
     p.add_argument("--find", metavar="QUERY", help="natural-language flow discovery: 'find where login starts'")
     p.add_argument("--context-diff", nargs=2, metavar=("BASE", "HEAD"), help="branch-to-branch architecture-level diff (e.g. main HEAD)")
@@ -5284,6 +5387,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.lsp:
         print(render_lsp(root))
+        return 0
+
+    if args.lsp_symbol:
+        # resolve a symbol's real definition via an installed LSP server
+        gi = os.path.join(root, ".gitignore")
+        rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+        files: List[str] = []
+        _walk(root, rules, args.max_files, files)
+        print(render_lsp_symbol(files, root, args.lsp_symbol))
         return 0
 
     if args.graph_html:

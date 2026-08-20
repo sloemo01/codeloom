@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.42.0"
+SERVER_VERSION = "0.43.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -732,6 +732,24 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "codeloom_lsp_symbol",
+        "description": (
+            "Resolve a symbol's real definition via an installed LSP server "
+            "(pyright/clangd/rust-analyzer/gopls/ts-server) — the cross-file "
+            "edge static parsing can miss. Falls back to the static index if "
+            "no server is present. Optional, zero-dep."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "symbol": {"type": "string", "description": "Symbol to resolve via LSP"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["symbol"],
+        },
+    },
+    {
         "name": "codeloom_graph_html",
         "description": (
             "Write a local zoomable HTML graph view of imports/calls to "
@@ -1070,6 +1088,12 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         text = codeloom.render_plugin_sdk(root)
     elif name == "codeloom_lsp":
         text = codeloom.render_lsp(root)
+    elif name == "codeloom_lsp_symbol":
+        symbol = args.get("symbol")
+        if not symbol:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
+        f = _collect_files(root, max_files)
+        text = codeloom.render_lsp_symbol(f, root, symbol)
     elif name == "codeloom_graph_html":
         f = _collect_files(root, max_files)
         text = codeloom.render_graph_html(f, root)
