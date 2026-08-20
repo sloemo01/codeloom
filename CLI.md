@@ -73,7 +73,8 @@ codeloom [OPTIONS] [ROOT]
 
 | Flag | Description |
 |---|---|
-| `--index` | Build persistent knowledge graph (symbols + call/import edges) |
+| `--index` | build + save a persistent knowledge graph (symbols + call/import edges) |
+| `--watch` | incremental daemon-less refresh: re-index only changed files |
 | `--index-status` | Index freshness |
 | `--verify FILE` | SHA-256 checksum |
 | `--install-grammars --yes` | Install tree-sitter grammars (25 languages) |

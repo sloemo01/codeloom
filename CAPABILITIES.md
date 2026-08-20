@@ -67,6 +67,7 @@ Everything codeloom can do, in one place. Zero-dependency, single file, no daemo
 | Command | What it does |
 |---|---|
 | `codeloom --index` | Build persistent knowledge graph (symbols + call/import edges) |
+| `codeloom --watch` | Incremental daemon-less refresh (re-index only changed files) |
 | `codeloom --index-status` | Index freshness |
 | `codeloom --verify FILE` | SHA-256 checksum (security) |
 | `codeloom --install-grammars --yes` | Install tree-sitter grammars (25 languages) |

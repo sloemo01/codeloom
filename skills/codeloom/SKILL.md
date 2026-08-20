@@ -152,6 +152,7 @@ python3 codeloom.py --index-status /path/to/repo
 | `--install-grammars` | install tree-sitter grammars (opt-in precision) |
 | `--install-grammars --yes` | actually run pip install (one-command) |
 | `--index` | build + save a persistent knowledge graph (symbols + call/import edges) |
+| `--watch` | incremental daemon-less refresh (re-index only changed files) |
 | `--index-status` | show persistent index status/freshness |
 | `--framework` | detect the web/app framework + surface routes/models/config/conventions |
 | `--session` | log this invocation to the local session log (JSONL) |

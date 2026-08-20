@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.30.0"
+SERVER_VERSION = "0.31.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -484,6 +484,22 @@ TOOLS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "codeloom_watch",
+        "description": (
+            "Incremental daemon-less refresh: re-index only files changed since "
+            "the last index, keeping the lazy per-symbol store current. Call "
+            "before queries to guarantee a fresh index without a full rebuild "
+            "or a managed daemon."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
+            },
+        },
+    },
 ]
 
 
@@ -699,6 +715,9 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
 
     if name == "codeloom_session_report":
         return {"content": [{"type": "text", "text": codeloom.render_session_report(root)}]}
+
+    if name == "codeloom_watch":
+        text = codeloom.refresh_index_incremental(root, max_files)
 
     if name == "codeloom_map":
         m = codeloom.build_map(root, True, max_files)

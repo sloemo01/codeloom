@@ -5,7 +5,7 @@ so it renders inline on both platforms.
 
 - Demo GIF: `https://raw.githubusercontent.com/sloemo01/codeloom/main/demo.gif`
 - Repo: `https://github.com/sloemo01/codeloom`
-- Latest release: `https://github.com/sloemo01/codeloom/releases/tag/v0.30.0`
+- Latest release: `https://github.com/sloemo01/codeloom/releases/tag/v0.31.0`
 
 ---
 
@@ -36,7 +36,7 @@ What it does:
 - **Zero-install, zero-telemetry, offline** — one stdlib file, no `pip install`, no model downloads, no license validation, no telemetry that phones home. The heavyweight tools can't say that.
 - **Git-diffable** — `codeloom --write MAP.md` produces a reviewable text artifact you commit and diff in PRs. jcodemunch's index is a binary blob.
 - **CI action** — `codeloom --install-agents .` writes AGENTS.md + a GitHub Action that runs `--pack` on every PR and posts the brief as a comment. One line to add.
-- **MCP server** — zero-dep, 27 tools, resident in-memory knowledge graph (daemon-speed, no daemon).
+- **MCP server** — zero-dep, 28 tools, resident in-memory knowledge graph + `--watch` incremental refresh (daemon-speed, no daemon).
 - **25 languages** — `--install-grammars --yes` gives tree-sitter precision.
 
 The whole thing is Python stdlib only. No `pip install`, no indexing daemon, no GPU. Copy one file into your repo, point your agent at it, done.
@@ -72,7 +72,7 @@ So I built codeloom: a map of your repo for agents. One file, zero deps, no daem
 • `codeloom --write MAP.md` → a reviewable text artifact you commit and diff in PRs (their index is a binary blob)
 • `codeloom --install-agents .` → writes AGENTS.md + a GitHub Action that posts the `--pack` brief on every PR. One line.
 
-**6/6** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.30.0 released. Code-embedded task brief, edit-relevance ranking, 99% token savings, lazy per-symbol index (near-resident lookups, no daemon), 25-language tree-sitter, tested on the Linux kernel (91k files / 1M+ symbols). Go use it. Feedback welcome, especially on the edit-relevance ranking and the code-embedded brief.
+**6/6** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.31.0 released. Code-embedded task brief, edit-relevance ranking, 99% token savings, lazy per-symbol index + `--watch` incremental refresh (near-resident lookups, no daemon), 25-language tree-sitter, tested on the Linux kernel (91k files / 1M+ symbols). Go use it.
 
 ---
 
@@ -100,7 +100,7 @@ Also:
 - **Zero-install, zero-telemetry, offline** — one file, no pip, no model downloads, no license checks, no telemetry that phones home
 - **Git-diffable** — `codeloom --write MAP.md` is a reviewable text artifact you commit and diff in PRs
 - **CI action** — `codeloom --install-agents .` writes AGENTS.md + a GitHub Action that posts the `--pack` brief on every PR
-- **MCP server** — zero-dep, 27 tools, resident in-memory knowledge graph (daemon-speed, no daemon)
+- **MCP server** — zero-dep, 28 tools, resident in-memory knowledge graph + `--watch` incremental refresh (daemon-speed, no daemon)
 - **25 languages** — `--install-grammars --yes` gives tree-sitter precision
 
 Repo: https://github.com/sloemo01/codeloom

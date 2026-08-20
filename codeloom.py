@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.30.0"
+VERSION = "0.31.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -2701,6 +2701,89 @@ def ensure_fresh_index(root: str, max_files: int) -> Optional[dict]:
     save_persistent_index(root, index, files)
     return load_persistent_index(root)
 
+def refresh_index_incremental(root: str, max_files: int) -> str:
+    """Incremental 'daemon-less watcher' refresh. Detects which files changed
+    since the last index (via stored mtime/size), re-indexes ONLY those, and
+    updates the lazy per-symbol dbm store + the JSON index in place. Each call
+    is cheap on a mostly-unchanged repo, so an agent can call it on-demand and
+    always hit a current index without a full rebuild or a managed daemon."""
+    pidx = load_persistent_index(root)
+    gi = os.path.join(root, ".gitignore")
+    rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+    # discover current files
+    files: List[str] = []
+    _walk(root, rules, max_files, files)
+    changed = []
+    removed = []
+    old_meta = (pidx.get("files", {}) if pidx else {})
+    new_meta = {}
+    for f in files:
+        try:
+            cur = (os.path.getmtime(f), os.path.getsize(f))
+        except OSError:
+            continue
+        new_meta[f] = cur
+        if old_meta.get(f) != cur:
+            changed.append(f)
+    for f in old_meta:
+        if not os.path.isfile(f):
+            removed.append(f)
+    if not changed and not removed:
+        return "# watch: index already fresh — 0 files changed (no rebuild needed)\n"
+    # re-index only the changed/new files; build a merged symbol index
+    new_index = {}
+    if changed:
+        new_index = build_persistent_index(changed, root)
+    # merge into existing index
+    base_index = pidx.get("symbols", {}) if pidx else {}
+    if removed:
+        # drop symbols whose path is in a removed file
+        removed_paths = set(removed)
+        base_index = {name: [l for l in locs if l.get("path") not in removed_paths]
+                      for name, locs in base_index.items()}
+        base_index = {k: v for k, v in base_index.items() if v}
+    merged = dict(base_index)
+    for name, locs in new_index.items():
+        merged[name] = locs
+    # refresh the kg too (rebuild from full file list — cheap relative to symbol build)
+    kg = build_knowledge_graph(files, root)
+    # persist both formats
+    data = {
+        "version": INDEX_VERSION,
+        "root": root,
+        "files": new_meta,
+        "symbols": merged,
+        "kg": kg,
+    }
+    # strip full source from persisted locs (compact), like save_persistent_index
+    for name in list(merged.keys()):
+        for loc in merged[name]:
+            src = loc.get("source", "")
+            loc["sig"] = (src.split("\n")[0][:80] if src else name)
+            loc.pop("source", None)
+    try:
+        with open(_index_path(root), "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except OSError:
+        pass
+    try:
+        import marshal
+        with open(_index_bin_path(root), "wb") as f:
+            marshal.dump(data, f)
+    except OSError:
+        pass
+    try:
+        save_lazy_index(root, merged)
+    except Exception:
+        pass
+    n = len(changed)
+    n_syms = sum(len(v) for v in merged.values())
+    return (f"# watch: incremental refresh — {n} file(s) changed, "
+            f"{len(removed)} removed\n"
+            f"  {len(files)} files, {n_syms} symbols in updated index\n"
+            f"  lazy per-symbol index updated in place — lookups stay near-resident\n")
+
+
 def render_index(files: List[str], root: str, max_files: int, parallel: bool = False) -> str:
     """Build and save the persistent index + knowledge graph. Returns a summary."""
     index = build_persistent_index(files, root, parallel=parallel)
@@ -3697,6 +3780,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--install-grammars", action="store_true", help="install tree-sitter language grammars (opt-in precision)")
     p.add_argument("--yes", action="store_true", help="with --install-grammars, actually run pip install")
     p.add_argument("--index", action="store_true", help="build + save a persistent byte-offset index (scale)")
+    p.add_argument("--watch", action="store_true", help="incremental daemon-less refresh: re-index only changed files, keep lookups near-resident")
     p.add_argument("--index-status", action="store_true", help="show persistent index status/freshness")
     p.add_argument("--framework", action="store_true", help="detect the web/app framework and surface its structure (routes, models, config, conventions)")
     p.add_argument("--version", action="version", version=f"codeloom {VERSION}")
@@ -3735,6 +3819,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
         print(render_index(files, root, args.max_files, parallel=args.parallel))
+        return 0
+
+    if args.watch:
+        # incremental daemon-less refresh: only changed files re-indexed
+        print(refresh_index_incremental(root, args.max_files))
         return 0
 
     # --get-symbol / --search: fast-path from the persistent index (no walk)

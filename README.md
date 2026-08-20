@@ -498,12 +498,15 @@ re-reads source from the stored byte range on demand.
 
 **No cold-start on repeated queries.** `--get-symbol` uses a **lazy per-symbol
 index** (stdlib dbm, one keyed record per symbol) — a single lookup is a
-near-resident ~ms read, not a full multi-hundred-MB dict deserialize. The MCP
-server keeps the graph resident in memory for the session — so an agent working
-in a session gets repeated `--get-symbol`/`--deadcode` calls served from the
-resident graph (6+ queries in one session, no re-parse, no cold-start). That's
-the daemon's "hot in memory" benefit without a separate daemon process to run
-or crash.
+near-resident ~ms read, not a full multi-hundred-MB dict deserialize. And
+`codeloom --watch` is the **daemon-less incremental refresh**: it re-indexes
+only the files that changed (via mtime/size) and updates the lazy store in
+place — so an agent can call `--watch` on-demand and always hit a fresh index
+without a full rebuild or a managed daemon. The MCP server keeps the graph
+resident in memory for the session — so repeated `--get-symbol`/`--deadcode`
+calls in one session are served from the resident graph, no re-parse, no
+cold-start. That's the daemon's "hot in memory" benefit without a separate
+daemon process to run or crash.
 
 ## The three parts (CLI + MCP + skill)
 
