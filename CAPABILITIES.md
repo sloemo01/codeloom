@@ -77,7 +77,7 @@ Everything codeloom can do, in one place. Zero-dependency, single file, no daemo
 | `codeloom --install-agent claude` | Print MCP config for 17 agents (claude/cursor/codex/gemini/opencode/cline/openhands/devin/hermes/aider/roo/windsurf/amazon-q/jetbrains/junie/kimi/qwen) |
 | `codeloom --detect-agent` | Detect which coding agent's config dir is present |
 
-## MCP server (54 tools)
+## MCP server (57 tools)
 
 `codeloom-mcp.py` is a zero-dependency MCP server (stdlib JSON-RPC over stdio).
 Tools: `codeloom_map`, `codeloom_graph`, `codeloom_focus`, `codeloom_calls`,

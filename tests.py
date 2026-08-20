@@ -732,6 +732,45 @@ class TestCodeLoom(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
+    def test_routes_extracts_http(self):
+        # extract_routes finds FastAPI decorators + Express chains
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, "app.py"), "w") as f:
+                f.write("from fastapi import FastAPI\napp = FastAPI()\n"
+                        "@app.get('/')\ndef root(): pass\n"
+                        "@app.post('/items')\ndef create(): pass\n")
+            routes = codeloom.extract_routes(tmp)
+            self.assertTrue(any(r["path"] == "/" and r["handler"] == "root" for r in routes))
+            self.assertTrue(any(r["path"] == "/items" and r["handler"] == "create" for r in routes))
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_channels_extraction(self):
+        # channel detection maps emit -> listen
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, "pub.js"), "w") as f:
+                f.write("emitter.emit('user:created', user);\n")
+            with open(os.path.join(tmp, "sub.js"), "w") as f:
+                f.write("emitter.on('user:created', (u) => {});\n")
+            c = codeloom.extract_channels(tmp)
+            self.assertIn("user:created", c["emit"])
+            self.assertIn("user:created", c["listen"])
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_export_snapshot(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, "a.py"), "w") as f:
+                f.write("def helper(): pass\n")
+            out = codeloom.render_export(tmp, os.path.join(tmp, "snap.json"))
+            self.assertIn("Exported", out)
+            self.assertTrue(os.path.isfile(os.path.join(tmp, "snap.json")))
+        finally:
+            shutil.rmtree(tmp)
+
     def test_install_grammars_prints(self):
         # without --yes, install_grammars prints the command (doesn't install)
         out = codeloom.install_grammars(do_install=False)

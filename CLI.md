@@ -99,6 +99,9 @@ codeloom [OPTIONS] [ROOT]
 | `--architecture` | Detect architectural pattern |
 | `--heatmap` | Dependency heatmap (god classes, circular imports, unused) |
 | `--explain-topic X` | Explain a domain end-to-end |
+| `--routes` | Extract HTTP routes: METHOD path → handler (framework-aware) |
+| `--channels` | Pub-sub/event channel map (EMITS → LISTENS_ON) |
+| `--export FILE` | Export a portable graph snapshot |
 | `--docs readme\|arch` | Generate a README or ARCHITECTURE doc |
 | `codeloom --refactor X` | Refactor engine: files, deps, risk, order for symbol X |
 | `codeloom --rename OLD NEW` | What a rename touches: definitions, files, dependents, edges |

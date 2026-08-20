@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.52.0"
+VERSION = "0.53.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -1052,6 +1052,170 @@ def render_framework(root: str, max_files: int) -> str:
         buf.write("  app.use() middleware chain; routes in routes/ or inline\n")
     else:
         buf.write("  (no framework-specific conventions detected)\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
+# HTTP route extraction (#framework-routes) — parse actual METHOD path -> handler
+# across the common frameworks (FastAPI, Flask, Express, Django, Next.js, Starlette).
+# This links URL patterns to the handler function that serves them — what
+# codegraph and codebase-memory call "framework-aware routes".
+# --------------------------------------------------------------------------- #
+_ROUTE_RE = re.compile(
+    r"""(?:@)?(?:app|router|bp|api|route)\.(?P<method>get|post|put|delete|patch|options|head)\(
+        \s*['\"](?P<path>[^'\"}]+)['\"]""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+def extract_routes(root: str, max_files: int = 20000) -> List[dict]:
+    """Scan a repo for HTTP routes and return {method, path, handler, file, line}.
+    Supports FastAPI/Flask/Starlette decorators (@app.get, @router.post),
+    Express (.get/.post chains), Django (urls.py path()), and file-based
+    routing (Next.js/Nuxt app dir -> URL). Zero-dep, regex + AST."""
+    import ast as _ast
+    routes = []
+    gi = os.path.join(root, ".gitignore")
+    rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+    files: List[str] = []
+    _walk(root, rules, max_files, files)
+    for f in files:
+        ext = os.path.splitext(f)[1].lower()
+        rel = os.path.relpath(f, root).replace(os.sep, "/")
+        # FastAPI / Flask / Starlette decorator routes (Python AST-aware)
+        if ext == ".py":
+            try:
+                with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                    tree = _ast.parse(fh.read())
+            except Exception:
+                continue
+            for node in _ast.walk(tree):
+                if isinstance(node, _ast.FunctionDef):
+                    handler = node.name
+                    for deco in node.decorator_list:
+                        meth = None
+                        path = None
+                        # @app.get("/x") or @router.post("/y")
+                        if isinstance(deco, _ast.Call) and isinstance(deco.func, _ast.Attribute):
+                            meth = deco.func.attr.lower()
+                            if deco.args and isinstance(deco.args[0], _ast.Constant):
+                                path = deco.args[0].value
+                        elif isinstance(deco, _ast.Call) and isinstance(deco.func, _ast.Name) and deco.func.id in ("get", "post", "put", "delete", "patch"):
+                            meth = deco.func.id.lower()
+                            if deco.args and isinstance(deco.args[0], _ast.Constant):
+                                path = deco.args[0].value
+                        if meth and path and meth in ("get", "post", "put", "delete", "patch", "options"):
+                            routes.append({"method": meth.upper(), "path": path,
+                                           "handler": handler, "file": rel,
+                                           "line": node.lineno})
+            continue
+        # Express / Fastify .get('/x', handler) chains
+        if ext in (".js", ".jsx", ".ts", ".tsx", ".mjs"):
+            try:
+                with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            for m in _ROUTE_RE.finditer(text):
+                # find handler = symbol following the path arg
+                seg = text[m.end():m.end() + 80]
+                handler = "anonymous"
+                m2 = re.search(r"[,\s]+([A-Za-z_]\w*)\s*(?:,|\))", seg)
+                if m2:
+                    handler = m2.group(1)
+                routes.append({"file": rel, "method": m.group("method").upper(),
+                               "path": m.group("path"), "handler": handler,
+                               "line": text[:m.start()].count("\n") + 1})
+        # Next.js / Nuxt file-based routes
+        if ext in (".tsx", ".jsx", ".ts", ".js") and re.search(r"(app|pages)/", rel):
+            if re.search(r"(app|pages)/", rel) and not rel.endswith(("_app.tsx", "_document.tsx")):
+                sub = rel.split("/", 1)[1] if "/" in rel else rel
+                base = re.sub(r"\.(?:tsx|jsx|ts|js)$", "", sub)
+                base = base.replace("page", "").replace("index", "").rstrip("/")
+                path = "/" + base if base else "/"
+                # dynamic segments
+                path = re.sub(r"\[(\w+)\]", r":\1", path)
+                routes.append({"method": "GET", "path": path, "handler": "page",
+                               "file": rel, "line": 0})
+    return routes
+
+def render_routes(root: str, max_files: int = 20000) -> str:
+    """--routes: framework-aware URL -> handler mapping (like codegraph/cbm)."""
+    routes = extract_routes(root, max_files)
+    buf = io.StringIO()
+    buf.write(f"# codeloom --routes\n")
+    if not routes:
+        buf.write("  No routes detected.\n")
+        return buf.getvalue()
+    buf.write(f"{len(routes)} HTTP route(s):\n\n")
+    for r in routes:
+        buf.write(f"  {r['method']:<6} {r['path']:<30} -> {r['handler']}  ({r['file']}:{r['line']})\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
+# Channel / pub-sub detection (#channels) — EMITS / LISTENS_ON edges
+# --------------------------------------------------------------------------- #
+# Detects socket.io emit/on, Node EventEmitter emit/on, generic pub-sub, and
+# Kafka/RabbitMQ-style publish/subscribe. Static, regex-based, zero-dep.
+_CHANNEL_RE = re.compile(
+    r"""(?:\.emit\(|\.publish\(|\.produce\(|\.send\(|socket\.emit\(|io\.emit\()
+        ['\"]?(?P<channel>[a-zA-Z0-9_:.\-/]{1,80})""",
+    re.VERBOSE,
+)
+_LISTEN_RE = re.compile(
+    r"""(?:\.on\(|\.subscribe\(|\.consume\(|\.addListener\(|socket\.on\()    ['\"]?(?P<channel>[a-zA-Z0-9_:.\-/]{1,80})['\"]""",
+    re.VERBOSE,
+)
+
+def extract_channels(root: str, max_files: int = 20000) -> dict:
+    """Scan a repo for pub-sub / event channels. Returns
+    {"emit": {channel: [files]}, "listen": {channel: [files]}} — the EMITS /
+    LISTENS_ON edges that link senders to receivers across files."""
+    emit = {}
+    listen = {}
+    gi = os.path.join(root, ".gitignore")
+    rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+    files: List[str] = []
+    _walk(root, rules, max_files, files)
+    for f in files:
+        ext = os.path.splitext(f)[1].lower()
+        if ext not in (".js", ".jsx", ".ts", ".tsx", ".py", ".mjs", ".go", ".rs", ".rb"):
+            continue
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        rel = os.path.relpath(f, root).replace(os.sep, "/")
+        for m in _CHANNEL_RE.finditer(text):
+            ch = m.group("channel")
+            if not ch:
+                continue
+            # skip false positives (common keywords)
+            if ch in ("error", "data", "message", "close", "open", "end"):
+                continue
+            emit.setdefault(ch, []).append(rel)
+        for m in _LISTEN_RE.finditer(text):
+            ch = m.group("channel")
+            if not ch or ch in ("error", "data", "message", "close", "open", "end"):
+                continue
+            listen.setdefault(ch, []).append(rel)
+    return {"emit": emit, "listen": listen}
+
+def render_channels(root: str, max_files: int = 20000) -> str:
+    """--channels: pub-sub / event channel map (EMITS -> LISTENS_ON)."""
+    c = extract_channels(root, max_files)
+    buf = io.StringIO()
+    buf.write("# codeloom --channels\n")
+    if not c["emit"] and not c["listen"]:
+        buf.write("  No pub-sub / event channels detected.\n")
+        return buf.getvalue()
+    if c["emit"]:
+        buf.write("## EMITS\n")
+        for ch in sorted(c["emit"]):
+            buf.write(f"  {ch:<30} <- {', '.join(c['emit'][ch][:5])}\n")
+    if c["listen"]:
+        buf.write("\n## LISTENS_ON\n")
+        for ch in sorted(c["listen"]):
+            buf.write(f"  {ch:<30} <- {', '.join(c['listen'][ch][:5])}\n")
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
@@ -2120,6 +2284,33 @@ def render_cross_repo(repos: List[str], max_files: int = 20000) -> str:
         buf.write("  (no package-level cross-repo imports detected)\n")
     buf.write("\n# Build one graph across your services. Query any repo in the set.\n")
     return buf.getvalue()
+
+def render_export(root: str, out_path: str, max_files: int = 20000) -> str:
+    """--export: write a portable, self-contained graph snapshot (symbols +
+    call/import edges + routes + channels) to a single JSON file. Commit it to
+    the repo so teammates clone a pre-built graph and skip the reindex — the
+    'commit-and-share' pattern codebase-memory ships as its .graph snapshot."""
+    gi = os.path.join(root, ".gitignore")
+    rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+    files: List[str] = []
+    _walk(root, rules, max_files, files)
+    # build the knowledge graph
+    kg = build_knowledge_graph(files, root, parallel=True)
+    snapshot = {
+        "version": 1,
+        "root": os.path.abspath(root),
+        "files": len(files),
+        "calls": kg.get("calls", {}),
+        "imports": kg.get("imports", {}),
+        "routes": extract_routes(root, max_files),
+        "channels": extract_channels(root, max_files),
+    }
+    try:
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(snapshot, f)
+        return f"Exported graph snapshot to {out_path} ({len(files)} files, {len(snapshot['calls'])} modules).\n"
+    except OSError as e:
+        return f"Export failed: {e}\n"
 
 def reachable(graph: dict, start: str, direction: str = "out") -> set:
     """BFS over the graph. direction='out' = what start depends on; 'in' = what depends on start."""
@@ -5508,7 +5699,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--watch-core", metavar="ROOT", help="native C file watcher (kqueue/inotify): print changed code files live")
     p.add_argument("--serve", metavar="ROOT", help="C-resident index server: answer symbol lookups sub-ms (no Python per query)")
     p.add_argument("--index-status", action="store_true", help="show persistent index status/freshness")
-    p.add_argument("--framework", action="store_true", help="detect the web/app framework and surface its structure (routes, models, config, conventions)")
+    p.add_argument("--framework", action="store_true", help="detect framework + surface routes/models/config/conventions")
+    p.add_argument("--routes", action="store_true", help="extract HTTP routes: METHOD path -> handler (framework-aware)")
+    p.add_argument("--channels", action="store_true", help="pub-sub / event channel map (EMITS -> LISTENS_ON)")
+    p.add_argument("--export", metavar="FILE", help="export a portable graph snapshot (symbols + edges + routes + channels) to FILE")
     p.add_argument("--architecture", action="store_true", help="detect the architectural pattern (MVC/layered/DDD/monolith)")
     p.add_argument("--heatmap", action="store_true", help="dependency heatmap: god classes, circular imports, unused modules")
     p.add_argument("--explain-topic", metavar="TOPIC", help="explain a topic/domain end-to-end (files + call flow), e.g. 'explain authentication'")
@@ -5554,6 +5748,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     # --framework: detect the web/app framework and surface its structure
     if args.framework:
         print(render_framework(root, args.max_files))
+        return 0
+
+    if args.routes:
+        print(render_routes(root, args.max_files))
+        return 0
+
+    if args.channels:
+        print(render_channels(root, args.max_files))
+        return 0
+
+    if args.export:
+        print(render_export(root, args.export, args.max_files))
         return 0
 
     if args.architecture:

@@ -162,6 +162,9 @@ python3 codeloom.py --index-status /path/to/repo
 | `--serve ROOT` | C-resident index server: sub-ms lookups (no Python per query) |
 | `--watch-core` | native C file watcher (kqueue/inotify): print changed code files live |
 | `--precision SYMBOL` | graph precision: call edges with confidence + class relationships |
+| `--routes` | extract HTTP routes: METHOD path → handler (framework-aware) |
+| `--channels` | pub-sub / event channel map (EMITS → LISTENS_ON) |
+| `--export FILE` | export a portable graph snapshot (symbols + edges + routes + channels) |
 | `--files GLOB` | find files by name/glob: `--files engine` or `--files "*.py"` |
 | `--watch` | incremental daemon-less refresh (re-index only changed files) |
 | `--index-status` | show persistent index status/freshness |

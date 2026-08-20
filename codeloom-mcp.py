@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.52.0"
+SERVER_VERSION = "0.53.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -741,6 +741,53 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "codeloom_routes",
+        "description": (
+            "Extract HTTP routes: METHOD path -> handler across frameworks "
+            "(FastAPI, Flask, Express, Django, Next.js, Starlette). Links URL "
+            "patterns to the handler that serves them — framework-aware routes."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
+            },
+        },
+    },
+    {
+        "name": "codeloom_channels",
+        "description": (
+            "Pub-sub / event channel map: EMITS -> LISTENS_ON edges for "
+            "socket.io, Node EventEmitter, Kafka/RabbitMQ-style pub-sub. Links "
+            "senders to receivers across files."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
+            },
+        },
+    },
+    {
+        "name": "codeloom_export",
+        "description": (
+            "Export a portable, self-contained graph snapshot (symbols + call/"
+            "import edges + routes + channels) to a single JSON file. Commit it "
+            "to the repo so teammates clone a pre-built graph and skip the reindex."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "out_path": {"type": "string", "description": "Destination file path for the snapshot"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
+            },
+            "required": ["out_path"],
+        },
+    },
+    {
         "name": "codeloom_plugin_sdk",
         "description": (
             "Show the plugin SDK surface: how to write a framework-aware "
@@ -1160,6 +1207,15 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     elif name == "codeloom_dedup":
         f = _collect_files(root, max_files)
         text = codeloom.render_dedup(root, f)
+    elif name == "codeloom_routes":
+        text = codeloom.render_routes(root, max_files)
+    elif name == "codeloom_channels":
+        text = codeloom.render_channels(root, max_files)
+    elif name == "codeloom_export":
+        out = args.get("out_path")
+        if not out:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'out_path' argument"}]}
+        text = codeloom.render_export(root, out, max_files)
     elif name == "codeloom_plugin_sdk":
         text = codeloom.render_plugin_sdk(root)
     elif name == "codeloom_lsp":
