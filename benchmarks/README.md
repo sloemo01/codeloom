@@ -6,6 +6,12 @@ faster at everything" — it's that CodeLoom wins decisively on the axis that
 matters for everyday agent work: **token-efficient, task-oriented retrieval
 with zero setup and always-fresh context.**
 
+## Scale / hardware scaling (Linux kernel)
+
+- [`hardware-scaling.md`](hardware-scaling.md) — full Linux kernel (64,814
+  files) index time across CPU-resource configs with the C engine: full cores
+  **89s**, serial **113s**, throttled **106s**.
+
 ## Token savings (vs grep-and-read baseline)
 
 Measured on the same repos jcodemunch benchmarks against. `--get-symbol` is
