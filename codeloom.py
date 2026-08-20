@@ -3403,11 +3403,17 @@ def _c_symbol_index(files: List[str], root: str, scan: Optional[List[dict]] = No
     idx: dict = {}
     if scan is None:
         scan = _c_scan(files)
+    # precompute file->module ONCE per file (avoid 3.2M os.path.relpath calls)
+    mod_map = {}
+    for fr in scan:
+        p = fr.get("file", "")
+        if p:
+            mod_map[p] = module_name_of(p, root)
     for fr in scan:
         path = fr.get("file", "")
         if not path:
             continue
-        mod = module_name_of(path, root)
+        mod = mod_map.get(path) or module_name_of(path, root)
         for s in fr.get("symbols", []):
             name = s.get("name", "")
             if not name:
@@ -3428,11 +3434,17 @@ def _c_kg(files: List[str], root: str, all_defined: set, scan: Optional[List[dic
     module_map = {module_name_of(f, root): f for f in files}
     if scan is None:
         scan = _c_scan(files)
+    # precompute file->module once per file (avoid per-symbol relpath)
+    mod_map = {}
+    for fr in scan:
+        p = fr.get("file", "")
+        if p:
+            mod_map[p] = module_name_of(p, root)
     for fr in scan:
         path = fr.get("file", "")
         if not path:
             continue
-        mod = module_name_of(path, root)
+        mod = mod_map.get(path) or module_name_of(path, root)
         # call edges: keep only targets defined in the repo
         c_edges = {}
         for c in fr.get("calls", []):
