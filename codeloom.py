@@ -3582,7 +3582,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                               f"bytes {loc['start_byte']}-{loc['end_byte']}  ~{loc['tokens']} tokens\n\n"
                               f"{loc['source']}\n")
                     return 0
-            print(render_get_symbol(files, root, args.get_symbol, summary=(use_summary is True), adaptive=(use_summary == "adaptive")))
+            # adaptive: pass summary=True so render_get_symbol flips to full
+            # source only for small symbols (<= threshold)
+            print(render_get_symbol(files, root, args.get_symbol, summary=(use_summary is True or use_summary == "adaptive"), adaptive=(use_summary == "adaptive")))
             return 0
 
         if args.search:
