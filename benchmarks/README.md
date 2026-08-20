@@ -75,11 +75,11 @@ python3 benchmarks/run.py --repo /tmp/bench-fastapi --tokens
 
 ## Speed vs staleness
 
-| | CodeLoom | jcodemunch | semble / codebase-memory |
-|---|---|---|---|
-| Time to first result | **< 1s, no index** | after indexing (minutes) | after indexing (minutes) |
-| Freshness | **always live** (reads files) | stale until re-indexed | stale until re-indexed |
-| Setup | **one file, copy it** | pip + index + daemon | pip + daemon |
+| | CodeLoom | jcodemunch | codegraph | codebase-memory |
+|---|---|---|---|---|
+| Time to first result | **< 1s, no index** | after indexing (minutes) | after indexing | after indexing (minutes) |
+| Freshness | **always live** (reads files) | stale until re-indexed | native watcher | stale until re-indexed |
+| Setup | **one file, copy it** | pip + index + daemon | compiled binary + watch | pip + daemon |
 
 ## Installation friction scorecard
 

@@ -44,9 +44,9 @@ This is opt-in and only runs when you pass `--yes`. The core works without it.
 
 codeloom's security posture is **auditability**: one readable file, no hidden
 behavior, no network, no daemon. You can verify every byte that runs. In
-contrast, pip packages with indexes and daemons (jcodemunch, semble) mean more
-moving parts to audit and more surface area for a supply-chain or dependency
-risk to hide.
+contrast, pip packages with indexes and daemons (jcodemunch, codegraph,
+codebase-memory-mcp) mean more moving parts to audit and more surface area for
+a supply-chain or dependency risk to hide.
 
 ## Reporting a vulnerability
 
