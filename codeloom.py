@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.46.0"
+VERSION = "0.47.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -50,6 +50,7 @@ ADAPTIVE_FULL_THRESHOLD = 40
 _TS_AVAILABLE = False
 _TS_LANG = {}  # ext -> (Language, query-for-functions)
 try:
+    import importlib
     import tree_sitter
     from tree_sitter import Language, Parser  # noqa: F401
     _TS_AVAILABLE = True
@@ -58,173 +59,49 @@ except ImportError:
 
 def _ts_grammar_for(ext: str):
     """Return a tree-sitter Language for a file extension, or None.
-    Wires up the languages codeloom already supports via regex, so
-    --install-grammars gives real AST precision across all of them.
-    If CODELOOM_AUTO_INSTALL_GRAMMARS=1, auto-installs just the grammar for
-    this extension on first use (opt-in, one grammar at a time)."""
+    Data-driven: looks up the pip package in _EXT_GRAMMAR_PKG and dynamically
+    imports `tree_sitter_<lang>`, so ANY installed grammar (core + long-tail)
+    gets real AST depth automatically — no hardcoded per-language chain.
+    Falls back to regex when the grammar isn't installed. If
+    CODELOOM_AUTO_INSTALL_GRAMMARS=1, auto-installs just the grammar for this
+    extension on first use (opt-in, one grammar at a time)."""
     if not _TS_AVAILABLE:
         return None
+    # cache the resolved Language per extension (parser init is expensive)
+    if ext in _TS_LANG:
+        return _TS_LANG[ext]
+    pkg = _EXT_GRAMMAR_PKG.get(ext)
+    if not pkg:
+        _TS_LANG[ext] = None
+        return None
+    # package name 'tree-sitter-python' -> module 'tree_sitter_python'
+    mod_name = pkg.replace("-", "_")
+    # some grammars expose `language()`; others expose `language_<name>()`
+    # (e.g. tree-sitter-typescript -> language_typescript / language_tsx).
+    lang_attr = "language"
+    if ext in (".ts", ".tsx"):
+        lang_attr = "language_tsx" if ext == ".tsx" else "language_typescript"
     try:
-        if ext == ".py":
-            import tree_sitter_python
-            return Language(tree_sitter_python.language())
-        if ext in (".js", ".jsx"):
-            import tree_sitter_javascript
-            return Language(tree_sitter_javascript.language())
-        if ext in (".ts", ".tsx"):
-            import tree_sitter_typescript
-            return Language(tree_sitter_typescript.language())
-        if ext == ".go":
-            import tree_sitter_go
-            return Language(tree_sitter_go.language())
-        if ext == ".rs":
-            import tree_sitter_rust
-            return Language(tree_sitter_rust.language())
-        if ext == ".java":
-            import tree_sitter_java
-            return Language(tree_sitter_java.language())
-        if ext in (".c", ".h"):
-            import tree_sitter_c
-            return Language(tree_sitter_c.language())
-        if ext in (".cpp", ".hpp", ".cc", ".cxx"):
-            import tree_sitter_cpp
-            return Language(tree_sitter_cpp.language())
-        if ext == ".cs":
-            import tree_sitter_c_sharp
-            return Language(tree_sitter_c_sharp.language())
-        if ext == ".rb":
-            import tree_sitter_ruby
-            return Language(tree_sitter_ruby.language())
-        if ext == ".php":
-            import tree_sitter_php
-            return Language(tree_sitter_php.language())
-        if ext == ".swift":
-            import tree_sitter_swift
-            return Language(tree_sitter_swift.language())
-        if ext == ".kt":
-            import tree_sitter_kotlin
-            return Language(tree_sitter_kotlin.language())
-        if ext == ".dart":
-            import tree_sitter_dart
-            return Language(tree_sitter_dart.language())
-        if ext == ".lua":
-            import tree_sitter_lua
-            return Language(tree_sitter_lua.language())
-        if ext == ".sh":
-            import tree_sitter_bash
-            return Language(tree_sitter_bash.language())
-        if ext in (".ex", ".exs"):
-            import tree_sitter_elixir
-            return Language(tree_sitter_elixir.language())
-        if ext == ".ml":
-            import tree_sitter_ocaml
-            return Language(tree_sitter_ocaml.language())
-        if ext == ".scala":
-            import tree_sitter_scala
-            return Language(tree_sitter_scala.language())
-        if ext == ".hs":
-            import tree_sitter_haskell
-            return Language(tree_sitter_haskell.language())
-        if ext == ".zig":
-            import tree_sitter_zig
-            return Language(tree_sitter_zig.language())
-        if ext == ".pl":
-            import tree_sitter_perl
-            return Language(tree_sitter_perl.language())
-        if ext == ".fs":
-            import tree_sitter_fsharp
-            return Language(tree_sitter_fsharp.language())
-        if ext == ".ps1":
-            import tree_sitter_powershell
-            return Language(tree_sitter_powershell.language())
-    except ImportError:
-        # grammar not installed. If auto-install is enabled (opt-in), install
-        # just this grammar and retry once — kills the "manually trigger" gap.
-        if os.environ.get("CODELOOM_AUTO_INSTALL_GRAMMARS") == "1":
-            pkg = _EXT_GRAMMAR_PKG.get(ext)
-            if pkg:
-                import subprocess as _sp
-                r = _sp.run(["pip", "install", "-q", "tree-sitter", pkg], capture_output=True, text=True)
-                if r.returncode == 0:
-                    try:
-                        if ext == ".py":
-                            import tree_sitter_python
-                            return Language(tree_sitter_python.language())
-                        if ext in (".js", ".jsx"):
-                            import tree_sitter_javascript
-                            return Language(tree_sitter_javascript.language())
-                        if ext in (".ts", ".tsx"):
-                            import tree_sitter_typescript
-                            return Language(tree_sitter_typescript.language())
-                        if ext == ".go":
-                            import tree_sitter_go
-                            return Language(tree_sitter_go.language())
-                        if ext == ".rs":
-                            import tree_sitter_rust
-                            return Language(tree_sitter_rust.language())
-                        if ext == ".java":
-                            import tree_sitter_java
-                            return Language(tree_sitter_java.language())
-                        if ext in (".c", ".h"):
-                            import tree_sitter_c
-                            return Language(tree_sitter_c.language())
-                        if ext in (".cpp", ".hpp", ".cc", ".cxx"):
-                            import tree_sitter_cpp
-                            return Language(tree_sitter_cpp.language())
-                        if ext == ".cs":
-                            import tree_sitter_c_sharp
-                            return Language(tree_sitter_c_sharp.language())
-                        if ext == ".rb":
-                            import tree_sitter_ruby
-                            return Language(tree_sitter_ruby.language())
-                        if ext == ".php":
-                            import tree_sitter_php
-                            return Language(tree_sitter_php.language())
-                        if ext == ".swift":
-                            import tree_sitter_swift
-                            return Language(tree_sitter_swift.language())
-                        if ext == ".kt":
-                            import tree_sitter_kotlin
-                            return Language(tree_sitter_kotlin.language())
-                        if ext == ".dart":
-                            import tree_sitter_dart
-                            return Language(tree_sitter_dart.language())
-                        if ext == ".lua":
-                            import tree_sitter_lua
-                            return Language(tree_sitter_lua.language())
-                        if ext == ".sh":
-                            import tree_sitter_bash
-                            return Language(tree_sitter_bash.language())
-                        if ext in (".ex", ".exs"):
-                            import tree_sitter_elixir
-                            return Language(tree_sitter_elixir.language())
-                        if ext == ".ml":
-                            import tree_sitter_ocaml
-                            return Language(tree_sitter_ocaml.language())
-                        if ext == ".scala":
-                            import tree_sitter_scala
-                            return Language(tree_sitter_scala.language())
-                        if ext == ".hs":
-                            import tree_sitter_haskell
-                            return Language(tree_sitter_haskell.language())
-                        if ext == ".zig":
-                            import tree_sitter_zig
-                            return Language(tree_sitter_zig.language())
-                        if ext == ".pl":
-                            import tree_sitter_perl
-                            return Language(tree_sitter_perl.language())
-                        if ext == ".fs":
-                            import tree_sitter_fsharp
-                            return Language(tree_sitter_fsharp.language())
-                        if ext == ".ps1":
-                            import tree_sitter_powershell
-                            return Language(tree_sitter_powershell.language())
-                    except Exception:
-                        return None
-        return None
+        mod = importlib.import_module(mod_name)
+        lang = getattr(mod, lang_attr)()
+        _TS_LANG[ext] = Language(lang)
+        return _TS_LANG[ext]
     except Exception:
+        # grammar not installed. Auto-install (opt-in) then retry once.
+        if os.environ.get("CODELOOM_AUTO_INSTALL_GRAMMARS") == "1":
+            try:
+                import subprocess as _sp
+                r = _sp.run(["pip", "install", "-q", "tree-sitter", pkg],
+                            capture_output=True, text=True)
+                if r.returncode == 0:
+                    mod = importlib.import_module(mod_name)
+                    lang = getattr(mod, lang_attr)()
+                    _TS_LANG[ext] = Language(lang)
+                    return _TS_LANG[ext]
+            except Exception:
+                pass
+        _TS_LANG[ext] = None
         return None
-    return None
 
 def _ts_parse(path: str, ext: str):
     """Parse a file with tree-sitter, returning the root node or None."""
@@ -355,6 +232,19 @@ _EXT_GRAMMAR_PKG = {
     ".exs": "tree-sitter-elixir", ".ml": "tree-sitter-ocaml", ".scala": "tree-sitter-scala",
     ".hs": "tree-sitter-haskell", ".zig": "tree-sitter-zig", ".pl": "tree-sitter-perl",
     ".fs": "tree-sitter-fsharp", ".ps1": "tree-sitter-powershell",
+    # ---- long-tail breadth: grammars available via pip (auto-install opt-in) ----
+    ".sol": "tree-sitter-solidity", ".sol": "tree-sitter-solidity",
+    ".jl": "tree-sitter-julia", ".elm": "tree-sitter-elm",
+    ".d": "tree-sitter-d", ".cr": "tree-sitter-crystal",
+    ".nix": "tree-sitter-nix", ".proto": "tree-sitter-proto",
+    ".rs": "tree-sitter-rust", ".hcl": "tree-sitter-hcl",
+    ".tf": "tree-sitter-hcl", ".sql": "tree-sitter-sql",
+    ".gd": "tree-sitter-godot", ".vue": "tree-sitter-vue",
+    ".svelte": "tree-sitter-svelte", ".toml": "tree-sitter-toml",
+    ".yaml": "tree-sitter-yaml", ".json": "tree-sitter-json",
+    ".cmake": "tree-sitter-cmake", ".diff": "tree-sitter-diff",
+    ".rst": "tree-sitter-rst", ".bash": "tree-sitter-bash", ".zsh": "tree-sitter-bash",
+    ".fish": "tree-sitter-fish", ".m68k": "tree-sitter-asm",
 }
 
 def install_grammars(do_install: bool = False, only_ext: Optional[str] = None) -> str:

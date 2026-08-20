@@ -647,16 +647,16 @@ ceiling rises when you opt in:
   matching, so it doesn't false-positive on `helper()` inside a string or
   comment. *Removed by:* `codeloom --install-grammars --yes` (or `pip install
   tree-sitter tree-sitter-python ...`). codeloom then uses real AST parsing for
-  the **tree-sitter language set**, plus a **130+ extension regex/C extraction** —
-  every language gets the same structural extraction + cross-file resolution
-  into one graph, no per-language setup. TypeScript/JavaScript (incl.
+  the **tree-sitter language set** — a data-driven resolver dynamically imports
+  ANY installed grammar (core + long-tail) for real AST depth, auto-installing
+  per-language on demand (`CODELOOM_AUTO_INSTALL_GRAMMARS=1`), falling back to
+  regex when a grammar isn't installed. Plus a **130+ extension regex/C
+  extraction** for recognition everywhere. TypeScript/JavaScript (incl.
   `.tsx/.jsx/.mjs`), Rust (struct/enum/trait/impl), Svelte, Vue, Astro, Scala,
   Erlang, Solidity, Terraform/HCL, Nix, COBOL, VB.NET, Pascal, ArkTS, Metal,
   Lua/Luau, R, Fortran, Ada, Verilog/VHDL, SystemVerilog, Objective-C, Perl,
   Bash/Zsh, PowerShell, Julia, Tcl, CoffeeScript, and more. `codeloom --langs`
-  lists them all. Set `CODELOOM_AUTO_INSTALL_GRAMMARS=1` and codeloom
-  **auto-installs just the grammar for the language it encounters** on first
-  use — no manual trigger needed, one grammar at a time.
+  lists them all.
 - **Static analysis misses runtime wiring.** *Removed by:* `codeloom --trace CMD
   --force` runs a command (e.g. your test suite) under `sys.settrace` and
   records the ACTUAL call edges — capturing dynamic imports and monkeypatching
