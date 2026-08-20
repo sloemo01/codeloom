@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.45.0"
+VERSION = "0.46.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -1320,6 +1320,43 @@ def render_refactor(files: List[str], root: str, symbol: str, max_files: int = 5
     for i, o in enumerate(order[:8], 1):
         buf.write(f"  {i}. {o}\n")
     buf.write("\n# Refactor with preflight checks before each edit (--check-edit).\n")
+    return buf.getvalue()
+
+# Rename safety: list every symbol, file, and edge a rename would touch ---------
+def render_rename(files: List[str], root: str, old: str, new: str) -> str:
+    """What a rename touches: every definition, every call site, every import
+    edge, and the impacted modules. Agents run this BEFORE renaming to know
+    the blast radius and update all references."""
+    index = build_byte_index(files, root)
+    graph = build_graph_multi(files, root)
+    buf = io.StringIO()
+    buf.write(f"# rename: {old} -> {new}\n")
+    locs = index.get(old)
+    if not locs:
+        buf.write(f"  '{old}' not found in the symbol index. Check the exact name (--search).\n")
+        return buf.getvalue()
+    buf.write(f"## Definitions ({len(locs)})\n")
+    for loc in locs:
+        buf.write(f"  {loc['module']}:{loc.get('line', 1)}  [{loc.get('kind','')}]\n")
+    buf.write("\n## Files to update (contain the name)\n")
+    files_touched = set()
+    for f in files:
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                if old in fh.read():
+                    files_touched.add(f)
+        except OSError:
+            continue
+    for i, f in enumerate(sorted(files_touched)[:20], 1):
+        buf.write(f"  {i}. {f}\n")
+    if len(files_touched) > 20:
+        buf.write(f"  ... (+{len(files_touched) - 20} more)\n")
+    buf.write("\n## Modules depending on its defining module\n")
+    mod = locs[0]["module"]
+    for m, deps in graph.items():
+        if mod in deps:
+            buf.write(f"  {m} -> {mod}\n")
+    buf.write("\n# Update all files above + the symbol definitions. --check-delete can verify nothing else refs it.\n")
     return buf.getvalue()
 
 # 24. Bug prediction ---------------------------------------------------------
@@ -4577,6 +4614,59 @@ def render_loom_context(files: List[str], root: str, task: str, max_files: int =
     buf.write("This is the complete context for the task. Descend only as deep as you need.\n")
     return buf.getvalue()
 
+# --ask: one-shot complete task brief (loom + impact + touch list) -------------
+def render_ask(files: List[str], root: str, task: str, max_files: int = 5000) -> str:
+    """One command for an agent: the complete task brief. Loom layered context
+    PLUS the impact/blast-radius (what breaks if you change these files) PLUS
+    a concrete 'files to touch' checklist. This is the 'just tell me what to
+    do' answer — the highest-value single call."""
+    buf = io.StringIO()
+    buf.write(f"# ASK: {task}\n")
+    buf.write("# Complete task brief — read this, then act. No other setup needed.\n\n")
+
+    # 1. layered context (overview -> important files -> code -> git -> memory)
+    try:
+        buf.write(render_loom_context(files, root, task, max_files))
+    except Exception:
+        pass
+    buf.write("\n")
+
+    # 2. impact / blast radius (what breaks if you touch the relevant files)
+    try:
+        rel = edit_relevance(files, root, task, top=6)
+        graph = build_graph_multi(files, root)
+        buf.write("## Blast radius (what breaks if you edit these)\n")
+        seen = set()
+        for r in rel[:6]:
+            mod = r.get("module") or module_name_of(r["path"], root)
+            if mod in seen:
+                continue
+            seen.add(mod)
+            try:
+                imp = impact_analysis(graph, mod)
+                dependents = imp.get("impacted", [])
+                buf.write(f"  {mod}: {len(dependents)} dependent module(s)\n")
+                for d in dependents[:4]:
+                    buf.write(f"    <- {d}\n")
+            except Exception:
+                buf.write(f"  {mod}\n")
+        buf.write("\n")
+    except Exception:
+        pass
+
+    # 3. concrete checklist
+    try:
+        buf.write("## Files to touch (checklist)\n")
+        for i, r in enumerate(edit_relevance(files, root, task, top=6), 1):
+            buf.write(f"  [ ] {r['path']}\n")
+        buf.write("\n")
+    except Exception:
+        pass
+
+    buf.write("## Next step\n")
+    buf.write("Edit the checklist files. Use --check-edit before each change and --rename for renames.\n")
+    return buf.getvalue()
+
 # --------------------------------------------------------------------------- #
 # --diff: git-aware, structure of changed files
 # --------------------------------------------------------------------------- #
@@ -5401,6 +5491,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--explain-topic", metavar="TOPIC", help="explain a topic/domain end-to-end (files + call flow), e.g. 'explain authentication'")
     p.add_argument("--docs", metavar="KIND", nargs="?", const="readme", help="generate a README or ARCHITECTURE doc (--docs readme|arch)")
     p.add_argument("--refactor", metavar="SYMBOL", help="refactor engine: files, deps, risk, order for a symbol")
+    p.add_argument("--rename", nargs=2, metavar=("OLD", "NEW"), help="what a rename touches: definitions, files, dependents, edges")
+    p.add_argument("--ask", metavar="TASK", help="one-shot complete task brief: loom context + blast radius + files-to-touch checklist")
     p.add_argument("--bug-predict", action="store_true", help="bug prediction: files likely to break (churn+coupling+complexity)")
     p.add_argument("--timeline", action="store_true", help="repository timeline: replay architecture evolution via git")
     p.add_argument("--dedup", action="store_true", help="session dedupe: skip already-read files, show the new delta")
@@ -5473,6 +5565,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
         print(render_refactor(files, root, args.refactor, args.max_files))
+        return 0
+
+    if args.rename:
+        gi = os.path.join(root, ".gitignore")
+        rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+        files: List[str] = []
+        _walk(root, rules, args.max_files, files)
+        print(render_rename(files, root, args.rename[0], args.rename[1]))
+        return 0
+
+    if args.ask is not None:
+        gi = os.path.join(root, ".gitignore")
+        rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+        files: List[str] = []
+        _walk(root, rules, args.max_files, files)
+        print(render_ask(files, root, args.ask, args.max_files))
         return 0
 
     if args.bug_predict:

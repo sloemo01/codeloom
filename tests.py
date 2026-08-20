@@ -675,6 +675,24 @@ class TestCodeLoom(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
+    def test_rename_reports_blast_radius(self):
+        # rename should list the definition, touched files, and dependent modules
+        tmp = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(tmp, "pkg"))
+            with open(os.path.join(tmp, "pkg", "a.py"), "w") as f:
+                f.write("def helper():\n    pass\n")
+            with open(os.path.join(tmp, "pkg", "b.py"), "w") as f:
+                f.write("from pkg.a import helper\nhelper()\n")
+            files = [os.path.join(tmp, "pkg", "a.py"), os.path.join(tmp, "pkg", "b.py")]
+            out = codeloom.render_rename(files, tmp, "helper", "new_helper")
+            self.assertIn("helper", out)
+            self.assertIn("pkg.a", out)  # definition module
+            # b.py depends on pkg.a
+            self.assertIn("pkg.a", out.split("depending")[1] if "depending" in out else out)
+        finally:
+            shutil.rmtree(tmp)
+
     def test_install_grammars_prints(self):
         # without --yes, install_grammars prints the command (doesn't install)
         out = codeloom.install_grammars(do_install=False)

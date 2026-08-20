@@ -99,7 +99,9 @@ codeloom [OPTIONS] [ROOT]
 | `--heatmap` | Dependency heatmap (god classes, circular imports, unused) |
 | `--explain-topic X` | Explain a domain end-to-end |
 | `--docs readme\|arch` | Generate a README or ARCHITECTURE doc |
-| `--refactor X` | Refactor engine: files, deps, risk, order |
+| `codeloom --refactor X` | Refactor engine: files, deps, risk, order for symbol X |
+| `codeloom --rename OLD NEW` | What a rename touches: definitions, files, dependents, edges |
+| `codeloom --ask "task"` | One-shot complete task brief: loom + blast radius + files-to-touch checklist |
 | `--bug-predict` | Files likely to break (churn+coupling+complexity) |
 | `--timeline` | Repository timeline via git |
 | `--find "q"` | Natural-language flow discovery |

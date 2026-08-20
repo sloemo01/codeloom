@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.45.0"
+SERVER_VERSION = "0.46.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -663,6 +663,42 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "codeloom_rename",
+        "description": (
+            "What a rename touches: every definition, every file containing the "
+            "name, every dependent module/edge. Run before renaming a symbol to "
+            "know the blast radius and update all references."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "old": {"type": "string", "description": "Current symbol name"},
+                "new": {"type": "string", "description": "New symbol name"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["old", "new"],
+        },
+    },
+    {
+        "name": "codeloom_ask",
+        "description": (
+            "One-shot complete task brief: layered context (overview -> important "
+            "files -> embedded code -> git -> memory) PLUS blast radius (what "
+            "breaks) PLUS a concrete files-to-touch checklist. The 'just tell me "
+            "what to do' call for an agent on a task."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "task": {"type": "string", "description": "The task, in plain language"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["task"],
+        },
+    },
+    {
         "name": "codeloom_bug_predict",
         "description": (
             "Bug prediction: files statistically likely to break, scored by "
@@ -1087,6 +1123,18 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
         f = _collect_files(root, max_files)
         text = codeloom.render_refactor(f, root, sym, max_files)
+    elif name == "codeloom_rename":
+        old = args.get("old"); new = args.get("new")
+        if not old or not new:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'old'/'new' arguments"}]}
+        f = _collect_files(root, max_files)
+        text = codeloom.render_rename(f, root, old, new)
+    elif name == "codeloom_ask":
+        task = args.get("task")
+        if not task:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'task' argument"}]}
+        f = _collect_files(root, max_files)
+        text = codeloom.render_ask(f, root, task, max_files)
     elif name == "codeloom_bug_predict":
         f = _collect_files(root, max_files)
         text = codeloom.render_bug_predict(f, root)

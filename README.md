@@ -132,6 +132,8 @@ That's it. Under a second, zero setup, works offline. Cross-platform — macOS, 
 | `codeloom --explain-topic X` | Explain a domain end-to-end (files + call flow) |
 | `codeloom --docs readme\|arch` | Generate a README or ARCHITECTURE doc |
 | `codeloom --refactor X` | Refactor engine: files, deps, risk, order for symbol X |
+| `codeloom --rename OLD NEW` | What a rename touches: definitions, files, dependents, edges |
+| `codeloom --ask "task"` | One-shot complete task brief: loom + blast radius + files-to-touch |
 | `codeloom --bug-predict` | Bug prediction: files likely to break (churn+coupling+complexity) |
 | `codeloom --timeline` | Repository timeline: architecture evolution via git |
 | `codeloom --dedup` | Session dedupe: skip already-read files (show new delta) |
