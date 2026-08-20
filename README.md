@@ -592,7 +592,9 @@ ceiling rises when you opt in:
   **25 languages** (Python, JS/TS, Go, Rust, Java, C/C++, C#, Ruby, PHP, Swift,
   Kotlin, Dart, Lua, bash, Elixir, OCaml, Scala, Haskell, Zig, Perl, F#, PowerShell)
   instead of regex. Verified: `export function helper` (missed by regex) is
-  caught by tree-sitter.
+  caught by tree-sitter. Set `CODELOOM_AUTO_INSTALL_GRAMMARS=1` and codeloom
+  **auto-installs just the grammar for the language it encounters** on first
+  use — no manual trigger needed, one grammar at a time.
 - **Static analysis misses runtime wiring.** *Removed by:* `codeloom --trace CMD
   --force` runs a command (e.g. your test suite) under `sys.settrace` and
   records the ACTUAL call edges — capturing dynamic imports and monkeypatching

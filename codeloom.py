@@ -59,7 +59,9 @@ except ImportError:
 def _ts_grammar_for(ext: str):
     """Return a tree-sitter Language for a file extension, or None.
     Wires up the languages codeloom already supports via regex, so
-    --install-grammars gives real AST precision across all of them."""
+    --install-grammars gives real AST precision across all of them.
+    If CODELOOM_AUTO_INSTALL_GRAMMARS=1, auto-installs just the grammar for
+    this extension on first use (opt-in, one grammar at a time)."""
     if not _TS_AVAILABLE:
         return None
     try:
@@ -135,6 +137,91 @@ def _ts_grammar_for(ext: str):
         if ext == ".ps1":
             import tree_sitter_powershell
             return Language(tree_sitter_powershell.language())
+    except ImportError:
+        # grammar not installed. If auto-install is enabled (opt-in), install
+        # just this grammar and retry once — kills the "manually trigger" gap.
+        if os.environ.get("CODELOOM_AUTO_INSTALL_GRAMMARS") == "1":
+            pkg = _EXT_GRAMMAR_PKG.get(ext)
+            if pkg:
+                import subprocess as _sp
+                r = _sp.run(["pip", "install", "-q", "tree-sitter", pkg], capture_output=True, text=True)
+                if r.returncode == 0:
+                    try:
+                        if ext == ".py":
+                            import tree_sitter_python
+                            return Language(tree_sitter_python.language())
+                        if ext in (".js", ".jsx"):
+                            import tree_sitter_javascript
+                            return Language(tree_sitter_javascript.language())
+                        if ext in (".ts", ".tsx"):
+                            import tree_sitter_typescript
+                            return Language(tree_sitter_typescript.language())
+                        if ext == ".go":
+                            import tree_sitter_go
+                            return Language(tree_sitter_go.language())
+                        if ext == ".rs":
+                            import tree_sitter_rust
+                            return Language(tree_sitter_rust.language())
+                        if ext == ".java":
+                            import tree_sitter_java
+                            return Language(tree_sitter_java.language())
+                        if ext in (".c", ".h"):
+                            import tree_sitter_c
+                            return Language(tree_sitter_c.language())
+                        if ext in (".cpp", ".hpp", ".cc", ".cxx"):
+                            import tree_sitter_cpp
+                            return Language(tree_sitter_cpp.language())
+                        if ext == ".cs":
+                            import tree_sitter_c_sharp
+                            return Language(tree_sitter_c_sharp.language())
+                        if ext == ".rb":
+                            import tree_sitter_ruby
+                            return Language(tree_sitter_ruby.language())
+                        if ext == ".php":
+                            import tree_sitter_php
+                            return Language(tree_sitter_php.language())
+                        if ext == ".swift":
+                            import tree_sitter_swift
+                            return Language(tree_sitter_swift.language())
+                        if ext == ".kt":
+                            import tree_sitter_kotlin
+                            return Language(tree_sitter_kotlin.language())
+                        if ext == ".dart":
+                            import tree_sitter_dart
+                            return Language(tree_sitter_dart.language())
+                        if ext == ".lua":
+                            import tree_sitter_lua
+                            return Language(tree_sitter_lua.language())
+                        if ext == ".sh":
+                            import tree_sitter_bash
+                            return Language(tree_sitter_bash.language())
+                        if ext in (".ex", ".exs"):
+                            import tree_sitter_elixir
+                            return Language(tree_sitter_elixir.language())
+                        if ext == ".ml":
+                            import tree_sitter_ocaml
+                            return Language(tree_sitter_ocaml.language())
+                        if ext == ".scala":
+                            import tree_sitter_scala
+                            return Language(tree_sitter_scala.language())
+                        if ext == ".hs":
+                            import tree_sitter_haskell
+                            return Language(tree_sitter_haskell.language())
+                        if ext == ".zig":
+                            import tree_sitter_zig
+                            return Language(tree_sitter_zig.language())
+                        if ext == ".pl":
+                            import tree_sitter_perl
+                            return Language(tree_sitter_perl.language())
+                        if ext == ".fs":
+                            import tree_sitter_fsharp
+                            return Language(tree_sitter_fsharp.language())
+                        if ext == ".ps1":
+                            import tree_sitter_powershell
+                            return Language(tree_sitter_powershell.language())
+                    except Exception:
+                        return None
+        return None
     except Exception:
         return None
     return None
@@ -227,37 +314,57 @@ def _scan_calls_worker(args):
                     edges[current_func].add(callee)
     return (mod, {k: v for k, v in edges.items() if v})
 
-def install_grammars(do_install: bool = False) -> str:
+_ALL_GRAMMAR_PKGS = [
+    "tree-sitter",
+    "tree-sitter-python",
+    "tree-sitter-javascript",
+    "tree-sitter-typescript",
+    "tree-sitter-go",
+    "tree-sitter-rust",
+    "tree-sitter-java",
+    "tree-sitter-c",
+    "tree-sitter-cpp",
+    "tree-sitter-c-sharp",
+    "tree-sitter-ruby",
+    "tree-sitter-php",
+    "tree-sitter-swift",
+    "tree-sitter-kotlin",
+    "tree-sitter-dart",
+    "tree-sitter-lua",
+    "tree-sitter-bash",
+    "tree-sitter-elixir",
+    "tree-sitter-ocaml",
+    "tree-sitter-scala",
+    "tree-sitter-haskell",
+    "tree-sitter-zig",
+    "tree-sitter-perl",
+    "tree-sitter-fsharp",
+    "tree-sitter-powershell",
+]
+
+# map language extension -> the pip package that provides its grammar
+# Used for auto-install of just the grammar the codebase actually needs.
+_EXT_GRAMMAR_PKG = {
+    ".py": "tree-sitter-python", ".js": "tree-sitter-javascript", ".jsx": "tree-sitter-javascript",
+    ".ts": "tree-sitter-typescript", ".tsx": "tree-sitter-typescript", ".go": "tree-sitter-go",
+    ".rs": "tree-sitter-rust", ".java": "tree-sitter-java", ".c": "tree-sitter-c",
+    ".h": "tree-sitter-c", ".cpp": "tree-sitter-cpp", ".hpp": "tree-sitter-cpp",
+    ".cs": "tree-sitter-c-sharp", ".rb": "tree-sitter-ruby", ".php": "tree-sitter-php",
+    ".swift": "tree-sitter-swift", ".kt": "tree-sitter-kotlin", ".dart": "tree-sitter-dart",
+    ".lua": "tree-sitter-lua", ".sh": "tree-sitter-bash", ".ex": "tree-sitter-elixir",
+    ".exs": "tree-sitter-elixir", ".ml": "tree-sitter-ocaml", ".scala": "tree-sitter-scala",
+    ".hs": "tree-sitter-haskell", ".zig": "tree-sitter-zig", ".pl": "tree-sitter-perl",
+    ".fs": "tree-sitter-fsharp", ".ps1": "tree-sitter-powershell",
+}
+
+def install_grammars(do_install: bool = False, only_ext: Optional[str] = None) -> str:
     """One-command opt-in installer for tree-sitter language grammars.
     Keeps the single-file zero-dep core; grammars are an optional precision
-    upgrade. With do_install=True, actually runs pip install."""
-    pkgs = [
-        "tree-sitter",
-        "tree-sitter-python",
-        "tree-sitter-javascript",
-        "tree-sitter-typescript",
-        "tree-sitter-go",
-        "tree-sitter-rust",
-        "tree-sitter-java",
-        "tree-sitter-c",
-        "tree-sitter-cpp",
-        "tree-sitter-c-sharp",
-        "tree-sitter-ruby",
-        "tree-sitter-php",
-        "tree-sitter-swift",
-        "tree-sitter-kotlin",
-        "tree-sitter-dart",
-        "tree-sitter-lua",
-        "tree-sitter-bash",
-        "tree-sitter-elixir",
-        "tree-sitter-ocaml",
-        "tree-sitter-scala",
-        "tree-sitter-haskell",
-        "tree-sitter-zig",
-        "tree-sitter-perl",
-        "tree-sitter-fsharp",
-        "tree-sitter-powershell",
-    ]
+    upgrade. With do_install=True, actually runs pip install.
+    With only_ext set, installs just the grammar for that file extension."""
+    pkgs = _ALL_GRAMMAR_PKGS
+    if only_ext:
+        pkgs = ["tree-sitter"] + [p for p in pkgs[1:] if p == _EXT_GRAMMAR_PKG.get(only_ext)]
     cmd = "pip install " + " ".join(pkgs)
     if do_install:
         import subprocess as _sp
