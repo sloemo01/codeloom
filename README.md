@@ -563,7 +563,11 @@ does.
 ## MCP server (agents call codeloom natively)
 
 `codeloom-mcp.py` is a **zero-dependency MCP server** (stdlib JSON-RPC over
-stdio — no `mcp` package, no daemon). Register it with any MCP-capable agent:
+stdio — no `mcp` package, no daemon). Register it with any MCP-capable agent.
+`codeloom --install-agent AGENT` prints the exact config for **17 agents** —
+Claude Code, Codex, Cursor, Gemini CLI, OpenCode, Cline, OpenHands, Devin,
+Hermes Agent, Aider, Roo Code, Windsurf, Amazon Q, JetBrains, Junie, Kimi CLI,
+and Qwen Code (or auto-detect with `--detect-agent`):
 
 ```json
 // Claude Code / Cursor / Codex MCP config
@@ -576,7 +580,7 @@ stdio — no `mcp` package, no daemon). Register it with any MCP-capable agent:
 }
 ```
 
-Exposes **53 tools**: `codeloom_map`, `codeloom_graph`, `codeloom_focus`,
+Exposes **54 tools**: `codeloom_map`, `codeloom_graph`, `codeloom_focus`,
 `codeloom_calls`, `codeloom_diff`, `codeloom_impact`, `codeloom_task`,
 `codeloom_plan`, `codeloom_pack`, `codeloom_cross`, `codeloom_search`,
 `codeloom_usages`, `codeloom_grep`, `codeloom_read`, `codeloom_explain`,
@@ -745,7 +749,7 @@ codeloom's design answers them:
 
 | User pain (jcodemunch issue) | codeloom |
 |---|---|
-| **Too many tools** (#297: 109 tools across jMunch, over the 50 limit) | **53 tools + 1 entry point** (`codeloom_ask`) |
+| **Too many tools** (#297: 109 tools across jMunch, over the 50 limit) | **54 tools + 1 entry point** (`codeloom_ask`) |
 | **Token overhead on grep tasks** (#142: 1.31x more tokens, 2.43x cache reads) | **summary-first `--get-symbol` + `--pack`** (token-minimal by design) |
 | **Framework-aware intelligence** (#201: Laravel/Next.js conventions) | **`--framework`** (detects framework + routes/models/config/conventions) |
 | **Install friction** (#308, #273: PyPI unavailable, hook support) | **one file, copy it** + `pip install codeloom` |

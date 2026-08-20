@@ -73,7 +73,7 @@ So I built codeloom: a map of your repo for agents. One file, zero deps, no daem
 • `codeloom --write MAP.md` → a reviewable text artifact you commit and diff in PRs (their index is a binary blob)
 • `codeloom --install-agents .` → writes AGENTS.md + a GitHub Action that posts the `--pack` brief on every PR. One line.
 
-**6/6** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.51.0 released. `--resume` restores your agent's structural context after a compaction. Code-embedded task brief (`--ask`/`--pack`), edit-relevance, 99% token savings, lazy per-symbol index + `--watch`/`--watch-core` (near-resident or native, no daemon), 54 MCP tools, optional C engine + `--serve` — indexes the full Linux kernel (3.2M symbols, 408k edges) in **~91s**. Go use it.
+**6/6** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.52.0 released. `--resume` restores your agent's structural context after a compaction. Code-embedded task brief (`--ask`/`--pack`), edit-relevance, 99% token savings, lazy per-symbol index + `--watch`/`--watch-core` (near-resident or native, no daemon), 54 MCP tools, optional C engine + `--serve` — indexes the full Linux kernel (3.2M symbols, 408k edges) in **~91s**. Go use it.
 
 ---
 
