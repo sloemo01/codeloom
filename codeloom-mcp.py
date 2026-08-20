@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.35.0"
+SERVER_VERSION = "0.36.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -568,6 +568,68 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "codeloom_architecture",
+        "description": (
+            "Detect the architectural pattern (MVC / layered / Clean / DDD / "
+            "Hexagonal / monolith / microservices) from the repo layout, plus "
+            "the top-level structure. Orients the agent to which layer a change "
+            "belongs in."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+        },
+    },
+    {
+        "name": "codeloom_heatmap",
+        "description": (
+            "Dependency heatmap: god/hub classes (widest blast radius), circular "
+            "imports, and possibly-unused modules. Refactor-risk signals."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+        },
+    },
+    {
+        "name": "codeloom_explain_topic",
+        "description": (
+            "Explain a topic/domain end-to-end: relevant files + call flow, "
+            "instead of a single symbol. E.g. 'authentication' -> the files and "
+            "how they connect."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "topic": {"type": "string", "description": "The topic/domain, e.g. 'authentication'"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["topic"],
+        },
+    },
+    {
+        "name": "codeloom_docs",
+        "description": (
+            "Generate a README or ARCHITECTURE doc from the repo structure. "
+            "kind: 'readme' (default) or 'arch'."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "kind": {"type": "string", "description": "'readme' or 'arch' (default readme)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+        },
+    },
+    {
         "name": "codeloom_session_report",
         "description": (
             "Summarize the local session log: total calls, tokens, and estimated "
@@ -826,7 +888,23 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     if name == "codeloom_framework":
         return {"content": [{"type": "text", "text": codeloom.render_framework(root, max_files)}]}
 
-    if name == "codeloom_session_report":
+    if name == "codeloom_architecture":
+        f = _collect_files(root, max_files)
+        text = codeloom.render_architecture(f, root)
+    elif name == "codeloom_heatmap":
+        f = _collect_files(root, max_files)
+        text = codeloom.dependency_heatmap(f, root)
+    elif name == "codeloom_explain_topic":
+        topic = args.get("topic")
+        if not topic:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'topic' argument"}]}
+        f = _collect_files(root, max_files)
+        text = codeloom.render_explain_topic(f, root, topic, max_files)
+    elif name == "codeloom_docs":
+        kind = args.get("kind", "readme")
+        f = _collect_files(root, max_files)
+        text = codeloom.render_auto_docs(f, root, kind)
+    elif name == "codeloom_session_report":
         return {"content": [{"type": "text", "text": codeloom.render_session_report(root)}]}
 
     if name == "codeloom_watch":

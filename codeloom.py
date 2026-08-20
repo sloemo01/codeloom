@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.35.0"
+VERSION = "0.36.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -1103,6 +1103,158 @@ def render_framework(root: str, max_files: int) -> str:
         buf.write("  app.use() middleware chain; routes in routes/ or inline\n")
     else:
         buf.write("  (no framework-specific conventions detected)\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
+# Architecture detection (#6) + dependency heatmap (#7)
+# --------------------------------------------------------------------------- #
+
+def detect_architecture(files: List[str], root: str) -> dict:
+    """Detect the architectural pattern from the repo layout. Returns
+    {pattern, evidence, layers}. Heuristic over directory structure."""
+    rels = []
+    for f in files:
+        rel = os.path.relpath(f, root)
+        rels.append(rel.replace(os.sep, "/").lower())
+    patterns = []
+    joined = " ".join(rels)
+    # MVC
+    if any(f"/models/" in r or "/views/" in r or "/controllers/" in r for r in rels):
+        patterns.append("MVC")
+    # Layered / Clean
+    if any(r.startswith(("domain/", "application/", "infrastructure/", "interface/")) for r in rels) \
+       or any("/domain/" in r for r in rels):
+        patterns.append("Layered/Clean")
+    # DDD
+    if any(("/domain/" in r and "/aggregates/" in r) or ("aggregates/" in r) for r in rels) \
+       or any("/bounded/" in r or "/modules/" in r for r in rels):
+        patterns.append("DDD")
+    # Hexagonal
+    if any(("/ports/" in r or "/adapters/" in r) for r in rels):
+        patterns.append("Hexagonal")
+    # Feature-first
+    if any(("/features/" in r or "/modules/" in r and "/api/" in r) for r in rels):
+        patterns.append("Feature-first")
+    # Monolith vs microservices
+    svc_dirs = [r.split("/")[0] for r in rels if r.count("/") >= 1]
+    # count top-level dirs that look like services (have own config/tests)
+    top_levels = {}
+    for r in rels:
+        top = r.split("/")[0]
+        if top and top != "tests":
+            top_levels[top] = top_levels.get(top, 0) + 1
+    is_microservice = len([k for k, v in top_levels.items() if v > 5]) >= 3 and len(top_levels) >= 4
+    scope = "Microservices" if is_microservice else "Monolith"
+    if not patterns:
+        patterns.append("Flat/Layered (no convention detected)")
+    return {"pattern": patterns, "scope": scope, "top_levels": top_levels}
+
+def render_architecture(files: List[str], root: str) -> str:
+    a = detect_architecture(files, root)
+    buf = io.StringIO()
+    buf.write("# architecture\n")
+    buf.write(f"  scope: {a['scope']}\n")
+    buf.write(f"  pattern(s): {', '.join(a['pattern'])}\n")
+    buf.write("\n## Top-level structure\n")
+    for top, n in sorted(a["top_levels"].items(), key=lambda x: -x[1])[:15]:
+        buf.write(f"  {top}/ ({n} files)\n")
+    buf.write("\n# Agent: use this to orient — which layer/convention a change belongs in.\n")
+    return buf.getvalue()
+
+def dependency_heatmap(files: List[str], root: str) -> str:
+    """God classes, circular imports, high coupling, unused modules."""
+    graph = build_graph_multi(files, root)
+    buf = io.StringIO()
+    buf.write("# dependency heatmap\n")
+    # god classes: modules with the most dependents (widest blast radius)
+    deps_count = {}
+    for mod, deps in graph.items():
+        for d in deps:
+            deps_count[d] = deps_count.get(d, 0) + 1
+    god = sorted(deps_count.items(), key=lambda x: -x[1])[:8]
+    buf.write("## God/hub modules (most things depend on these — risk)\n")
+    for mod, n in god:
+        buf.write(f"  {mod} ({n} dependents)\n")
+    # circular imports
+    buf.write("\n## Circular imports\n")
+    circ = set()
+    for a, deps in graph.items():
+        for b in deps:
+            if a in graph.get(b, set()):
+                circ.add(tuple(sorted([a, b])))
+    if circ:
+        for a, b in sorted(circ)[:10]:
+            buf.write(f"  {a} <-> {b}\n")
+    else:
+        buf.write("  none detected\n")
+    # unused modules: defined but nothing imports them
+    all_deps = set()
+    for deps in graph.values():
+        all_deps |= deps
+    unused = sorted(set(graph.keys()) - all_deps)[:10]
+    buf.write("\n## Possibly-unused modules (no importers)\n")
+    for u in unused:
+        buf.write(f"  {u}\n")
+    buf.write("\n# Hot: god classes + circular imports are refactor targets.\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
+# Explain-mode for a topic (#20) + auto-doc generation (#11)
+# --------------------------------------------------------------------------- #
+
+def render_explain_topic(files: List[str], root: str, topic: str, max_files: int = 5000) -> str:
+    """Explain a topic/domain end-to-end: flow diagram (text) + relevant files
+    + call chain, instead of just one symbol. 'explain authentication' ->
+    relevant files + how they connect."""
+    buf = io.StringIO()
+    buf.write(f"# explain: {topic}\n")
+    rel = edit_relevance(files, root, topic, top=8)
+    if not rel:
+        buf.write("  No modules clearly related to this topic. Try a more specific term.\n")
+        return buf.getvalue()
+    graph = build_graph_multi(files, root)
+    buf.write(f"## Relevant files ({len(rel)})\n")
+    for i, r in enumerate(rel, 1):
+        buf.write(f"  {i}. {r['path']}\n")
+    buf.write("\n## Call flow (how these connect)\n")
+    mods = [r["module"] for r in rel if r["module"] in graph]
+    seen = set()
+    for m in mods:
+        for dep in sorted(graph.get(m, set())):
+            key = (m, dep)
+            if key not in seen and (dep in mods or any(dep.startswith(mm) for mm in mods)):
+                seen.add(key)
+                buf.write(f"  {m} -> {dep}\n")
+    buf.write("\n## How to trace deeper\n")
+    buf.write(f"  Run `codeloom --loom \"{topic}\"` for layered context, or\n")
+    buf.write("  `codeloom --cross` for the full cross-file call graph.\n")
+    return buf.getvalue()
+
+def render_auto_docs(files: List[str], root: str, kind: str = "readme") -> str:
+    """Generate a README or ARCHITECTURE doc from the repo structure."""
+    graph = build_graph_multi(files, root)
+    m = build_map(root, True, 5000)
+    buf = io.StringIO()
+    if kind in ("readme", "readme.md"):
+        buf.write(f"# {os.path.basename(root)}\n\n")
+        buf.write(f"## Overview\n\n{os.path.basename(root)} — {m['file_count']} files, "
+                  f"{len(graph)} modules.\n\n")
+        buf.write("## Structure\n\n")
+        for top, n in sorted(detect_architecture(files, root)["top_levels"].items(), key=lambda x: -x[1])[:15]:
+            buf.write(f"- `{top}/` — {n} files\n")
+        buf.write("\n## Entry points\n\n")
+        for e in m["entry_points"][:10]:
+            buf.write(f"- `{os.path.relpath(e, root)}`\n")
+        buf.write("\n_Generated by codeloom._\n")
+    elif kind in ("arch", "architecture"):
+        arch = detect_architecture(files, root)
+        buf.write("# Architecture\n\n")
+        buf.write(f"Scope: {arch['scope']}  \n")
+        buf.write(f"Pattern(s): {', '.join(arch['pattern'])}  \n\n")
+        buf.write("## Modules\n\n")
+        for mod in sorted(graph.keys())[:40]:
+            buf.write(f"- `{mod}`\n")
+        buf.write("\n_Generated by codeloom._\n")
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
@@ -4179,6 +4331,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--watch", action="store_true", help="incremental daemon-less refresh: re-index only changed files, keep lookups near-resident")
     p.add_argument("--index-status", action="store_true", help="show persistent index status/freshness")
     p.add_argument("--framework", action="store_true", help="detect the web/app framework and surface its structure (routes, models, config, conventions)")
+    p.add_argument("--architecture", action="store_true", help="detect the architectural pattern (MVC/layered/DDD/monolith)")
+    p.add_argument("--heatmap", action="store_true", help="dependency heatmap: god classes, circular imports, unused modules")
+    p.add_argument("--explain-topic", metavar="TOPIC", help="explain a topic/domain end-to-end (files + call flow), e.g. 'explain authentication'")
+    p.add_argument("--docs", metavar="KIND", nargs="?", const="readme", help="generate a README or ARCHITECTURE doc (--docs readme|arch)")
     p.add_argument("--version", action="version", version=f"codeloom {VERSION}")
     args = p.parse_args(argv)
 
@@ -4201,6 +4357,38 @@ def main(argv: Optional[List[str]] = None) -> int:
     # --framework: detect the web/app framework and surface its structure
     if args.framework:
         print(render_framework(root, args.max_files))
+        return 0
+
+    if args.architecture:
+        gi = os.path.join(root, ".gitignore")
+        rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+        files: List[str] = []
+        _walk(root, rules, args.max_files, files)
+        print(render_architecture(files, root))
+        return 0
+
+    if args.heatmap:
+        gi = os.path.join(root, ".gitignore")
+        rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+        files: List[str] = []
+        _walk(root, rules, args.max_files, files)
+        print(dependency_heatmap(files, root))
+        return 0
+
+    if args.explain_topic:
+        gi = os.path.join(root, ".gitignore")
+        rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+        files: List[str] = []
+        _walk(root, rules, args.max_files, files)
+        print(render_explain_topic(files, root, args.explain_topic, args.max_files))
+        return 0
+
+    if args.docs is not None:
+        gi = os.path.join(root, ".gitignore")
+        rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+        files: List[str] = []
+        _walk(root, rules, args.max_files, files)
+        print(render_auto_docs(files, root, args.docs))
         return 0
 
     # --session-report: summarize the local session log
