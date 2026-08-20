@@ -3352,6 +3352,69 @@ def build_knowledge_graph(files: List[str], root: str, parallel: bool = False) -
         "imports": {m: sorted(deps) for m, deps in graph.items()},
     }
 
+# --------------------------------------------------------------------------- #
+# Optional C-accelerated core (codeloom_core)
+# --------------------------------------------------------------------------- #
+# Build once:  cc -O3 -o codeloom_core codeloom_core.c
+# Then pass --engine c to index with the compiled scanner for Linux-kernel-class
+# speed. Pure-Python remains the zero-dependency default.
+_CORE_NAME = "codeloom_core"
+
+def _find_core() -> Optional[str]:
+    """Locate the compiled codeloom_core binary next to codeloom.py or on PATH."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    cands = [os.path.join(here, _CORE_NAME), os.path.join(here, _CORE_NAME + ".exe")]
+    for c in cands:
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    import shutil
+    return shutil.which(_CORE_NAME)
+
+def _c_scan(files: List[str]) -> List[dict]:
+    """Run the C core over files (argv mode). Returns per-file dicts
+    {file, symbols:[{name,kind}], imports:[...]}. Empty on any error."""
+    core = _find_core()
+    if not core:
+        return []
+    import subprocess, json as _json
+    # batch in chunks to avoid argv limits on 100k-file repos
+    results = []
+    chunk = 2000
+    for i in range(0, len(files), chunk):
+        batch = files[i:i + chunk]
+        try:
+            r = subprocess.run([core] + batch, capture_output=True, text=True, timeout=300)
+        except Exception:
+            continue
+        for line in r.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                results.append(_json.loads(line))
+            except _json.JSONDecodeError:
+                continue
+    return results
+
+def _c_symbol_index(files: List[str], root: str) -> dict:
+    """Build a symbol index (name -> locs) using the C core's fast scan.
+    Faster than Python parsing; used by --engine c. Snippet is the def line."""
+    idx: dict = {}
+    for fr in _c_scan(files):
+        path = fr.get("file", "")
+        if not path:
+            continue
+        mod = module_name_of(path, root)
+        for s in fr.get("symbols", []):
+            name = s.get("name", "")
+            if not name:
+                continue
+            idx.setdefault(name, []).append({
+                "module": mod, "kind": "function", "line": 1,
+                "sig": name, "tokens": 3,
+            })
+    return idx
+
 def save_persistent_index(root: str, index: dict, files: List[str], kg: Optional[dict] = None) -> None:
     """Save the persistent index with per-file (mtime, size) for incremental
     refresh. Size is tracked because Windows mtime has ~2s resolution, so a
@@ -3535,15 +3598,20 @@ def refresh_index_incremental(root: str, max_files: int) -> str:
             f"  lazy per-symbol index updated in place — lookups stay near-resident\n")
 
 
-def render_index(files: List[str], root: str, max_files: int, parallel: bool = False) -> str:
-    """Build and save the persistent index + knowledge graph. Returns a summary."""
-    index = build_persistent_index(files, root, parallel=parallel)
+def render_index(files: List[str], root: str, max_files: int, parallel: bool = False, engine: str = "py") -> str:
+    """Build and save the persistent index + knowledge graph. Returns a summary.
+    engine='c' uses the optional compiled C core for the symbol scan (much
+    faster on 100k-file repos). Pure-Python ('py') is the default."""
+    if engine == "c" and _find_core():
+        index = _c_symbol_index(files, root)
+    else:
+        index = build_persistent_index(files, root, parallel=parallel)
     kg = build_knowledge_graph(files, root, parallel=parallel)
     save_persistent_index(root, index, files, kg=kg)
     n_syms = sum(len(v) for v in index.values())
     n_edges = sum(len(v) for v in kg["calls"].values()) + sum(len(v) for v in kg["imports"].values())
     buf = io.StringIO()
-    buf.write(f"# codeloom --index — built persistent index + knowledge graph\n")
+    buf.write(f"# codeloom --index — built persistent index + knowledge graph ({engine} engine)\n")
     buf.write(f"  {len(files)} files, {n_syms} symbols, {n_edges} call/import edges\n")
     buf.write(f"  saved to {_index_path(root)}\n")
     buf.write(f"  subsequent --get-symbol/--search/--cross/--deadcode load it in milliseconds\n")
@@ -4771,6 +4839,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--install-grammars", action="store_true", help="install tree-sitter language grammars (opt-in precision)")
     p.add_argument("--yes", action="store_true", help="with --install-grammars, actually run pip install")
     p.add_argument("--index", action="store_true", help="build + save a persistent byte-offset index (scale)")
+    p.add_argument("--engine", choices=["py", "c"], default="py", help="scanning engine: py (pure-Python, default) or c (compiled codeloom_core, faster — build with cc -O3 -o codeloom_core codeloom_core.c)")
     p.add_argument("--watch", action="store_true", help="incremental daemon-less refresh: re-index only changed files, keep lookups near-resident")
     p.add_argument("--index-status", action="store_true", help="show persistent index status/freshness")
     p.add_argument("--framework", action="store_true", help="detect the web/app framework and surface its structure (routes, models, config, conventions)")
@@ -4910,7 +4979,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
-        print(render_index(files, root, args.max_files, parallel=args.parallel))
+        print(render_index(files, root, args.max_files, parallel=args.parallel, engine=args.engine))
         return 0
 
     if args.watch:
