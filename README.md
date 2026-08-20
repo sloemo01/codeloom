@@ -142,6 +142,7 @@ That's it. Under a second, zero setup, works offline. Cross-platform — macOS, 
 | `codeloom --lsp` | Show LSP bridge status (optional semantic enrichment) |
 | `codeloom --graph-html` | Write a local zoomable HTML graph view |
 | `codeloom --find "q"` | Natural-language flow discovery ("find where login starts") |
+| `codeloom --files "*.py"` | Find files by name/glob ("engine" or "*.py") |
 | `codeloom --context-diff BASE HEAD` | Branch-to-branch architecture-level diff |
 | `codeloom --install-agent claude` | Print MCP config for an agent (claude/cursor/codex/gemini/opencode) |
 | `codeloom --detect-agent` | Detect which installed agent's config dir is present |

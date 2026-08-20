@@ -693,6 +693,36 @@ class TestCodeLoom(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
+    def test_grep_searches_docs(self):
+        # --grep must search markdown/docs, not just code files
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, "README.md"), "w") as f:
+                f.write("# README\nStale reference 48 tools here.\n")
+            with open(os.path.join(tmp, "a.py"), "w") as f:
+                f.write("x = 1\n")
+            files = [os.path.join(tmp, "README.md"), os.path.join(tmp, "a.py")]
+            out = codeloom.render_grep(files, tmp, "48 tools")
+            self.assertIn("48 tools", out)
+            self.assertIn("README.md", out)  # doc file now searched
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_files_finds_by_name(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(tmp, "src", "core"))
+            with open(os.path.join(tmp, "src", "core", "engine.py"), "w") as f:
+                f.write("class Engine: pass\n")
+            files = [os.path.join(tmp, "src", "core", "engine.py")]
+            out = codeloom.render_files(files, tmp, "engine")
+            self.assertIn("src/core/engine.py", out)
+            # glob mode
+            out2 = codeloom.render_files(files, tmp, "*.py")
+            self.assertIn("engine.py", out2)
+        finally:
+            shutil.rmtree(tmp)
+
     def test_install_grammars_prints(self):
         # without --yes, install_grammars prints the command (doesn't install)
         out = codeloom.install_grammars(do_install=False)

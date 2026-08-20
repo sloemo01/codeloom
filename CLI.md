@@ -106,6 +106,7 @@ codeloom [OPTIONS] [ROOT]
 | `--bug-predict` | Files likely to break (churn+coupling+complexity) |
 | `--timeline` | Repository timeline via git |
 | `--find "q"` | Natural-language flow discovery |
+| `--files "glob"` | Find files by name/glob ("engine" or "*.py") |
 | `--context-diff BASE HEAD` | Branch-to-branch architecture diff |
 | `--plugin-sdk` / `--lsp` | Plugin surface / LSP bridge status |
 | `--graph-html` | Write local zoomable HTML graph view |

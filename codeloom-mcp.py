@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.49.0"
+SERVER_VERSION = "0.50.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -827,6 +827,23 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "codeloom_files",
+        "description": (
+            "Find files by name or glob, e.g. '--files engine' or '--files *.py'. "
+            "Returns matching paths relative to root. For locating a file you "
+            "don't know the exact path of."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "glob": {"type": "string", "description": "File name substring or glob, e.g. 'engine' or '*.py'"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
+            },
+            "required": ["glob"],
+        },
+    },
+    {
         "name": "codeloom_context_diff",
         "description": (
             "Branch-to-branch architecture-level diff: which modules changed "
@@ -1164,6 +1181,12 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'query' argument"}]}
         f = _collect_files(root, max_files)
         text = codeloom.render_find(f, root, query, max_files)
+    elif name == "codeloom_files":
+        glob = args.get("glob")
+        if not glob:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'glob' argument"}]}
+        f = _collect_files(root, max_files)
+        text = codeloom.render_files(f, root, glob)
     elif name == "codeloom_context_diff":
         base = args.get("base", "main")
         head = args.get("head", "HEAD")

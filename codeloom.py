@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.49.0"
+VERSION = "0.50.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -1464,6 +1464,35 @@ def render_find(files: List[str], root: str, query: str, max_files: int = 5000) 
     buf.write("\n# Trace deeper: `codeloom --explain-topic \"<topic>\"` or `--loom \"<topic>\"`.\n")
     return buf.getvalue()
 
+def render_files(files: List[str], root: str, glob: str, limit: int = 50) -> str:
+    """Find files by name/glob pattern — like 'search_files files mode'. Matches
+    the basename (case-insensitive substring) or a glob like '*.py' / '*test*'.
+    Returns the matching file paths relative to root."""
+    q = glob.strip()
+    import fnmatch
+    buf = io.StringIO()
+    buf.write(f"# files: {glob}\n")
+    matched = []
+    is_glob = any(ch in q for ch in "*?[")
+    for f in files:
+        rel = os.path.relpath(f, root)
+        rel_slash = rel.replace(os.sep, "/")
+        if is_glob:
+            if fnmatch.fnmatch(base_slash(rel), q) or fnmatch.fnmatch(rel_slash, q):
+                matched.append(rel_slash)
+        else:
+            if q.lower() in rel_slash.lower():
+                matched.append(rel_slash)
+    if not matched:
+        buf.write("  No matching files.\n")
+        return buf.getvalue()
+    for rel in sorted(matched)[:limit]:
+        buf.write(f"  {rel}\n")
+    return buf.getvalue()
+
+def base_slash(rel: str) -> str:
+    return rel.split("/")[-1]
+
 # 26. Context diff — branch-to-branch architecture diff ------------------------
 def render_context_diff(root: str, base: str = "main", head: str = "HEAD") -> str:
     """Compare two branches at the architecture level: which modules/entry
@@ -1840,6 +1869,13 @@ def build_graph(files: List[str], root: str) -> dict:
     return graph
 
 # regex-based import detection for non-Python languages (best-effort, zero-dep)
+# Text/doc/config extensions that --grep and --find should search, even though
+# they aren't code languages (so a repo-wide audit catches stale references in
+# READMEs, configs, and plain text too).
+_TEXT_EXTS = {".md", ".mdx", ".rst", ".txt", ".json", ".yaml", ".yml", ".toml",
+              ".ini", ".cfg", ".conf", ".xml", ".html", ".css", ".svg",
+              ".csv", ".tsv", ".env", ".sh", ".bash", ".zsh", ".fish"}
+
 IMPORT_LANG_RULES: dict = {
     ".js":   (r"^\s*(?:import\s+.*?from\s+['\"]([^'\"]+)['\"]|require\(['\"]([^'\"]+)['\"]\))", r"^import\s+['\"]([^'\"]+)['\"]"),
     ".ts":   (r"^\s*(?:import\s+.*?from\s+['\"]([^'\"]+)['\"]|require\(['\"]([^'\"]+)['\"]\))", r"^import\s+['\"]([^'\"]+)['\"]"),
@@ -2666,14 +2702,15 @@ def render_usages(files: List[str], root: str, symbol: str, limit: int = 20) -> 
 def grep_search(files: List[str], root: str, query: str, limit: int = 20) -> List[dict]:
     """Search file contents for a query string. Returns ranked matches with
     context lines. Ranking: exact-word matches > substring > case-insensitive.
-    This is the 'find the exact snippet' capability (semble's core job)."""
+    Searches code AND text/docs (markdown, config) so a repo-wide audit catches
+    stale references in READMEs too."""
     q = query.lower()
     # tokenize query for word-boundary ranking
     q_words = [w for w in re.findall(r"[a-zA-Z0-9_]+", q) if len(w) > 1]
     results = []
     for f in files:
         ext = os.path.splitext(f)[1].lower()
-        if ext not in LANG_RULES and ext not in IMPORT_LANG_RULES:
+        if ext not in LANG_RULES and ext not in IMPORT_LANG_RULES and ext not in _TEXT_EXTS:
             continue
         mod = module_name_of(f, root)
         try:
@@ -5456,6 +5493,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--lsp-symbol", metavar="SYMBOL", help="resolve a symbol's real definition via an installed LSP server (optional)")
     p.add_argument("--graph-html", action="store_true", help="write a local zoomable HTML graph view (codeloom-graph.html)")
     p.add_argument("--find", metavar="QUERY", help="natural-language flow discovery: 'find where login starts'")
+    p.add_argument("--files", metavar="GLOB", help="find files by name/glob: '--files *.py' or '--files engine'")
     p.add_argument("--context-diff", nargs=2, metavar=("BASE", "HEAD"), help="branch-to-branch architecture-level diff (e.g. main HEAD)")
     p.add_argument("--version", action="version", version=f"codeloom {VERSION}")
     args = p.parse_args(argv)
@@ -5597,6 +5635,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
         print(render_find(files, root, args.find, args.max_files))
+        return 0
+
+    if args.files:
+        gi = os.path.join(root, ".gitignore")
+        rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+        files: List[str] = []
+        _walk(root, rules, args.max_files, files)
+        print(render_files(files, root, args.files))
         return 0
 
     if args.context_diff:
