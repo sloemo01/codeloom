@@ -30,6 +30,11 @@ Enter
 Sleep 1s
 Sleep 500ms
 
+Type "codeloom --files '*.py' ."
+Enter
+Sleep 1s
+Sleep 500ms
+
 Type "codeloom --index --engine c ."
 Enter
 Sleep 1s
