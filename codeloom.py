@@ -1283,10 +1283,46 @@ IMPORT_LANG_RULES: dict = {
     ".lua":  (r"^\s*require\s*\(?['\"]([^'\"]+)['\"]\)?", r"^\s*require\s*\(?['\"]([^'\"]+)['\"]\)?"),
 }
 
-def build_graph_multi(files: List[str], root: str) -> dict:
+def _imports_worker(args):
+    """Module-level worker: extract one file's import deps. Returns (mod, deps)."""
+    f, root, module_map = args
+    ext = os.path.splitext(f)[1].lower()
+    mod = module_name_of(f, root)
+    deps = set()
+    if ext == ".py":
+        info = parse_module(f, root, module_map)
+        for imp in info["imports"]:
+            resolved = _resolve_import(imp, mod, root, module_map)
+            if resolved and resolved != mod:
+                deps.add(resolved)
+    elif ext in IMPORT_LANG_RULES:
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            return (mod, deps)
+        def_re, _ = IMPORT_LANG_RULES[ext]
+        for m in re.finditer(def_re, text, re.MULTILINE):
+            target = next((g for g in m.groups() if g), None)
+            if not target:
+                continue
+            target = target.strip("'\"<>")
+            while target.startswith("./") or target.startswith("../"):
+                target = target[2:] if target.startswith("./") else target[3:]
+            # for C includes, strip .h extension
+            if ext in (".c", ".h", ".cpp", ".hpp"):
+                target = target.rsplit(".", 1)[0] if "." in target else target
+            resolved = _resolve_import(target, mod, root, module_map)
+            if resolved and resolved != mod:
+                deps.add(resolved)
+    return (mod, deps)
+
+def build_graph_multi(files: List[str], root: str, parallel: bool = False) -> dict:
     """Build a cross-language import dependency graph: {module: set(deps)}.
     Python uses precise `ast`; other languages use best-effort regex. Deps are
-    resolved to local modules via suffix matching."""
+    resolved to local modules via suffix matching. With parallel=True, dispatches
+    the per-file extraction across processes (stdlib multiprocessing) — the
+    scaling win for massive monorepos where single-threaded import parsing grinds."""
     # collect all local module names (any language)
     module_map = {}
     for f in files:
@@ -1295,41 +1331,17 @@ def build_graph_multi(files: List[str], root: str) -> dict:
             module_map[module_name_of(f, root)] = f
 
     graph: dict = {}
+    if parallel and len(files) >= 100:
+        import multiprocessing as mp
+        with mp.Pool() as pool:
+            results = pool.map(_imports_worker, [(f, root, module_map) for f in files])
+        for mod, deps in results:
+            if deps:
+                graph[mod] = deps
+        return graph
     for f in files:
-        ext = os.path.splitext(f)[1].lower()
-        if ext == ".py":
-            mod = module_name_of(f, root)
-            info = parse_module(f, root, module_map)
-            deps = set()
-            for imp in info["imports"]:
-                resolved = _resolve_import(imp, mod, root, module_map)
-                if resolved and resolved != mod:
-                    deps.add(resolved)
-            graph[mod] = deps
-        elif ext in IMPORT_LANG_RULES:
-            mod = module_name_of(f, root)
-            deps = set()
-            try:
-                with open(f, "r", encoding="utf-8", errors="replace") as fh:
-                    text = fh.read()
-            except OSError:
-                continue
-            def_re, _ = IMPORT_LANG_RULES[ext]
-            for m in re.finditer(def_re, text, re.MULTILINE):
-                target = next((g for g in m.groups() if g), None)
-                if not target:
-                    continue
-                # strip quotes/angle brackets and resolve to local module
-                target = target.strip("'\"<>")
-                # strip relative path prefixes (./, ../) for JS/TS/Dart
-                while target.startswith("./") or target.startswith("../"):
-                    target = target[2:] if target.startswith("./") else target[3:]
-                # for C includes, strip .h extension
-                if ext in (".c", ".h", ".cpp", ".hpp"):
-                    target = target.rsplit(".", 1)[0] if "." in target else target
-                resolved = _resolve_import(target, mod, root, module_map)
-                if resolved and resolved != mod:
-                    deps.add(resolved)
+        mod, deps = _imports_worker((f, root, module_map))
+        if deps:
             graph[mod] = deps
     return graph
 
@@ -2595,7 +2607,7 @@ def build_knowledge_graph(files: List[str], root: str, parallel: bool = False) -
     This is what lets heavy ops (--cross, --deadcode) load from the index
     instead of re-parsing every file — daemon-speed, no daemon."""
     calls = build_call_graph_multi(files, root, parallel=parallel)
-    graph = build_graph(files, root)  # import edges
+    graph = build_graph_multi(files, root, parallel=parallel)  # cross-language import edges
     return {
         "calls": {m: {c: sorted(s) for c, s in funcs.items()} for m, funcs in calls.items()},
         "imports": {m: sorted(deps) for m, deps in graph.items()},
