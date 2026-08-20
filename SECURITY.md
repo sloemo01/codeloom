@@ -43,9 +43,10 @@ This is opt-in and only runs when you pass `--yes`. The core works without it.
 ## The trust model
 
 codeloom's security posture is **auditability**: one readable file, no hidden
-behavior, no network, no daemon. That's the honest tradeoff for a tool you
-download and run. The heavyweight tools (jcodemunch, semble) are pip packages
-with indexes and daemons — more capable, but more surface area to audit.
+behavior, no network, no daemon. You can verify every byte that runs. In
+contrast, pip packages with indexes and daemons (jcodemunch, semble) mean more
+moving parts to audit and more surface area for a supply-chain or dependency
+risk to hide.
 
 ## Reporting a vulnerability
 

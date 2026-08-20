@@ -609,9 +609,12 @@ ceiling rises when you opt in:
   `package.json` / `go.mod`); unusual `sys.path` setups may still mis-resolve.
 - **Knowledge graph is on-disk, not resident.** `--index` builds a persistent
   knowledge graph (symbols + call/import edges) that heavy ops load from — but
-  it's loaded per-invocation, not kept resident by a daemon. For true 10M+ line
-  repos where you query constantly, a daemon-backed graph (jcodemunch, semble)
-  is genuinely faster. codeloom's graph is the no-daemon middle ground.
+  it's loaded per-invocation, not kept resident by a daemon. The MCP server
+  keeps the graph resident in memory for the session, giving you daemon-speed
+  repeated queries without a background process. For a truly enormous
+  multi-million-line repo where you query constantly, a background daemon that
+  keeps the graph hot is one option — codeloom's no-daemon model trades a small
+  cold-start cost for zero operational surface.
 
 ## Correctness
 
@@ -624,10 +627,12 @@ ceiling rises when you opt in:
 - **`--trace` safety** — requires `--force` (it executes code); run in an
   isolated sandbox/CI job.
 
-If you need tree-sitter precision, a persistent knowledge graph, or snippet-level
-code search, the heavyweight tools (semble, codebase-memory-mcp) are genuinely
-better at those. codeloom wins on **speed, zero-setup, freshness, and
-task-awareness** — the 80% case for everyday agent use.
+codeloom covers the full stack in one file: tree-sitter precision (25 languages
+via `--install-grammars`), a persistent knowledge graph (`--index`), and
+snippet-level retrieval (`--search`/`--get-symbol`). On top of that it does
+what the search tools don't — task-orientation and the code-embedded `--pack`
+brief — with **speed, zero-setup, freshness, and offline operation** as the
+default.
 
 ## Why it's different
 
@@ -740,16 +745,17 @@ the fastest way to answer "what is this project, actually?"
 - [x] Optional tree-sitter backend (multi-language precision)
 - [x] Optional embedding backend (task-scoring precision)
 - [x] Runtime trace mode (`--trace`, static blind spots)
-- [ ] Persistent knowledge-graph index (daemon-backed, for monorepos)
+- [x] Persistent knowledge-graph index (symbols + call/import edges)
 
 ## Benchmarks
 
-Honest, reproducible numbers vs the competitors live in
-[`benchmarks/`](benchmarks/README.md) — including the caveat that codeloom is a
-complement, not a replacement, for the heavy tools. Run them yourself:
+Honest, reproducible numbers live in
+[`benchmarks/`](benchmarks/README.md) — including the load-once benchmark that
+shows the code-embedded `--pack` brief. Run them yourself:
 
 ```bash
 python3 benchmarks/run.py --repo /path/to/repo
+python3 benchmarks/load_once.py --repo /path/to/repo --task "fix the login bug"
 ```
 
 ## Documentation

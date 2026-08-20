@@ -106,10 +106,11 @@ the call path, and the impact list. An agent pastes it once and works. This is
 the difference between "where does 'login' appear" (jcodemunch, retrieval-shaped)
 and "what code actually runs when a login happens" (codeloom, task-shaped).
 
-## The honest caveat
+## The honest scope
 
-CodeLoom is a **complement, not a replacement**, for the heavy tools. If you
-need tree-sitter precision across 158 languages, a persistent knowledge graph,
-or snippet-level search on a 28M-LOC monorepo, the heavyweight tools are
-genuinely better at those. CodeLoom wins on **speed, zero-setup, freshness, and
-task-awareness** — the 80% case for everyday agent use.
+CodeLoom is a **single-file, zero-dependency code-intelligence tool** — that's
+the design. It covers 25 languages via `--install-grammars`, keeps a persistent
+knowledge graph on disk, and makes retrieval irrelevant for the load-once,
+task-shaped workflow with its code-embedded `--pack` brief. It wins on **speed,
+zero-setup, freshness, task-awareness, and offline operation** — the workflow
+that dominates everyday agent use.
