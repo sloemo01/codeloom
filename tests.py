@@ -605,6 +605,17 @@ class TestCodeLoom(unittest.TestCase):
         finally:
             shutil.rmtree(td, ignore_errors=True)
 
+    def test_hybrid_search(self):
+        # hybrid search ranks the lexical+structural match first
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        results = codeloom.hybrid_search(files, self.repo, "retry")
+        self.assertTrue(results, "hybrid search should return results")
+        self.assertEqual(results[0]["name"].lower(), "retry")
+
     def test_edit_relevance(self):
         # edit-relevance ranks the call path, not just keyword matches
         files = []

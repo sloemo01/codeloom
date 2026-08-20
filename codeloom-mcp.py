@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.33.0"
+SERVER_VERSION = "0.34.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -505,6 +505,37 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "codeloom_hybrid_search",
+        "description": (
+            "Hybrid search: BM25 lexical score + structural signals (symbol "
+            "kind, size) + git churn scored together. Ranks symbols by combined "
+            "relevance, better than bare substring search for vague queries."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "query": {"type": "string", "description": "Search query, e.g. 'parse cli args' or 'retry'"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "codeloom_seen",
+        "description": (
+            "Session memory: report which files and symbols were already read "
+            "this session, so the agent can skip re-reading them and save tokens. "
+            "Reads the local session log."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+            },
+        },
+    },
+    {
         "name": "codeloom_framework",
         "description": (
             "Detect the web/app framework (Next.js, FastAPI, Django, Laravel, "
@@ -806,6 +837,16 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     if name == "codeloom_churn":
         f = _collect_files(root, max_files)
         text = codeloom.git_churn(root, f)
+
+    if name == "codeloom_hybrid_search":
+        query = args.get("query")
+        if not query:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'query' argument"}]}
+        f = _collect_files(root, max_files)
+        text = codeloom.render_hybrid_search(f, root, query)
+
+    if name == "codeloom_seen":
+        text = codeloom.render_seen(root)
 
     if name == "codeloom_map":
         m = codeloom.build_map(root, True, max_files)

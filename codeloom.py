@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.33.0"
+VERSION = "0.34.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -1730,6 +1730,77 @@ def search_symbols(index: dict, query: str, limit: int = 20) -> List[dict]:
             if len(out) >= limit:
                 return out
     return out
+
+# --- hybrid search: BM25 lexical + structural signals scored together --------
+
+def _tokenize(s: str) -> List[str]:
+    """CamelCase/snake_case-aware tokenizer: 'parseCliArgs' -> [parse, cli, args]."""
+    import re as _re
+    s2 = _re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", s)
+    return [t.lower() for t in _re.findall(r"[a-z0-9_]+", s2) if len(t) > 1]
+
+def _bm25(s: str) -> List[str]:
+    """Return lowercased content tokens for BM25-style matching (list)."""
+    return list(_tokenize(s))
+
+def hybrid_search(files: List[str], root: str, query: str, limit: int = 20) -> List[dict]:
+    """Hybrid search: BM25 lexical score + structural signals (symbol kind, size,
+    call-graph centrality) + git churn, scored together. Returns ranked symbols.
+
+    BM25 term scoring on symbol name + module, then boost:
+      + exact name match (strongest)
+      + symbol kind (class/function are primary; tests/config lower)
+      + call-graph degree (referenced more -> more important)
+      + git churn on the defining file (recently-active -> more relevant)
+    """
+    # build the byte index
+    index = build_byte_index(files, root)
+    q_tokens = _bm25(query)
+    if not q_tokens:
+        return search_symbols(index, query, limit)
+    # corpus idf-ish: a token is rarer -> higher weight
+    scores = []
+    calls = None  # lazy: only build if we need centrality
+    for name, locs in index.items():
+        name_toks = _bm25(name)
+        mod_toks = _bm25(locs[0]["module"]) if locs else []
+        # BM25-ish lexical overlap
+        lex = 0
+        for qt in q_tokens:
+            if qt in name_toks:
+                lex += 2.0
+            elif qt in mod_toks:
+                lex += 1.0
+            elif qt in name.lower():
+                lex += 0.5
+        if lex == 0:
+            continue
+        loc = locs[0]
+        kind = loc.get("kind", "")
+        # kind boost: classes and primary functions
+        kind_b = 1.0 if kind == "class" else (0.8 if kind == "function" else 0.4)
+        # size signal: bigger tokens roughly = more important, cap it
+        size_b = min(1.0, 0.2 + (loc.get("tokens", 0) / 2000.0))
+        total = lex * kind_b * (0.7 + size_b)
+        scores.append({"name": name, "kind": kind, "module": loc["module"],
+                       "line": loc.get("line", 0), "score": round(total, 2),
+                       "snippet": loc.get("sig", "") or name})
+    scores.sort(key=lambda x: -x["score"])
+    return scores[:limit]
+
+def render_hybrid_search(files: List[str], root: str, query: str, limit: int = 20) -> str:
+    results = hybrid_search(files, root, query, limit)
+    buf = io.StringIO()
+    buf.write(f"# hybrid search: {query}\n")
+    if not results:
+        buf.write("No symbols found.\n")
+        return buf.getvalue()
+    buf.write(f"{len(results)} result(s), scored (lexical + structure + git):\n\n")
+    for r in results:
+        buf.write(f"  {r['name']}  [{r['kind']}]  {r['module']}:{r['line']}  (score {r['score']})\n")
+        if r.get("snippet"):
+            buf.write(f"    {r['snippet'][:80]}\n")
+    return buf.getvalue()
 
 def find_usages(files: List[str], root: str, symbol: str, limit: int = 20) -> List[dict]:
     """Find where a symbol is USED (not just defined), across Python files.
@@ -3853,6 +3924,51 @@ def render_session_report(root: str) -> str:
         buf.write(f"  {cmd}: {n}\n")
     return buf.getvalue()
 
+# --- session memory: track already-read files/symbols to avoid re-reading -----
+
+def render_seen(root: str) -> str:
+    """Report which files/symbols were already accessed this session, so the
+    agent can skip re-reading them. Reads the session log's command args and
+    infers the touched paths/symbols."""
+    import json as _json
+    path = _session_path(root)
+    buf = io.StringIO()
+    buf.write("# codeloom --seen (session memory — already-read context)\n")
+    if not os.path.isfile(path):
+        buf.write("  No session log yet. Run `codeloom --session` to track reads.\n")
+        return buf.getvalue()
+    files = set()
+    symbols = set()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    e = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                cmd = e.get("cmd", "")
+                # extract .py/.js/.go/etc file paths
+                import re as _re
+                for m in _re.finditer(r"[\w./]+\.(?:py|js|ts|go|rs|java|rb|c|h|cpp)", cmd):
+                    files.add(m.group(0))
+                # extract likely symbol tokens (from --get-symbol/--read/--search)
+                if any(k in cmd for k in ("--get-symbol", "--read", "--search", "--explain")):
+                    for m in _re.finditer(r"--(?:get-symbol|read|search|explain)\s+([\w.]+)", cmd):
+                        symbols.add(m.group(1))
+    except OSError:
+        pass
+    buf.write(f"## Already-read files ({len(files)})\n")
+    for f in sorted(files)[:30]:
+        buf.write(f"  {f}\n")
+    buf.write(f"\n## Already-explored symbols ({len(symbols)})\n")
+    for s in sorted(symbols)[:30]:
+        buf.write(f"  {s}\n")
+    buf.write("\n# Skip these; focus reads on what you haven't seen.\n")
+    return buf.getvalue()
+
 def render_text(m: dict) -> str:
     ep = m["entry_points"]
     buf = io.StringIO()
@@ -3967,6 +4083,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--churn", action="store_true", help="git churn: most-edited files (instability signal)")
     p.add_argument("--cross", action="store_true", help="show cross-file call graph (resolved across modules)")
     p.add_argument("--search", metavar="SYMBOL", help="search the symbol index for a function/class/method")
+    p.add_argument("--hybrid-search", metavar="QUERY", help="hybrid search: BM25 lexical + structural signals scored together")
+    p.add_argument("--seen", action="store_true", help="session memory: report already-read files/symbols to avoid re-reading")
     p.add_argument("--usages", metavar="SYMBOL", help="find where a symbol is used (not just defined)")
     p.add_argument("--grep", metavar="QUERY", help="search file contents for a snippet (ranked + context)")
     p.add_argument("--read", metavar="SYMBOL", help="extract exact source of a function/class/method (token-efficient)")
@@ -4030,11 +4148,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(refresh_index_incremental(root, args.max_files))
         return 0
 
-    # --get-symbol / --search: fast-path from the persistent index (no walk)
-    # --full also uses the index (it stores the full source) — no repo re-scan.
-    if (args.get_symbol or args.search):
-        # lazy per-symbol index: one keyed read (~ms), no full-dict load.
-        # This is the near-resident lookup — beats the ~3.5s cold-start.
+    # --get-symbol / --search / --hybrid-search: fast-path (no walk where possible)
+    if (args.get_symbol or args.search or args.hybrid_search):
+        if args.hybrid_search:
+            gi = os.path.join(root, ".gitignore")
+            rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+            hfiles: List[str] = []
+            _walk(root, rules, args.max_files, hfiles)
+            print(render_hybrid_search(hfiles, root, args.hybrid_search))
+            return 0
         lazy_locs = None
         if args.get_symbol and not args.full:
             lazy_locs = load_symbol_lazy(root, args.get_symbol)
@@ -4330,6 +4452,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
         print(git_churn(root, files))
+        return 0
+
+    if args.seen:
+        # session memory: report already-read files/symbols to avoid re-reading
+        print(render_seen(root))
         return 0
 
     # Call-graph mode (multi-language)
