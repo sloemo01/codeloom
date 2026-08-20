@@ -517,13 +517,14 @@ re-parsing. Measured on microsoft/vscode (12k files): `--deadcode` drops from
 10.3s (serial) to **4.8s** by loading from the graph; `--get-symbol` cold-starts
 at **~0.11s** (index load, no re-parse).
 
-**Tested on the Linux kernel (~28M LOC, 95k files):** the **symbol index — the
-thing that powers `--get-symbol`/`--search`/`--resume`/`--pack` — builds the
-full kernel (67,398 code files, **1,095,322 symbols**) in **~62s parallel**,
-well under the 3-minute claim for the same scale. The index stores a compact
-signature per symbol (not full source) so it stays small, and `--full`
-re-reads source from the stored byte range on demand. Tree-sitter walks are
-iterative so deeply-nested kernel source doesn't hit the recursion limit.
+**Tested on the Linux kernel (~28M LOC, 95k files):** with the optional C
+accelerator (`--engine c`), the **full knowledge graph + symbol index builds
+the kernel in ~120s** — 64,814 code files → **3.2M symbols, 408k call/import
+edges**. The C core (one `cc -O3` build, `codeloom_core.c`) does fast
+multi-language file-walk + symbol + call + import extraction; the symbol
+index alone is ~13s. The pure-Python default stays zero-dependency.
+Tree-sitter walks are iterative so deeply-nested kernel source doesn't hit
+the recursion limit.
 
 **No cold-start on repeated queries.** `--get-symbol` uses a **lazy per-symbol
 index** (stdlib dbm, one keyed record per symbol) — a single lookup is a
