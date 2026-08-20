@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.31.0"
+SERVER_VERSION = "0.32.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -500,6 +500,22 @@ TOOLS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "codeloom_resume",
+        "description": (
+            "Emit a compact structural snapshot (entry points + modules + hub "
+            "modules + top call sites) to restore an agent's context after a "
+            "compaction. Paste the output in one shot instead of re-deriving "
+            "the codebase map."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
+            },
+        },
+    },
 ]
 
 
@@ -718,6 +734,10 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
 
     if name == "codeloom_watch":
         text = codeloom.refresh_index_incremental(root, max_files)
+
+    if name == "codeloom_resume":
+        f = _collect_files(root, max_files)
+        text = codeloom.render_resume(f, root, max_files)
 
     if name == "codeloom_map":
         m = codeloom.build_map(root, True, max_files)

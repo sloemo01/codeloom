@@ -45,6 +45,7 @@ Everything codeloom can do, in one place. Zero-dependency, single file, no daemo
 | `codeloom --check-delete X` | Is it safe to delete X? (terminal GO/STOP verdict) |
 | `codeloom --plan "text"` | Prioritized reading plan |
 | `codeloom --pack "text"` | Single-shot context file (reading order + impact + symbols) |
+| `codeloom --resume` | Restore structural context after a compaction (compact snapshot) |
 
 ## Understanding & refactoring
 

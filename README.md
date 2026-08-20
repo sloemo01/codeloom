@@ -18,10 +18,18 @@ before it can *do* anything, it has to figure out what your codebase even *is*.
 So it greps, reads whole files, burns 40,000+ tokens just to build context — and
 then it forgets what it learned.
 
+The expensive part isn't the tokens — **it's the amnesia.** Every context
+compaction wipes the structural map the agent spent thousands of tokens
+building: what's the engine, what calls what, where the entry points live,
+what breaks if you touch X. The agent has to re-derive all of it from scratch,
+over and over.
+
 **codeloom fixes that.** One command → a compact structural model of your repo
 (folder tree + per-module one-liners + entry points + import graph + call graph)
 that your agent reads in a second to build a mental model *before* touching
-anything. No install. No daemon. No GPU. Runs 100% on your machine.
+anything. And `codeloom --resume` emits a single compact snapshot that **restores
+that structural context after a compaction in one shot** — the agent never has
+to re-learn the codebase. No install. No daemon. No GPU. Runs 100% on your machine.
 
 **Zero-install, zero-telemetry, offline.** codeloom is a single stdlib file you
 copy in — no `pip install`, no model downloads, no license validation, no
@@ -112,6 +120,7 @@ That's it. Under a second, zero setup, works offline. Cross-platform — macOS, 
 | `codeloom --impact X` | "What breaks if I change X?" |
 | `codeloom --plan "X"` | "Read these files, in this order, to do task X" |
 | `codeloom --pack "X"` | "Give me the whole context for task X, in one file" |
+| `codeloom --resume` | "Restore my structural map after a compaction" (compact snapshot) |
 | `codeloom --cross` | "What calls what, across files?" (resolved call graph) |
 | `codeloom --search X` | "Where is symbol X defined?" (symbol index + snippet) |
 | `codeloom --usages X` | "Where is symbol X used?" (call sites + snippet) |

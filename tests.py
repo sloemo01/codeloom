@@ -580,6 +580,19 @@ class TestCodeLoom(unittest.TestCase):
         self.assertIn("IMPACT", pack)
         self.assertIn("retry", pack)
 
+    def test_resume(self):
+        # --resume emits a compact structural snapshot for compaction survival
+        files = []
+        for root, _, fs in os.walk(self.repo):
+            for f in fs:
+                if f.endswith(".py") and "__pycache__" not in root and ".venv" not in root:
+                    files.append(os.path.join(root, f))
+        resume = codeloom.render_resume(files, self.repo, 1000)
+        self.assertIn("--resume", resume)
+        self.assertIn("Entry points", resume)
+        self.assertIn("Modules", resume)
+        self.assertIn("Top call sites", resume)
+
     def test_edit_relevance(self):
         # edit-relevance ranks the call path, not just keyword matches
         files = []

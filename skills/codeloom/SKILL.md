@@ -134,6 +134,7 @@ python3 codeloom.py --index-status /path/to/repo
 | `--check-delete X` | preflight: is it safe to delete X? (terminal GO/STOP) |
 | `--plan "X"` | prioritized reading plan for a task |
 | `--pack "X"` | single-shot context file (reading order + impact + symbols) |
+| `--resume` | restore structural context after a compaction (compact snapshot) |
 | `--cross` | cross-file call graph (AST-resolved) |
 | `--search X` | search the symbol index (definitions + snippet) |
 | `--usages X` | find where a symbol is used (call sites + snippet) |

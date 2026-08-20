@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.31.0"
+VERSION = "0.32.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -3727,6 +3727,65 @@ def render_text(m: dict) -> str:
         buf.write(line + "\n")
     return buf.getvalue()
 
+# --------------------------------------------------------------------------- #
+# --resume: compaction-survival context restore
+# --------------------------------------------------------------------------- #
+# The real value isn't token savings — it's that every compaction wipes the
+# structural context the agent built up. --resume emits a single, compact,
+# self-contained snapshot (entry points + module graph + call edges + framework)
+# sized to re-paste after a compaction, so the agent reloads its map in one shot
+# instead of re-deriving it.
+
+def build_resume(files: List[str], root: str, max_files: int) -> dict:
+    """Build a compact structural snapshot for post-compaction restore."""
+    rules = parse_gitignore(os.path.join(root, ".gitignore")) if os.path.isfile(os.path.join(root, ".gitignore")) else []
+    tree = build_map(root, True, max_files)
+    graph = build_graph(files, root)          # import edges
+    calls = build_call_graph_multi(files, root)  # call edges
+    # top callers/callees by edge count — the "what runs what" core
+    call_sizes = []
+    for mod, funcs in calls.items():
+        for caller, callees in funcs.items():
+            call_sizes.append((len(callees), f"{mod}.{caller}"))
+    call_sizes.sort(reverse=True)
+    top_calls = call_sizes[:12]
+    # most-depended-on modules (blast radius)
+    dependents = {}
+    for mod, deps in graph.items():
+        for d in deps:
+            dependents[d] = dependents.get(d, 0) + 1
+    hub_modules = sorted(dependents.items(), key=lambda x: -x[1])[:10]
+    return {
+        "root": root,
+        "files": len(files),
+        "entry_points": tree["entry_points"],
+        "modules": sorted(graph.keys())[:25],
+        "hub_modules": hub_modules,
+        "top_calls": top_calls,
+    }
+
+def render_resume(files: List[str], root: str, max_files: int) -> str:
+    r = build_resume(files, root, max_files)
+    buf = io.StringIO()
+    buf.write(f"# codeloom --resume (compaction-survival context restore)\n")
+    buf.write(f"# repo: {r['root']} — {r['files']} files\n\n")
+    if r["entry_points"]:
+        buf.write("## Entry points\n")
+        for e in r["entry_points"][:15]:
+            buf.write(f"  {os.path.relpath(e, r['root'])}\n")
+    buf.write("\n## Modules\n")
+    for mod in r["modules"]:
+        buf.write(f"  {mod}\n")
+    buf.write("\n## Most-depended-on modules (change these -> breaks many)\n")
+    for mod, n in r["hub_modules"]:
+        buf.write(f"  {mod} ({n} importers)\n")
+    buf.write("\n## Top call sites (what runs what)\n")
+    for n, caller in r["top_calls"]:
+        buf.write(f"  {caller} -> {n} callees\n")
+    buf.write("\n# Paste this after a context compaction to restore your structural\n"
+              "# model of the repo in one shot. Re-run `codeloom --resume` any time.\n")
+    return buf.getvalue()
+
 def tree_to_json(node: Node) -> dict:
     return {
         "name": node.name,
@@ -3761,6 +3820,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--task", metavar="TEXT", help="rank modules relevant to a task description")
     p.add_argument("--plan", metavar="TEXT", help="emit a prioritized reading plan for a task")
     p.add_argument("--pack", metavar="TEXT", help="emit a single-shot context file for a task (reading order + impact + symbols)")
+    p.add_argument("--resume", action="store_true", help="emit a compact structural snapshot to restore context after compaction")
     p.add_argument("--cross", action="store_true", help="show cross-file call graph (resolved across modules)")
     p.add_argument("--search", metavar="SYMBOL", help="search the symbol index for a function/class/method")
     p.add_argument("--usages", metavar="SYMBOL", help="find where a symbol is used (not just defined)")
@@ -4057,7 +4117,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
     # --impact / --task / --plan / --pack: task-aware intelligence
-    if args.impact or args.task or args.plan or args.pack or args.check_edit or args.check_delete:
+    if args.impact or args.task or args.plan or args.pack or args.check_edit or args.check_delete or args.resume:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
@@ -4106,6 +4166,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.pack:
             print(render_pack(files, root, args.pack))
+            return 0
+
+        if args.resume:
+            print(render_resume(files, root, args.max_files))
             return 0
 
     # Call-graph mode (multi-language)

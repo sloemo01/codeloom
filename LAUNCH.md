@@ -5,13 +5,13 @@ so it renders inline on both platforms.
 
 - Demo GIF: `https://raw.githubusercontent.com/sloemo01/codeloom/main/demo.gif`
 - Repo: `https://github.com/sloemo01/codeloom`
-- Latest release: `https://github.com/sloemo01/codeloom/releases/tag/v0.31.0`
+- Latest release: `https://github.com/sloemo01/codeloom/releases/tag/v0.32.0`
 
 ---
 
 ## Show HN post
 
-**Title:** Show HN: codeloom — a code-embedded task brief for agents, in one stdlib file
+**Title:** Show HN: codeloom — your agent's codebase context survives compaction, in one stdlib file
 
 **Body:**
 
@@ -72,7 +72,7 @@ So I built codeloom: a map of your repo for agents. One file, zero deps, no daem
 • `codeloom --write MAP.md` → a reviewable text artifact you commit and diff in PRs (their index is a binary blob)
 • `codeloom --install-agents .` → writes AGENTS.md + a GitHub Action that posts the `--pack` brief on every PR. One line.
 
-**6/6** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.31.0 released. Code-embedded task brief, edit-relevance ranking, 99% token savings, lazy per-symbol index + `--watch` incremental refresh (near-resident lookups, no daemon), 25-language tree-sitter, tested on the Linux kernel (91k files / 1M+ symbols). Go use it.
+**6/6** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.32.0 released. `--resume` restores your agent's structural context after a compaction in one shot. Plus code-embedded task brief, edit-relevance, 99% token savings, lazy per-symbol index + `--watch` (near-resident, no daemon), 25-language tree-sitter, tested on the Linux kernel (91k files / 1M+ symbols). Go use it.
 
 ---
 

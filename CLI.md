@@ -52,6 +52,7 @@ codeloom [OPTIONS] [ROOT]
 | `--impact X` | Blast radius of changing X |
 | `--plan "text"` | Prioritized reading plan |
 | `--pack "text"` | Single-shot context file |
+| `--resume` | Restore structural context after a compaction (compact snapshot) |
 
 ## Understanding
 
