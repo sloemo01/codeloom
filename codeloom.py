@@ -392,7 +392,9 @@ def _ts_function_names(root_node) -> set:
     names = set()
     if root_node is None:
         return names
-    def walk(node):
+    stack = [root_node]
+    while stack:
+        node = stack.pop()
         t = node.type
         if t in ("function_definition", "function_declaration", "method_definition",
                  "class_declaration", "struct_item", "impl_item", "func_declaration",
@@ -403,8 +405,7 @@ def _ts_function_names(root_node) -> set:
                     names.add(child.text.decode("utf-8", "replace"))
                     break
         for child in node.children:
-            walk(child)
-    walk(root_node)
+            stack.append(child)
     return names
 
 def _ts_call_edges(root_node) -> set:
@@ -412,7 +413,9 @@ def _ts_call_edges(root_node) -> set:
     edges = set()
     if root_node is None:
         return edges
-    def walk(node):
+    stack = [root_node]
+    while stack:
+        node = stack.pop()
         if node.type in ("function_definition", "function_declaration", "method_definition",
                          "func_declaration", "method_declaration"):
             caller = None
@@ -424,21 +427,23 @@ def _ts_call_edges(root_node) -> set:
                 for sub in node.children:
                     _collect_calls(sub, caller, edges)
         for child in node.children:
-            walk(child)
-    walk(root_node)
+            stack.append(child)
     return edges
 
 def _collect_calls(node, caller, edges):
-    """Recursively collect call targets within a function body."""
-    if node.type in ("call_expression", "call", "function_call"):
-        # find the function name
-        for child in node.children:
-            if child.type in ("identifier", "field_identifier", "name"):
-                callee = child.text.decode("utf-8", "replace")
-                edges.add((caller, callee))
-                break
-    for child in node.children:
-        _collect_calls(child, caller, edges)
+    """Collect call targets within a function body (iterative, no recursion limit)."""
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if n.type in ("call_expression", "call", "function_call"):
+            # find the function name
+            for child in n.children:
+                if child.type in ("identifier", "field_identifier", "name"):
+                    callee = child.text.decode("utf-8", "replace")
+                    edges.add((caller, callee))
+                    break
+        for child in n.children:
+            stack.append(child)
 
 # --- Optional embedding backend (task-scoring precision) --------------------
 # If an embedding source is available, use real semantic similarity for --task
@@ -2028,7 +2033,10 @@ def _index_other_bytes(path, mod, ext, index):
     # tree-sitter fast-path
     ts_root = _ts_parse(path, ext)
     if ts_root is not None:
-        def walk(node):
+        # iterative walk (stack) — avoids RecursionError on deeply-nested files
+        stack = [ts_root]
+        while stack:
+            node = stack.pop()
             if node.type in ("function_definition", "function_declaration",
                              "method_definition", "class_declaration",
                              "struct_item", "impl_item", "func_declaration",
@@ -2048,8 +2056,7 @@ def _index_other_bytes(path, mod, ext, index):
                         })
                         break
             for child in node.children:
-                walk(child)
-        walk(ts_root)
+                stack.append(child)
         # fall through to the assignment-style pass so methods like
         # `res.append = function append(...)` (missed by tree-sitter's
         # function_declaration node) are also indexed.
@@ -2523,11 +2530,11 @@ def build_persistent_index(files: List[str], root: str, parallel: bool = False) 
     """Build a full byte-offset symbol index (all languages)."""
     return build_byte_index(files, root, parallel=parallel)
 
-def build_knowledge_graph(files: List[str], root: str) -> dict:
+def build_knowledge_graph(files: List[str], root: str, parallel: bool = False) -> dict:
     """Build the knowledge-graph edges (call + import) for the persistent index.
     This is what lets heavy ops (--cross, --deadcode) load from the index
     instead of re-parsing every file — daemon-speed, no daemon."""
-    calls = build_call_graph_multi(files, root)
+    calls = build_call_graph_multi(files, root, parallel=parallel)
     graph = build_graph(files, root)  # import edges
     return {
         "calls": {m: {c: sorted(s) for c, s in funcs.items()} for m, funcs in calls.items()},
@@ -2624,7 +2631,7 @@ def ensure_fresh_index(root: str, max_files: int) -> Optional[dict]:
 def render_index(files: List[str], root: str, max_files: int, parallel: bool = False) -> str:
     """Build and save the persistent index + knowledge graph. Returns a summary."""
     index = build_persistent_index(files, root, parallel=parallel)
-    kg = build_knowledge_graph(files, root)
+    kg = build_knowledge_graph(files, root, parallel=parallel)
     save_persistent_index(root, index, files, kg=kg)
     n_syms = sum(len(v) for v in index.values())
     n_edges = sum(len(v) for v in kg["calls"].values()) + sum(len(v) for v in kg["imports"].values())
