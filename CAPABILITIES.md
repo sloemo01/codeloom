@@ -74,8 +74,10 @@ Everything codeloom can do, in one place. Zero-dependency, single file, no daemo
 | `codeloom --install-grammars --yes` | Install tree-sitter grammars (opt-in precision) |
 | `codeloom --auto-grammars` | Scan repo + install grammars for its languages |
 | `codeloom --install-agents` | Write AGENTS.md block |
+| `codeloom --install-agent claude` | Print MCP config for an agent (claude/cursor/codex/gemini/opencode/cline/openhands/devin/hermes/aider/roo/windsurf) |
+| `codeloom --detect-agent` | Detect which coding agent's config dir is present |
 
-## MCP server (53 tools)
+## MCP server (54 tools)
 
 `codeloom-mcp.py` is a zero-dependency MCP server (stdlib JSON-RPC over stdio).
 Tools: `codeloom_map`, `codeloom_graph`, `codeloom_focus`, `codeloom_calls`,

@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.50.0"
+VERSION = "0.51.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -5146,42 +5146,47 @@ def _mcp_config(agent: str, core_path: str) -> str:
     if not os.path.isfile(server_py):
         server_py = core_path  # fallback
     a = agent.lower()
-    if a == "claude":
-        return f'''"codeloom": {{
-  "type": "stdio",
-  "command": "python3",
-  "args": ["{server_py}"]
-}}'''
-    if a == "cursor":
-        return f'''"codeloom": {{
-  "command": "python3",
-  "args": ["{server_py}"]
-}}'''
+    # JSON-style inline "codeloom": { "command": python3, "args": [...] }
+    inline = f'"codeloom": {{\n  "command": "python3",\n  "args": ["{server_py}"]\n}}'
+    # mcpServers-wrapped JSON block
+    mcp_block = f'{{\n  "mcpServers": {{\n    "codeloom": {{\n      "command": "python3",\n      "args": ["{server_py}"]\n    }}\n  }}\n}}'
+    # bare {"codeloom": {...}} JSON block (opencode style)
+    bare_block = f'{{\n  "codeloom": {{\n    "command": "python3",\n    "args": ["{server_py}"]\n  }}\n}}'
+    # TOML [mcp_servers.codeloom] block (hermes, openhands, devin)
+    toml_block = f'[mcp_servers.codeloom]\ncommand = "python3"\nargs = ["{server_py}"]'
+    if a in ("claude", "claude-code", "claudecode"):
+        # Claude Code: ~/.claude.json / .mcp.json — mcpServers-wrapped
+        return mcp_block
+    if a in ("cursor",):
+        return mcp_block
     if a == "codex":
-        return f'''{{
-  "mcpServers": {{
-    "codeloom": {{
-      "command": "python3",
-      "args": ["{server_py}"]
-    }}
-  }}
-}}'''
-    if a == "gemini":
-        return f'''"codeloom": {{
-  "command": "python3",
-  "args": ["{server_py}"]
-}}'''
+        return mcp_block
+    if a in ("gemini", "gemini-cli"):
+        return mcp_block
     if a == "opencode":
-        return f'''{{
-  "codeloom": {{
-    "command": "python3",
-    "args": ["{server_py}"]
-  }}
-}}'''
-    return f'''"codeloom": {{
-  "command": "python3",
-  "args": ["{server_py}"]
-}}'''
+        return bare_block
+    if a == "cline":
+        # Cline: .cline/mcp_settings.json — mcpServers object
+        return mcp_block
+    if a in ("openhands", "openhands-cli"):
+        # OpenHands: ~/.config/openhands/config.toml — [mcp_servers.codeloom]
+        return toml_block
+    if a == "devin":
+        # Devin: ~/.devin/config.toml — [mcp_servers.codeloom]
+        return toml_block
+    if a in ("hermes", "hermes-agent"):
+        # Hermes Agent: mcp_servers.json / config — [mcp_servers.codeloom]
+        return toml_block
+    if a == "aider":
+        # Aider: .mcp.json — mcpServers object
+        return mcp_block
+    if a in ("roo", "roo-code"):
+        # Roo Code: ~/.roo/mcp.json — mcpServers object
+        return mcp_block
+    if a == "windsurf":
+        # Windsurf: ~/.codeium/windsurf/mcp.json — mcpServers object
+        return mcp_block
+    return inline
 
 def install_agent_config(agent: str, core_path: str) -> str:
     """Write/print the MCP config for a specific agent. Returns the config
@@ -5197,6 +5202,13 @@ def detect_agent() -> Optional[str]:
         ("codex", os.path.join(home, ".codex")),
         ("gemini", os.path.join(home, ".gemini")),
         ("opencode", os.path.join(home, ".config", "opencode")),
+        ("cline", os.path.join(home, ".cline")),
+        ("openhands", os.path.join(home, ".config", "openhands")),
+        ("devin", os.path.join(home, ".devin")),
+        ("hermes", os.path.join(home, ".hermes")),
+        ("aider", os.path.join(home, ".aider")),
+        ("roo", os.path.join(home, ".roo")),
+        ("windsurf", os.path.join(home, ".codeium")),
     ]
     for name, path in cands:
         if os.path.isdir(path):
@@ -5430,7 +5442,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--calls", action="store_true", help="show function-level call graph (multi-language)")
     p.add_argument("--diff", action="store_true", help="show structure of files changed vs HEAD (git)")
     p.add_argument("--install-agents", action="store_true", help="write/update AGENTS.md with a codeloom block")
-    p.add_argument("--install-agent", metavar="AGENT", help="print MCP config for an agent (claude|cursor|codex|gemini|opencode)")
+    p.add_argument("--install-agent", metavar="AGENT", help="print MCP config for an agent (claude|cursor|codex|gemini|opencode|cline|openhands|devin|hermes|aider|roo|windsurf)")
     p.add_argument("--detect-agent", action="store_true", help="detect which coding agent's config dir is present")
     p.add_argument("--build-core", action="store_true", help="build the optional C accelerator (codeloom_core.c -> codeloom_core) if not present")
     p.add_argument("--cost", action="store_true", help="append token-cost estimate to output")
@@ -5808,7 +5820,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.install_agent:
         agent = args.install_agent.lower()
-        valid = {"claude", "cursor", "codex", "gemini", "opencode"}
+        valid = {"claude", "claude-code", "claudecode", "cursor", "codex",
+                 "gemini", "gemini-cli", "opencode", "cline", "openhands",
+                 "openhands-cli", "devin", "hermes", "hermes-agent", "aider",
+                 "roo", "roo-code", "windsurf"}
         if agent not in valid:
             print(f"unknown agent '{agent}'. Valid: {', '.join(sorted(valid))}")
             return 1

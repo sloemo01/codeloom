@@ -633,10 +633,18 @@ class TestCodeLoom(unittest.TestCase):
 
     def test_install_agent_config(self):
         # install-agent emits a valid MCP config snippet for an agent
-        for agent in ("claude", "cursor", "codex", "gemini", "opencode"):
+        for agent in ("claude", "cursor", "codex", "gemini", "opencode",
+                      "cline", "openhands", "devin", "hermes", "aider",
+                      "roo", "windsurf"):
             cfg = codeloom.install_agent_config(agent, "/tmp/codeloom.py")
             self.assertIn("codeloom", cfg)
             self.assertIn("python3", cfg)
+        # TOML-style agents use [mcp_servers.codeloom]
+        for agent in ("openhands", "devin", "hermes"):
+            self.assertIn("mcp_servers.codeloom", codeloom.install_agent_config(agent, "/tmp/codeloom.py"))
+        # mcpServers-style agents use JSON mcpServers
+        for agent in ("claude", "cline", "aider", "roo", "windsurf"):
+            self.assertIn("mcpServers", codeloom.install_agent_config(agent, "/tmp/codeloom.py"))
         # unknown agent should be rejected by the caller, config returns a sensible default
         self.assertIn("codeloom", codeloom.install_agent_config("unknown", "/tmp/codeloom.py"))
 

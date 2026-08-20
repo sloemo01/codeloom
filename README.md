@@ -144,7 +144,7 @@ That's it. Under a second, zero setup, works offline. Cross-platform — macOS, 
 | `codeloom --find "q"` | Natural-language flow discovery ("find where login starts") |
 | `codeloom --files "*.py"` | Find files by name/glob ("engine" or "*.py") |
 | `codeloom --context-diff BASE HEAD` | Branch-to-branch architecture-level diff |
-| `codeloom --install-agent claude` | Print MCP config for an agent (claude/cursor/codex/gemini/opencode) |
+| `codeloom --install-agent claude` | Print MCP config for an agent (claude/cursor/codex/gemini/opencode/cline/openhands/devin/hermes/aider/roo/windsurf) |
 | `codeloom --detect-agent` | Detect which installed agent's config dir is present |
 | `codeloom --precision X` | Graph precision: call edges with confidence + class relationships |
 | `codeloom --cross` | "What calls what, across files?" (resolved call graph) |
@@ -719,7 +719,7 @@ single zero-dependency file.
 | Sub-ms resident lookups | **yes — `--serve`** | yes | yes | yes |
 | **Runtime call edges (`--trace`)** | **yes** | no | no | no |
 | Offline | **yes** | yes | yes | yes |
-| **MCP tools** | **53** | 91 actions (6 routers) | ~10 | varies |
+| **MCP tools** | **54** | 91 actions (6 routers) | ~10 | varies |
 | Zero-dependency single file | **yes** | no | no | no |
 
 The heavyweight tools are great at retrieval — but they're *search engines*,
@@ -732,7 +732,7 @@ structural context, in one file, in under a second, always fresh.
 exposes **6 MCP tools** (`set_tool_tier`, `announce_model`, `jcodemunch_guide`,
 `order`, `menu`, `route`) that route to **91 internal actions** (`index_repo`,
 `search_symbols`, `get_symbol_source`, etc.) — and its own users report it as
-"30 tools" over the 50-tool limit (#297). codeloom has **53 MCP tools** and,
+"30 tools" over the 50-tool limit (#297). codeloom has **54 MCP tools** and,
 critically, **1 natural-language entry point** (`codeloom_ask`) that routes
 deterministically — so the agent's effective surface is **1 tool**, not
 6-over-91 or 30. That's the routing complexity that causes jcodemunch's 30%
