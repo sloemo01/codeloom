@@ -5,7 +5,7 @@ so it renders inline on both platforms.
 
 - Demo GIF: `https://raw.githubusercontent.com/sloemo01/codeloom/main/demo.gif`
 - Repo: `https://github.com/sloemo01/codeloom`
-- Latest release: `https://github.com/sloemo01/codeloom/releases/tag/v0.27.0`
+- Latest release: `https://github.com/sloemo01/codeloom/releases/tag/v0.29.0`
 
 ---
 
@@ -36,7 +36,7 @@ What it does:
 - **Zero-install, zero-telemetry, offline** — one stdlib file, no `pip install`, no model downloads, no license validation, no telemetry that phones home. The heavyweight tools can't say that.
 - **Git-diffable** — `codeloom --write MAP.md` produces a reviewable text artifact you commit and diff in PRs. jcodemunch's index is a binary blob.
 - **CI action** — `codeloom --install-agents .` writes AGENTS.md + a GitHub Action that runs `--pack` on every PR and posts the brief as a comment. One line to add.
-- **MCP server** — zero-dep, 25 tools, resident in-memory knowledge graph (daemon-speed, no daemon).
+- **MCP server** — zero-dep, 27 tools, resident in-memory knowledge graph (daemon-speed, no daemon).
 - **25 languages** — `--install-grammars --yes` gives tree-sitter precision.
 
 The whole thing is Python stdlib only. No `pip install`, no indexing daemon, no GPU. Copy one file into your repo, point your agent at it, done.

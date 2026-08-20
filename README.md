@@ -489,12 +489,19 @@ re-parsing. Measured on microsoft/vscode (12k files): `--deadcode` drops from
 10.3s (serial) to **4.8s** by loading from the graph; `--get-symbol` cold-starts
 at **~0.11s** (index load, no re-parse).
 
+**Tested on the Linux kernel (~30M LOC, 95k files):** `--index --parallel` built
+a persistent graph of **91,242 files / 1,063,529 symbols** — no daemon, no
+crash (tree-sitter walks are iterative so deeply-nested kernel source doesn't
+hit the recursion limit). The index stores a compact signature per symbol
+(not full source) so it stays ~304MB for a million-symbol repo, and `--full`
+re-reads source from the stored byte range on demand.
+
 **No cold-start on repeated queries.** The MCP server keeps the graph resident
 in memory for the session — so an agent working in a session gets repeated
 `--get-symbol`/`--deadcode` calls served from the resident graph (6+ queries in
 one session, no re-parse, no cold-start). That's the daemon's "hot in memory"
 benefit without a separate daemon process to run or crash. The cold-start cost
-is a one-time ~0.11s on first load; a daemon pays it at boot too.
+is a one-time index load; a daemon pays it at boot too.
 
 ## The three parts (CLI + MCP + skill)
 
