@@ -4675,6 +4675,75 @@ def install_agents(root: str) -> str:
     return msg
 
 # --------------------------------------------------------------------------- #
+# Per-agent MCP install (--install-agent)
+# --------------------------------------------------------------------------- #
+
+def _mcp_config(agent: str, core_path: str) -> str:
+    """Return the exact MCP server config snippet for an agent. `core_path`
+    is the absolute path to codeloom-mcp.py (or codeloom.py if MCP is inline)."""
+    # codeloom-mcp.py is the MCP server entrypoint.
+    server_py = os.path.join(os.path.dirname(core_path), "codeloom-mcp.py")
+    if not os.path.isfile(server_py):
+        server_py = core_path  # fallback
+    a = agent.lower()
+    if a == "claude":
+        return f'''"codeloom": {{
+  "type": "stdio",
+  "command": "python3",
+  "args": ["{server_py}"]
+}}'''
+    if a == "cursor":
+        return f'''"codeloom": {{
+  "command": "python3",
+  "args": ["{server_py}"]
+}}'''
+    if a == "codex":
+        return f'''{{
+  "mcpServers": {{
+    "codeloom": {{
+      "command": "python3",
+      "args": ["{server_py}"]
+    }}
+  }}
+}}'''
+    if a == "gemini":
+        return f'''"codeloom": {{
+  "command": "python3",
+  "args": ["{server_py}"]
+}}'''
+    if a == "opencode":
+        return f'''{{
+  "codeloom": {{
+    "command": "python3",
+    "args": ["{server_py}"]
+  }}
+}}'''
+    return f'''"codeloom": {{
+  "command": "python3",
+  "args": ["{server_py}"]
+}}'''
+
+def install_agent_config(agent: str, core_path: str) -> str:
+    """Write/print the MCP config for a specific agent. Returns the config
+    text to add to the agent's settings (Claude Desktop, Cursor, etc.)."""
+    return _mcp_config(agent, core_path)
+
+def detect_agent() -> Optional[str]:
+    """Best-effort detect which coding agent's config directory is present."""
+    home = os.path.expanduser("~")
+    cands = [
+        ("claude", os.path.join(home, ".claude")),
+        ("cursor", os.path.join(home, ".cursor")),
+        ("codex", os.path.join(home, ".codex")),
+        ("gemini", os.path.join(home, ".gemini")),
+        ("opencode", os.path.join(home, ".config", "opencode")),
+    ]
+    for name, path in cands:
+        if os.path.isdir(path):
+            return name
+    return None
+
+# --------------------------------------------------------------------------- #
 # Token-cost reporting
 # --------------------------------------------------------------------------- #
 
@@ -4901,6 +4970,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--calls", action="store_true", help="show function-level call graph (multi-language)")
     p.add_argument("--diff", action="store_true", help="show structure of files changed vs HEAD (git)")
     p.add_argument("--install-agents", action="store_true", help="write/update AGENTS.md with a codeloom block")
+    p.add_argument("--install-agent", metavar="AGENT", help="print MCP config for an agent (claude|cursor|codex|gemini|opencode)")
+    p.add_argument("--detect-agent", action="store_true", help="detect which coding agent's config dir is present")
     p.add_argument("--cost", action="store_true", help="append token-cost estimate to output")
     p.add_argument("--session", action="store_true", help="log this invocation to the local session log (JSONL)")
     p.add_argument("--session-report", action="store_true", help="summarize the local session log (calls, tokens, cost)")
@@ -5193,6 +5264,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     # --install-agents: write/update AGENTS.md
     if args.install_agents:
         print(install_agents(root))
+        return 0
+
+    if args.install_agent:
+        agent = args.install_agent.lower()
+        valid = {"claude", "cursor", "codex", "gemini", "opencode"}
+        if agent not in valid:
+            print(f"unknown agent '{agent}'. Valid: {', '.join(sorted(valid))}")
+            return 1
+        print(install_agent_config(agent, os.path.abspath(__file__)))
+        return 0
+
+    if args.detect_agent:
+        a = detect_agent()
+        print(a if a else "no agent config dir detected")
         return 0
 
     # --diff: git-aware, structure of changed files

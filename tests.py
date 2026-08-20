@@ -631,6 +631,15 @@ class TestCodeLoom(unittest.TestCase):
             shutil.rmtree(td, ignore_errors=True)
             shutil.rmtree(td2, ignore_errors=True)
 
+    def test_install_agent_config(self):
+        # install-agent emits a valid MCP config snippet for an agent
+        for agent in ("claude", "cursor", "codex", "gemini", "opencode"):
+            cfg = codeloom.install_agent_config(agent, "/tmp/codeloom.py")
+            self.assertIn("codeloom", cfg)
+            self.assertIn("python3", cfg)
+        # unknown agent should be rejected by the caller, config returns a sensible default
+        self.assertIn("codeloom", codeloom.install_agent_config("unknown", "/tmp/codeloom.py"))
+
     def test_edit_relevance(self):
         # edit-relevance ranks the call path, not just keyword matches
         files = []
