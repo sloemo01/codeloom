@@ -3406,7 +3406,13 @@ def _c_scan(files: List[str]) -> List[dict]:
             return ""
 
     results = []
+    # workers capped by cores; CODELOOM_CORES overrides (simulate low-core HW)
     workers = max(1, min(os.cpu_count() or 2, 8))
+    try:
+        workers = min(int(os.environ.get("CODELOOM_CORES", str(workers))), 8)
+    except (ValueError, TypeError):
+        pass
+    workers = max(1, workers)
     if len(files) < 2000 or workers == 1:
         shards = [files]
     else:
