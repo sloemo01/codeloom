@@ -2526,6 +2526,23 @@ def _index_path(root: str) -> str:
 def _index_bin_path(root: str) -> str:
     return os.path.join(root, ".codeloom-index.bin")
 
+def _read_source_from_loc(loc: dict, root: str) -> str:
+    """Re-read a symbol's full source from disk using the stored byte range.
+    Used by --full and the adaptive small-symbol path, since the persisted
+    index no longer stores full source strings (they make it multi-GB)."""
+    path = loc.get("path")
+    sb, eb = loc.get("start_byte", 0), loc.get("end_byte", 0)
+    if not path or not os.path.isabs(path):
+        path = os.path.join(root, path) if path else None
+    if path and os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                fh.seek(sb)
+                return fh.read(eb - sb)
+        except (OSError, ValueError):
+            pass
+    return loc.get("source", "") or ""
+
 def build_persistent_index(files: List[str], root: str, parallel: bool = False) -> dict:
     """Build a full byte-offset symbol index (all languages)."""
     return build_byte_index(files, root, parallel=parallel)
@@ -2554,6 +2571,14 @@ def save_persistent_index(root: str, index: dict, files: List[str], kg: Optional
                   for f in files if os.path.isfile(f)},
         "symbols": index,
     }
+    # strip full source strings from the persisted index — a 1M-symbol repo
+    # makes them multi-GB and slow to load. Keep a signature line; --full
+    # re-reads the file from the stored byte range on demand.
+    for name in list(index.keys()):
+        for loc in index[name]:
+            src = loc.get("source", "")
+            loc["sig"] = (src.split("\n")[0][:80] if src else name)
+            loc.pop("source", None)
     if kg:
         data["kg"] = kg
     try:
@@ -3674,23 +3699,25 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if locs:
                     loc = locs[0]
                     if args.full:
-                        # full source straight from the index — no re-parse
+                        # full source: re-read the file from the stored byte range
+                        src = _read_source_from_loc(loc, root)
                         print(f"# get_symbol: {args.get_symbol}\n"
                               f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
                               f"bytes {loc.get('start_byte',0)}-{loc.get('end_byte',0)}  "
                               f"~{loc.get('tokens',0)} tokens\n\n"
-                              f"{loc.get('source','')}\n")
+                              f"{src}\n")
                         return 0
                     # adaptive: small symbols return the implementation by default
                     if loc.get("tokens", 0) <= ADAPTIVE_FULL_THRESHOLD:
+                        src = _read_source_from_loc(loc, root)
                         print(f"# get_symbol: {args.get_symbol}\n"
                               f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
                               f"bytes {loc.get('start_byte',0)}-{loc.get('end_byte',0)}  "
                               f"~{loc.get('tokens',0)} tokens\n\n"
-                              f"{loc.get('source','')}\n")
+                              f"{src}\n")
                         return 0
-                    # render summary directly from the index loc (no re-parse)
-                    sig = loc.get("source", "").split("\n")[0][:60] or args.get_symbol
+                    # render summary directly from the index (no re-parse)
+                    sig = loc.get("sig") or args.get_symbol
                     print(f"# get_symbol: {args.get_symbol}\n"
                           f"{loc['module']}:{loc['line']}  [{loc['kind']}]  ~10 tokens (summary)\n\n"
                           f"Signature: {sig}\n"
