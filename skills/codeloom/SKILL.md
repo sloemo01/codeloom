@@ -129,7 +129,9 @@ python3 codeloom.py --index-status /path/to/repo
 | `--install-agents` | write/update AGENTS.md with a codeloom block |
 | `--cost` | append token-cost estimate |
 | `--task "text"` | rank modules relevant to a task |
-| `--impact X` | predict blast radius of changing module X |
+| `--impact X` | predict blast radius of changing X |
+| `--check-edit X` | preflight: is it safe to edit X? (terminal GO/CHECK/STOP) |
+| `--check-delete X` | preflight: is it safe to delete X? (terminal GO/STOP) |
 | `--plan "X"` | prioritized reading plan for a task |
 | `--pack "X"` | single-shot context file (reading order + impact + symbols) |
 | `--cross` | cross-file call graph (AST-resolved) |

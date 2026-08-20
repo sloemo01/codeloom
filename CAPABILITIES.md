@@ -41,6 +41,8 @@ Everything codeloom can do, in one place. Zero-dependency, single file, no daemo
 |---|---|
 | `codeloom --task "text"` | Rank modules relevant to a task |
 | `codeloom --impact X` | Predict blast radius of changing X |
+| `codeloom --check-edit X` | Is it safe to edit X? (terminal GO/STOP verdict) |
+| `codeloom --check-delete X` | Is it safe to delete X? (terminal GO/STOP verdict) |
 | `codeloom --plan "text"` | Prioritized reading plan |
 | `codeloom --pack "text"` | Single-shot context file (reading order + impact + symbols) |
 

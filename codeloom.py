@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.27.0"
+VERSION = "0.28.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -2696,6 +2696,59 @@ def render_impact(graph: dict, root: str, start: str) -> str:
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
+# Preflight refactoring checks (--check-edit / --check-delete) — the moat
+# --------------------------------------------------------------------------- #
+# jcodemunch has check_edit_safe / check_delete_safe + reference tracking that
+# tell an agent definitively when a rewrite will break dependents. codeloom's
+# answer: a terminal GO/STOP verdict the agent can't loop past.
+
+def preflight_check(files, root, symbol, action: str) -> str:
+    """Check whether editing or deleting a symbol is safe. Returns a terminal
+    verdict: GO or STOP, with the exact dependents that will break.
+
+    action: 'edit' or 'delete'.
+    - edit: CHECK unless no callers reference the symbol.
+    - delete: GO only if nothing references the symbol at all."""
+    buf = io.StringIO()
+    buf.write(f"# codeloom --check-{action}: {symbol}\n\n")
+    calls = build_call_graph_multi(files, root)
+    refs = set()
+    for mod, funcs in calls.items():
+        for caller, callees in funcs.items():
+            if symbol in callees:
+                refs.add(f"{mod}.{caller}")
+        if symbol in funcs:
+            refs.add(f"{mod}.{symbol}")
+    idx = build_symbol_index(files, root)
+    defined_mods = set()
+    for loc in idx.get(symbol, []):
+        defined_mods.add(loc["module"])
+    dependent_refs = sorted(r for r in refs if not any(r.startswith(m) for m in defined_mods))
+
+    if action == "delete":
+        if dependent_refs:
+            buf.write("VERDICT: STOP — do not delete.\n")
+            buf.write(f"  {symbol} is referenced by {len(dependent_refs)} caller(s).\n")
+            for r in dependent_refs[:15]:
+                buf.write(f"    - {r}\n")
+            buf.write("  Deleting will break these. Fix or migrate them first.\n")
+        else:
+            buf.write("VERDICT: GO — safe to delete.\n")
+            buf.write(f"  No callers reference {symbol}. It's dead code or isolated.\n")
+        return buf.getvalue()
+
+    if dependent_refs:
+        buf.write(f"VERDICT: CHECK — {len(dependent_refs)} caller(s) depend on {symbol}.\n")
+        buf.write(f"  Editing {symbol} may break these callers:\n")
+        for r in dependent_refs[:15]:
+            buf.write(f"    - {r}\n")
+        buf.write("  PROCEED ONLY IF the change is backward-compatible (same name + signature).\n")
+    else:
+        buf.write("VERDICT: GO — safe to edit.\n")
+        buf.write("  No callers reference {symbol}. The change is isolated.\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
 # --task: task-aware relevance ranking
 # --------------------------------------------------------------------------- #
 
@@ -3516,6 +3569,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--session", action="store_true", help="log this invocation to the local session log (JSONL)")
     p.add_argument("--session-report", action="store_true", help="summarize the local session log (calls, tokens, cost)")
     p.add_argument("--impact", metavar="MODULE", help="predict blast radius of changing a module")
+    p.add_argument("--check-edit", metavar="SYMBOL", help="preflight: is it safe to edit this symbol? (terminal GO/STOP verdict)")
+    p.add_argument("--check-delete", metavar="SYMBOL", help="preflight: is it safe to delete this symbol? (terminal GO/STOP verdict)")
     p.add_argument("--task", metavar="TEXT", help="rank modules relevant to a task description")
     p.add_argument("--plan", metavar="TEXT", help="emit a prioritized reading plan for a task")
     p.add_argument("--pack", metavar="TEXT", help="emit a single-shot context file for a task (reading order + impact + symbols)")
@@ -3786,7 +3841,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
     # --impact / --task / --plan / --pack: task-aware intelligence
-    if args.impact or args.task or args.plan or args.pack:
+    if args.impact or args.task or args.plan or args.pack or args.check_edit or args.check_delete:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
@@ -3815,6 +3870,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                     print(f"module not found: {args.impact}", file=sys.stderr)
                     return 1
             print(render_impact(graph, root, target))
+            return 0
+
+        if args.check_edit:
+            print(preflight_check(files, root, args.check_edit, "edit"))
+            return 0
+
+        if args.check_delete:
+            print(preflight_check(files, root, args.check_delete, "delete"))
             return 0
 
         if args.task:

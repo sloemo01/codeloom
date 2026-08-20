@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.27.0"
+SERVER_VERSION = "0.28.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -132,6 +132,40 @@ TOOLS: List[Dict[str, Any]] = [
                 "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
             },
             "required": ["module"],
+        },
+    },
+    {
+        "name": "codeloom_check_edit",
+        "description": (
+            "Preflight: is it safe to edit this symbol? Returns a terminal "
+            "GO/CHECK/STOP verdict with the exact callers that will break, so "
+            "the agent stops looping and knows definitively before rewriting."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "symbol": {"type": "string", "description": "Symbol to check, e.g. 'retry' or 'Engine'"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["symbol"],
+        },
+    },
+    {
+        "name": "codeloom_check_delete",
+        "description": (
+            "Preflight: is it safe to delete this symbol? Returns a terminal "
+            "GO/STOP verdict — GO only if nothing references the symbol, else "
+            "STOP with the exact dependents that will break."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "symbol": {"type": "string", "description": "Function to check, e.g. 'retry' or 'Engine'"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["symbol"],
         },
     },
     {
@@ -702,6 +736,16 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if resolved is None:
             return {"isError": True, "content": [{"type": "text", "text": f"module not found: {module}"}]}
         text = codeloom.render_impact(graph, root, resolved)
+    elif name == "codeloom_check_edit":
+        symbol = args.get("symbol")
+        if not symbol:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
+        text = codeloom.preflight_check(files, root, symbol, "edit")
+    elif name == "codeloom_check_delete":
+        symbol = args.get("symbol")
+        if not symbol:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
+        text = codeloom.preflight_check(files, root, symbol, "delete")
     elif name == "codeloom_task":
         task = args.get("task")
         if not task:
