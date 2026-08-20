@@ -108,9 +108,11 @@ and "what code actually runs when a login happens" (codeloom, task-shaped).
 
 ## The honest scope
 
-CodeLoom is a **single-file, zero-dependency code-intelligence tool** — that's
-the design. It covers 25 languages via `--install-grammars`, keeps a persistent
-knowledge graph on disk, and makes retrieval irrelevant for the load-once,
-task-shaped workflow with its code-embedded `--pack` brief. It wins on **speed,
-zero-setup, freshness, task-awareness, and offline operation** — the workflow
-that dominates everyday agent use.
+CodeLoom is a **single-file, zero-dependency replacement for the heavyweight
+code-intelligence tools** — that's the design. It covers 25 languages via
+`--install-grammars`, keeps a persistent knowledge graph on disk, makes
+retrieval irrelevant for the load-once, task-shaped workflow with its
+code-embedded `--pack` brief, and runs zero-install, zero-telemetry, offline.
+For everyday agent work it replaces what the search tools do **and** adds
+task-orientation they don't have — no daemon, no install, no stale index, no
+telemetry.
