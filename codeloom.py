@@ -277,6 +277,49 @@ def install_grammars(do_install: bool = False, only_ext: Optional[str] = None) -
         "parsing for those languages. No config needed.\n"
     )
 
+def _ensure_grammars_for_root(root: str) -> str:
+    """BEAT-THE-TRADEOFF: scan the repo for its actual code extensions and
+    auto-install just the tree-sitter grammars those languages need, in one
+    shot. No per-language manual trigger. Returns a summary. Only installs
+    grammars that have a known package in _EXT_GRAMMAR_PKG. Opt-in via
+    CODELOOM_AUTO_INSTALL_GRAMMARS=1 (never touches the system without it)."""
+    if os.environ.get("CODELOOM_AUTO_INSTALL_GRAMMARS") != "1":
+        return "Auto-install off (set CODELOOM_AUTO_INSTALL_GRAMMARS=1 to auto-install grammars for this repo's languages).\n"
+    if not _TS_AVAILABLE:
+        return "tree-sitter not installed. Run: codeloom --install-grammars --yes\n"
+    # discover the repo's extensions
+    exts = set()
+    for root_, _dirs, fs in os.walk(root):
+        if ".git" in root_:
+            continue
+        for fn in fs:
+            ext = os.path.splitext(fn)[1].lower()
+            if ext in _EXT_GRAMMAR_PKG:
+                exts.add(ext)
+    missing = [ext for ext in exts if _ts_grammar_for(ext) is None]
+    if not missing:
+        return f"All {len(exts)} repo languages already have AST grammars.\n"
+    # install missing grammars in one pip call (dedupe packages)
+    pkgs = []
+    seen = set()
+    for ext in sorted(missing):
+        p = _EXT_GRAMMAR_PKG[ext]
+        if p not in seen:
+            seen.add(p)
+            pkgs.append(p)
+    import subprocess as _sp
+    cmd = "pip install " + " ".join(["tree-sitter"] + pkgs)
+    try:
+        r = _sp.run(cmd, shell=True, capture_output=True, text=True, timeout=300)
+    except Exception as e:
+        return f"Auto-install failed: {e}\n  cmd: {cmd}\n"
+    if r.returncode == 0:
+        return (f"Auto-installed {len(pkgs)} grammar(s) for this repo's languages "
+                f"({', '.join(sorted(missing))}). AST depth now active.\n")
+    return (f"Auto-install of {len(pkgs)} grammar(s) failed (exit {r.returncode}). "
+            f"Run: {cmd}\n")
+
+
 def _ts_function_names(root_node) -> set:
     """Extract function/class names from a tree-sitter tree (best-effort)."""
     names = set()
@@ -5388,6 +5431,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--trace", nargs="+", metavar="CMD", help="run a command under sys.settrace, record runtime call edges")
     p.add_argument("--force", action="store_true", help="acknowledge --trace executes code (isolation warning)")
     p.add_argument("--install-grammars", action="store_true", help="install tree-sitter language grammars (opt-in precision)")
+    p.add_argument("--auto-grammars", action="store_true", help="scan the repo and install grammars for its languages (beats the manual per-language step)")
     p.add_argument("--yes", action="store_true", help="with --install-grammars, actually run pip install")
     p.add_argument("--index", action="store_true", help="build + save a persistent byte-offset index (scale)")
     p.add_argument("--engine", choices=["py", "c"], default="py", help="scanning engine: py (pure-Python, default) or c (compiled codeloom_core, faster — build with cc -O3 -o codeloom_core codeloom_core.c)")
@@ -5425,6 +5469,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     # --install-grammars: opt-in tree-sitter grammar installer
     if args.install_grammars:
         print(install_grammars(do_install=args.yes))
+        return 0
+
+    # --auto-grammars: beat-the-tradeoff — scan repo, install grammars for its langs
+    if args.auto_grammars:
+        print(_ensure_grammars_for_root(root))
         return 0
 
     # --index-status: show persistent index status
