@@ -5,7 +5,7 @@ so it renders inline on both platforms.
 
 - Demo GIF: `https://raw.githubusercontent.com/sloemo01/codeloom/main/demo.gif`
 - Repo: `https://github.com/sloemo01/codeloom`
-- Latest release: `https://github.com/sloemo01/codeloom/releases/tag/v0.32.0`
+- Latest release: `https://github.com/sloemo01/codeloom/releases/tag/v0.40.0`
 
 ---
 
@@ -36,8 +36,9 @@ What it does:
 - **Zero-install, zero-telemetry, offline** — one stdlib file, no `pip install`, no model downloads, no license validation, no telemetry that phones home. The heavyweight tools can't say that.
 - **Git-diffable** — `codeloom --write MAP.md` produces a reviewable text artifact you commit and diff in PRs. jcodemunch's index is a binary blob.
 - **CI action** — `codeloom --install-agents .` writes AGENTS.md + a GitHub Action that runs `--pack` on every PR and posts the brief as a comment. One line to add.
-- **MCP server** — zero-dep, 28 tools, resident in-memory knowledge graph + `--watch` incremental refresh (daemon-speed, no daemon).
+- **MCP server** — zero-dep, **48 tools**, resident in-memory knowledge graph + `--watch` incremental refresh (daemon-speed, no daemon).
 - **25 languages** — `--install-grammars --yes` gives tree-sitter precision.
+- **Optional C engine, Linux-kernel scale** — build `codeloom_core.c` once, `--index --engine c` indexes the **full Linux kernel (64k files, 3.2M symbols, 408k edges) in ~91s**. Pure-Python stays zero-dep; the C accelerator is opt-in for huge monorepos.
 
 The whole thing is Python stdlib only. No `pip install`, no indexing daemon, no GPU. Copy one file into your repo, point your agent at it, done.
 
@@ -72,7 +73,7 @@ So I built codeloom: a map of your repo for agents. One file, zero deps, no daem
 • `codeloom --write MAP.md` → a reviewable text artifact you commit and diff in PRs (their index is a binary blob)
 • `codeloom --install-agents .` → writes AGENTS.md + a GitHub Action that posts the `--pack` brief on every PR. One line.
 
-**6/6** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.32.0 released. `--resume` restores your agent's structural context after a compaction in one shot. Plus code-embedded task brief, edit-relevance, 99% token savings, lazy per-symbol index + `--watch` (near-resident, no daemon), 25-language tree-sitter, tested on the Linux kernel — symbol index builds the full kernel (1.09M symbols) in ~62s, under the 3-minute claim for the same scale. Go use it.
+**6/6** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.40.0 released. `--resume` restores your agent's structural context after a compaction. Code-embedded task brief, edit-relevance, 99% token savings, lazy per-symbol index + `--watch` (near-resident, no daemon), 48 MCP tools, optional C engine — indexes the full Linux kernel (3.2M symbols, 408k edges) in **~91s**. Go use it.
 
 ---
 

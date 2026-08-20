@@ -75,9 +75,33 @@ codeloom [OPTIONS] [ROOT]
 | Flag | Description |
 |---|---|
 | `--index` | build + save a persistent knowledge graph (symbols + call/import edges) |
+| `--index --engine c` | use the compiled C accelerator (build: `cc -O3 -o codeloom_core codeloom_core.c`) — Linux kernel ~91s |
 | `--watch` | incremental daemon-less refresh: re-index only changed files |
 | `--index-status` | Index freshness |
 | `--verify FILE` | SHA-256 checksum |
 | `--install-grammars --yes` | Install tree-sitter grammars (25 languages) |
 | `--install-agents` | Write AGENTS.md block |
 | `--force` | Acknowledge `--trace` executes code |
+
+## Context engine & intelligence
+
+| Flag | Description |
+|---|---|
+| `--loom "task"` | Intent engine: layered context (overview→files→code→git→memory) |
+| `--remember "note" --section X` | Append to persistent repository memory |
+| `--churn` | Git intelligence: most-edited files (instability signal) |
+| `--hybrid-search "q"` | Hybrid search (BM25 + structure + git scored) |
+| `--seen` / `--dedup` | Session memory: already-read files/symbols |
+| `--cross-repo A B ...` | One graph across multiple repos |
+| `--architecture` | Detect architectural pattern |
+| `--heatmap` | Dependency heatmap (god classes, circular imports, unused) |
+| `--explain-topic X` | Explain a domain end-to-end |
+| `--docs readme\|arch` | Generate a README or ARCHITECTURE doc |
+| `--refactor X` | Refactor engine: files, deps, risk, order |
+| `--bug-predict` | Files likely to break (churn+coupling+complexity) |
+| `--timeline` | Repository timeline via git |
+| `--find "q"` | Natural-language flow discovery |
+| `--context-diff BASE HEAD` | Branch-to-branch architecture diff |
+| `--plugin-sdk` / `--lsp` | Plugin surface / LSP bridge status |
+| `--graph-html` | Write local zoomable HTML graph view |
+| `--check-edit X` / `--check-delete X` | Preflight refactoring safety verdicts |

@@ -74,7 +74,7 @@ Everything codeloom can do, in one place. Zero-dependency, single file, no daemo
 | `codeloom --install-grammars --yes` | Install tree-sitter grammars (25 languages) |
 | `codeloom --install-agents` | Write AGENTS.md block |
 
-## MCP server (24 tools)
+## MCP server (48 tools)
 
 `codeloom-mcp.py` is a zero-dependency MCP server (stdlib JSON-RPC over stdio).
 Tools: `codeloom_map`, `codeloom_graph`, `codeloom_focus`, `codeloom_calls`,
@@ -90,3 +90,12 @@ Tools: `codeloom_map`, `codeloom_graph`, `codeloom_focus`, `codeloom_calls`,
 25 languages via `--install-grammars --yes`: Python, JS/TS, Go, Rust, Java,
 C/C++, C#, Ruby, PHP, Swift, Kotlin, Dart, Lua, bash, Elixir, OCaml, Scala,
 Haskell, Zig, Perl, F#, PowerShell. Plus regex fallback for 18+ more.
+
+## Optional C engine (scale)
+
+Build once: `cc -O3 -o codeloom_core codeloom_core.c`, then `--index --engine c`
+uses a compiled C scanner for the high-volume file walk + symbol + call + import
+extraction. Measured on the Linux kernel (~28M LOC, 64,814 code files): full
+knowledge graph + symbol index in **~91s** — 3.2M symbols, 408k edges. The
+pure-Python default stays zero-dependency; `--engine c` is the opt-in
+accelerator for huge monorepos.

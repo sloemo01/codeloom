@@ -153,6 +153,7 @@ python3 codeloom.py --index-status /path/to/repo
 | `--install-grammars` | install tree-sitter grammars (opt-in precision) |
 | `--install-grammars --yes` | actually run pip install (one-command) |
 | `--index` | build + save a persistent knowledge graph (symbols + call/import edges) |
+| `--index --engine c` | use the compiled C accelerator (build `cc -O3 -o codeloom_core codeloom_core.c`) — Linux kernel ~91s |
 | `--watch` | incremental daemon-less refresh (re-index only changed files) |
 | `--index-status` | show persistent index status/freshness |
 | `--framework` | detect the web/app framework + surface routes/models/config/conventions |

@@ -1,7 +1,7 @@
 <h1 align="center">codeloom</h1>
 <p align="center">
   <b>Give your AI coding agent a map of the repo in one second.</b><br/>
-  Single-file · zero-dependency · no daemon · 100% local · <b>import graph + call graph + MCP + skill</b>
+  Single-file · zero-dependency · no daemon · 100% local · <b>import graph + call graph + MCP + skill + optional C engine</b>
 </p>
 
 <p align="center">
@@ -705,8 +705,9 @@ default.
 | **Dead code (`--deadcode`)** | **yes** | **no** | **no** |
 | **Runtime trace (`--trace`)** | **yes** | **no** | **no** |
 | Git-aware `--diff` | **yes — always fresh** | partial (`get_changed_symbols`) | no |
-| **Tool surface** | **24 tools + 1 entry point** (`codeloom_ask`) | 6 router tools over **91 actions** (users say 30+) | varies |
-| MCP server | **yes — zero-dep, 24 tools** | yes | yes |
+| **Tool surface** | **48 tools + 1 entry point** (`codeloom_ask`/`--loom`) | 6 router tools over **91 actions** | varies |
+| MCP server | **yes — zero-dep, 48 tools** | yes | yes |
+| **Linux kernel index (C engine)** | **~91s** (optional `--engine c`) | — | ~180s |
 | Offline | yes | yes | varies |
 
 The heavyweight tools are great at retrieval — but they're *search engines*,

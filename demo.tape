@@ -39,3 +39,13 @@ Type "codeloom --deadcode ."
 Enter
 Sleep 1s
 Sleep 500ms
+
+Type "codeloom --index --engine c ."
+Enter
+Sleep 1s
+Sleep 500ms
+
+Type "codeloom --loom 'add retry logic' ."
+Enter
+Sleep 1s
+Sleep 500ms
