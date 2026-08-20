@@ -3353,6 +3353,79 @@ def build_knowledge_graph(files: List[str], root: str, parallel: bool = False) -
     }
 
 # --------------------------------------------------------------------------- #
+# Graph precision (confidence + relationship types)
+# --------------------------------------------------------------------------- #
+# The leaders have ~7M edges; we have ~408k. Rather than chase raw count, we
+# add what agents actually trust: confidence scores on edges and the
+# relationship types (implements / extends / overrides) that make impact
+# analysis correct.
+
+def _py_relationships(files: List[str], root: str) -> dict:
+    """Detect Python class relationships: {child: {'implements': [ifaces],
+    'extends': [bases]}}. Uses AST across Python files."""
+    out = {}
+    for f in files:
+        if not f.endswith(".py"):
+            continue
+        mod = module_name_of(f, root)
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                tree = ast.parse(fh.read())
+        except (SyntaxError, OSError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                bases = []
+                for b in node.bases:
+                    if isinstance(b, ast.Name):
+                        bases.append(b.id)
+                    elif isinstance(b, ast.Attribute):
+                        bases.append(b.attr)
+                if bases:
+                    out[f"{mod}.{node.name}"] = {"extends": bases}
+    return out
+
+def render_precision(files: List[str], root: str, symbol: str) -> str:
+    """Precision report for a symbol: its call edges with confidence,
+    dependents, and class relationships. Confidence: 'definite' when the callee
+    is resolved to a local module; 'maybe' when it's a dynamic/attr call."""
+    index = build_byte_index(files, root)
+    buf = io.StringIO()
+    buf.write(f"# precision: {symbol}\n")
+    locs = index.get(symbol)
+    if not locs:
+        buf.write("  Symbol not found.\n")
+        return buf.getvalue()
+    mod = locs[0]["module"]
+    buf.write(f"  defined at {mod}:{locs[0].get('line', 1)}  [{locs[0].get('kind','function')}]\n\n")
+    # relationships
+    rel = _py_relationships(files, root)
+    key = f"{mod}.{symbol}"
+    if key in rel:
+        buf.write("## Relationships\n")
+        for ext in rel[key].get("extends", []):
+            buf.write(f"  extends {ext}\n")
+        buf.write("\n")
+    # call edges with confidence
+    buf.write("## Call edges (with confidence)\n")
+    graph = build_call_graph_multi(files, root)
+    mod_edges = graph.get(mod, {})
+    if symbol in mod_edges:
+        callees = mod_edges[symbol]
+        for c in sorted(callees):
+            # definite if the callee is a defined local symbol
+            conf = "definite" if c in index else "maybe"
+            buf.write(f"  {symbol} -> {c}  [{conf}]\n")
+    else:
+        buf.write("  (no resolved call edges from this symbol)\n")
+    buf.write("\n## Dependents (what calls it)\n")
+    for m, funcs in graph.items():
+        for fn, callees in funcs.items():
+            if symbol in callees:
+                buf.write(f"  {m}.{fn}\n")
+    buf.write("\n# Confidence: 'definite' = callee resolved to a local def; 'maybe' = dynamic/attr.\n")
+    return buf.getvalue()
+# --------------------------------------------------------------------------- #
 # Optional C-accelerated core (codeloom_core)
 # --------------------------------------------------------------------------- #
 # Build once:  cc -O3 -o codeloom_core codeloom_core.c
@@ -4995,6 +5068,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--grep", metavar="QUERY", help="search file contents for a snippet (ranked + context)")
     p.add_argument("--read", metavar="SYMBOL", help="extract exact source of a function/class/method (token-efficient)")
     p.add_argument("--explain", metavar="SYMBOL", help="plain-English explanation of a symbol (AST + call graph)")
+    p.add_argument("--precision", metavar="SYMBOL", help="graph precision report: call edges with confidence + class relationships")
     p.add_argument("--similar", metavar="SYMBOL", help="find structurally similar functions/classes (refactoring)")
     p.add_argument("--deadcode", action="store_true", help="find functions defined but never called")
     p.add_argument("--get-symbol", metavar="SYMBOL", help="token-counted symbol snippet (byte offsets + token estimate)")
@@ -5296,7 +5370,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # --cross / --search / --usages / --grep / --read / --explain / --similar / --deadcode / --get-symbol
     if args.cross or args.search or args.usages or args.grep or args.read \
-       or args.explain or args.similar or args.deadcode or args.get_symbol:
+       or args.explain or args.similar or args.deadcode or args.get_symbol or args.precision:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
@@ -5362,6 +5436,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.explain:
             print(render_explain(files, root, args.explain))
+            return 0
+
+        if args.precision:
+            print(render_precision(files, root, args.precision))
             return 0
 
         if args.similar:

@@ -322,6 +322,23 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "codeloom_precision",
+        "description": (
+            "Graph precision report for a symbol: call edges annotated with "
+            "confidence (definite vs maybe) plus class relationships and "
+            "dependents. Helps agents trust which call-graph edges are real."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "symbol": {"type": "string", "description": "Symbol name to inspect"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["symbol"],
+        },
+    },
+    {
         "name": "codeloom_similar",
         "description": (
             "Find functions/classes with a structurally similar signature (same "
@@ -1208,6 +1225,11 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if not symbol:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
         text = codeloom.render_explain(files, root, symbol)
+    elif name == "codeloom_precision":
+        symbol = args.get("symbol")
+        if not symbol:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
+        text = codeloom.render_precision(files, root, symbol)
     elif name == "codeloom_similar":
         symbol = args.get("symbol")
         if not symbol:
