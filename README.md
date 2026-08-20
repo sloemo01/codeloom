@@ -498,12 +498,13 @@ re-parsing. Measured on microsoft/vscode (12k files): `--deadcode` drops from
 10.3s (serial) to **4.8s** by loading from the graph; `--get-symbol` cold-starts
 at **~0.11s** (index load, no re-parse).
 
-**Tested on the Linux kernel (~30M LOC, 95k files):** `--index --parallel` built
-a persistent graph of **91,242 files / 1,063,529 symbols** — no daemon, no
-crash (tree-sitter walks are iterative so deeply-nested kernel source doesn't
-hit the recursion limit). The index stores a compact signature per symbol
-(not full source) so it stays ~304MB for a million-symbol repo, and `--full`
-re-reads source from the stored byte range on demand.
+**Tested on the Linux kernel (~28M LOC, 95k files):** the **symbol index — the
+thing that powers `--get-symbol`/`--search`/`--resume`/`--pack` — builds the
+full kernel (67,398 code files, **1,095,322 symbols**) in **~62s parallel**,
+well under the 3-minute claim for the same scale. The index stores a compact
+signature per symbol (not full source) so it stays small, and `--full`
+re-reads source from the stored byte range on demand. Tree-sitter walks are
+iterative so deeply-nested kernel source doesn't hit the recursion limit.
 
 **No cold-start on repeated queries.** `--get-symbol` uses a **lazy per-symbol
 index** (stdlib dbm, one keyed record per symbol) — a single lookup is a
