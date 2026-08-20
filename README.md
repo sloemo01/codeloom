@@ -138,6 +138,8 @@ That's it. Under a second, zero setup, works offline. Cross-platform — macOS, 
 | `codeloom --plugin-sdk` | Show the plugin SDK (framework-aware extraction hooks) |
 | `codeloom --lsp` | Show LSP bridge status (optional semantic enrichment) |
 | `codeloom --graph-html` | Write a local zoomable HTML graph view |
+| `codeloom --find "q"` | Natural-language flow discovery ("find where login starts") |
+| `codeloom --context-diff BASE HEAD` | Branch-to-branch architecture-level diff |
 | `codeloom --cross` | "What calls what, across files?" (resolved call graph) |
 | `codeloom --search X` | "Where is symbol X defined?" (symbol index + snippet) |
 | `codeloom --usages X` | "Where is symbol X used?" (call sites + snippet) |

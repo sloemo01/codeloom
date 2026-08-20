@@ -88,9 +88,9 @@ together; embedding signal ⬜ via optional backend; full graph-traversal signal
 
 ### 9. Agent Session Memory ✅
 Remember already-read files, explored symbols, cached answers, previous
-searches — avoid rereading. (`--session` logs ✅; `--seen` reports already-read
-files/symbols from the log so the agent skips re-reading ✅; acting on it —
-dedupe within a single response — 🚧.)
+searches — avoid rereading. (`--session` logs ✅; `--seen` reports ✅; `--dedup`
+skips already-read files ✅; `dedupe_symbols()` suppresses seen symbols inside a
+single pack/loom response ✅.)
 
 ### 10. Code Compression ✅
 Instead of full `function...`, return: signature, params, returns, deps,
@@ -174,14 +174,15 @@ Replay architecture evolution over time (via git history + memory).
 Identify files likely to break by churn + complexity + coupling.
 (`--bug-predict` ✅ scores files by churn + coupling + complexity.)
 
-### 25. Natural-Language API ⬜
+### 25. Natural-Language API ✅
 "Find where login starts", "Show every payment flow", "Explain how uploads
 work" — the `loom_context` intent engine is the foundation.
+(`--find` ✅ does flow discovery for a query; `--loom` ✅ layered context.)
 
-### 26. Context Diff 🚧
+### 26. Context Diff ✅
 Compare two branches at the architecture level, not just line-by-line.
-(`--diff` gives git structure + `--cross-repo`; branch-to-branch architecture
-diff ⬜.)
+(`--context-diff BASE HEAD` ✅ maps changed files to modules + counts
+architecture-level change.)
 
 ### 27. Knowledge Packs ✅
 Export compact, reusable project summaries for agents. (`--resume` + `--pack`
