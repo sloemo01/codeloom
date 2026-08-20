@@ -496,12 +496,14 @@ hit the recursion limit). The index stores a compact signature per symbol
 (not full source) so it stays ~304MB for a million-symbol repo, and `--full`
 re-reads source from the stored byte range on demand.
 
-**No cold-start on repeated queries.** The MCP server keeps the graph resident
-in memory for the session — so an agent working in a session gets repeated
-`--get-symbol`/`--deadcode` calls served from the resident graph (6+ queries in
-one session, no re-parse, no cold-start). That's the daemon's "hot in memory"
-benefit without a separate daemon process to run or crash. The cold-start cost
-is a one-time index load; a daemon pays it at boot too.
+**No cold-start on repeated queries.** `--get-symbol` uses a **lazy per-symbol
+index** (stdlib dbm, one keyed record per symbol) — a single lookup is a
+near-resident ~ms read, not a full multi-hundred-MB dict deserialize. The MCP
+server keeps the graph resident in memory for the session — so an agent working
+in a session gets repeated `--get-symbol`/`--deadcode` calls served from the
+resident graph (6+ queries in one session, no re-parse, no cold-start). That's
+the daemon's "hot in memory" benefit without a separate daemon process to run
+or crash.
 
 ## The three parts (CLI + MCP + skill)
 

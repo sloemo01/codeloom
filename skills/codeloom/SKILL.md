@@ -247,6 +247,6 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 - `codeloom --snippet <path> <start> <end> <root>` returns a byte-range snippet.
 - `codeloom --incremental <root>` returns changed files (hash cache).
 - `codeloom --trace <cmd> <root>` returns runtime call edges (or none).
-- MCP server keeps an in-memory index (incremental, always fresh).
+- MCP server keeps an in-memory index (incremental, always fresh); `--get-symbol` uses a lazy per-symbol dbm index (near-resident single-key lookups).
 - MCP smoke test returns `serverInfo` name `codeloom-mcp`.
 - `demo.gif` exists and a late frame shows the intended feature output.
