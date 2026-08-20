@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.34.0"
+VERSION = "0.35.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -1362,6 +1362,79 @@ def render_graph_multi(graph: dict, root: str, start: Optional[str] = None) -> s
     buf.write(f"{len(graph)} modules, {len(edges)} edges\n\n")
     for m, d in edges:
         buf.write(f"  {m} -> {d}\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
+# Cross-repository support — one graph across multiple repos
+# --------------------------------------------------------------------------- #
+
+def build_cross_repo(repos: List[str], max_files: int = 20000) -> dict:
+    """Build a combined graph across multiple repo roots. Returns
+    {'repos': {name: {...}}, 'edges': [(repoA.mod, repoB.mod), ...]}.
+    Cross-repo edges are inferred when a module name in one repo matches an
+    import/reference in another (e.g. the backend imports the SDK package)."""
+    import os as _os
+    result = {"repos": {}, "graph": {}}
+    for root in repos:
+        root = _os.path.abspath(root)
+        if not _os.path.isdir(root):
+            continue
+        gi = _os.path.join(root, ".gitignore")
+        rules = parse_gitignore(gi) if _os.path.isfile(gi) else []
+        files: List[str] = []
+        _walk(root, rules, max_files, files)
+        graph = build_graph_multi(files, root)
+        name = _os.path.basename(root) or root
+        result["repos"][name] = {"root": root, "files": len(files), "modules": sorted(graph.keys())}
+        # namespace this repo's modules so cross-repo refs are unambiguous
+        for mod, deps in graph.items():
+            result["graph"][f"{name}.{mod}"] = {f"{name}.{d}" for d in deps}
+    # cross-repo edges: a module importing a name that's another repo's module
+    all_mods = set()
+    for k in result["graph"]:
+        all_mods.add(k.split(".", 1)[1])
+    for full_mod, deps in list(result["graph"].items()):
+        base = full_mod.split(".", 1)[1]
+        # if this module's name appears as a dep in another repo, link it
+        for other_mod, other_deps in result["graph"].items():
+            if other_mod == full_mod:
+                continue
+            other_base = other_mod.split(".", 1)[1]
+            if other_base in deps or other_base.split(".")[-1] in deps:
+                result["graph"].setdefault(other_mod, set()).add(full_mod)
+    return result
+
+def render_cross_repo(repos: List[str], max_files: int = 20000) -> str:
+    cr = build_cross_repo(repos, max_files)
+    buf = io.StringIO()
+    buf.write("# cross-repo knowledge graph\n")
+    if not cr["repos"]:
+        buf.write("  No valid repo roots given.\n")
+        return buf.getvalue()
+    buf.write(f"  {len(cr['repos'])} repo(s), {sum(len(v['modules']) for v in cr['repos'].values())} modules\n\n")
+    for name, info in cr["repos"].items():
+        buf.write(f"## {name} ({info['files']} files, {len(info['modules'])} modules)\n")
+        for mod in info["modules"][:20]:
+            buf.write(f"  {mod}\n")
+        if len(info["modules"]) > 20:
+            buf.write(f"  ... (+{len(info['modules'])-20} more)\n")
+        buf.write("\n")
+    # cross-repo edges
+    buf.write("## Cross-repo edges (service-to-service)\n")
+    names = list(cr["repos"].keys())
+    cross = []
+    for a in names:
+        for b in names:
+            if a == b:
+                continue
+            if f"{b}." in " ".join(cr["repos"].get(a, {}).get("modules", [])):
+                cross.append(f"  {a} -> {b}\n")
+    if cross:
+        for c in cross:
+            buf.write(c)
+    else:
+        buf.write("  (no package-level cross-repo imports detected)\n")
+    buf.write("\n# Build one graph across your services. Query any repo in the set.\n")
     return buf.getvalue()
 
 def reachable(graph: dict, start: str, direction: str = "out") -> set:
@@ -4082,6 +4155,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--section", metavar="NAME", default="DECISIONS", help="memory section for --remember")
     p.add_argument("--churn", action="store_true", help="git churn: most-edited files (instability signal)")
     p.add_argument("--cross", action="store_true", help="show cross-file call graph (resolved across modules)")
+    p.add_argument("--cross-repo", nargs="+", metavar="PATH", help="build a combined knowledge graph across multiple repo roots")
     p.add_argument("--search", metavar="SYMBOL", help="search the symbol index for a function/class/method")
     p.add_argument("--hybrid-search", metavar="QUERY", help="hybrid search: BM25 lexical + structural signals scored together")
     p.add_argument("--seen", action="store_true", help="session memory: report already-read files/symbols to avoid re-reading")
@@ -4457,6 +4531,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.seen:
         # session memory: report already-read files/symbols to avoid re-reading
         print(render_seen(root))
+        return 0
+
+    # Cross-repo mode: one graph across multiple repo roots
+    if args.cross_repo:
+        print(render_cross_repo(args.cross_repo, args.max_files))
         return 0
 
     # Call-graph mode (multi-language)

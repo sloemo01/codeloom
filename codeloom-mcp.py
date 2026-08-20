@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.34.0"
+SERVER_VERSION = "0.35.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -536,6 +536,22 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "codeloom_cross_repo",
+        "description": (
+            "Build a combined knowledge graph across multiple repository roots "
+            "(frontend + backend + SDK + CLI + docs). Returns per-repo modules "
+            "and cross-repo service-to-service edges."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repos": {"type": "array", "items": {"type": "string"}, "description": "Absolute paths to repo roots"},
+                "max_files": {"type": "integer", "description": "Cap traversal per repo (default 20000)"},
+            },
+            "required": ["repos"],
+        },
+    },
+    {
         "name": "codeloom_framework",
         "description": (
             "Detect the web/app framework (Next.js, FastAPI, Django, Laravel, "
@@ -847,6 +863,12 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
 
     if name == "codeloom_seen":
         text = codeloom.render_seen(root)
+
+    if name == "codeloom_cross_repo":
+        repos = args.get("repos", [])
+        if not repos:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'repos' argument"}]}
+        text = codeloom.render_cross_repo(repos, max_files)
 
     if name == "codeloom_map":
         m = codeloom.build_map(root, True, max_files)

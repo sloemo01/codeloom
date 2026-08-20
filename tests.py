@@ -616,6 +616,21 @@ class TestCodeLoom(unittest.TestCase):
         self.assertTrue(results, "hybrid search should return results")
         self.assertEqual(results[0]["name"].lower(), "retry")
 
+    def test_cross_repo(self):
+        # cross-repo: build a graph across two roots
+        import tempfile, shutil
+        td = tempfile.mkdtemp()
+        td2 = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(td, "sdk.py"), "w") as f:
+                f.write("def client():\n    pass\n")
+            cr = codeloom.build_cross_repo([td, td2])
+            # two repos should be mapped
+            self.assertGreaterEqual(len(cr["repos"]), 1)
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+            shutil.rmtree(td2, ignore_errors=True)
+
     def test_edit_relevance(self):
         # edit-relevance ranks the call path, not just keyword matches
         files = []

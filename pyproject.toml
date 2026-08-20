@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codeloom"
-version = "0.34.0"
+version = "0.35.0"
 description = "Give your AI coding agent a map of the repo in one second. Single-file, zero-dependency, no daemon, 100% local."
 readme = "README.md"
 requires-python = ">=3.8"
