@@ -486,7 +486,15 @@ process) and is incrementally refreshed via content hashes. This is the
 multi-million-line monorepo win: the same call/import edges a daemon keeps
 resident, stored on disk, so heavy ops load in milliseconds instead of
 re-parsing. Measured on microsoft/vscode (12k files): `--deadcode` drops from
-10.3s (serial) to **4.8s** by loading from the graph.
+10.3s (serial) to **4.8s** by loading from the graph; `--get-symbol` cold-starts
+at **~0.11s** (index load, no re-parse).
+
+**No cold-start on repeated queries.** The MCP server keeps the graph resident
+in memory for the session — so an agent working in a session gets repeated
+`--get-symbol`/`--deadcode` calls served from the resident graph (6+ queries in
+one session, no re-parse, no cold-start). That's the daemon's "hot in memory"
+benefit without a separate daemon process to run or crash. The cold-start cost
+is a one-time ~0.11s on first load; a daemon pays it at boot too.
 
 ## The three parts (CLI + MCP + skill)
 
