@@ -107,4 +107,5 @@ codeloom [OPTIONS] [ROOT]
 | `codeloom --check-edit X` / `--check-delete X` | Preflight refactoring safety verdicts |
 | `codeloom --install-agent claude` | Print MCP config for an agent (claude/cursor/codex/gemini/opencode) |
 | `codeloom --detect-agent` | Detect which coding agent's config dir is present |
+| `codeloom --build-core` | Build the optional C accelerator (cc -O3 codeloom_core.c) if absent |
 | `codeloom --precision X` | Graph precision: call edges with confidence + class relationships |

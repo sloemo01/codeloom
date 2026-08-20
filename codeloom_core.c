@@ -29,10 +29,10 @@
 #include <dirent.h>
 
 /* Max sizes (per-file — a single file won't have this many). */
-#define MAX_LINE 4096
-#define MAX_SYMS 4096
-#define MAX_IMPORTS 4096
-#define MAX_CALLS 4096
+#define MAX_LINE 16384
+#define MAX_SYMS 16384
+#define MAX_IMPORTS 16384
+#define MAX_CALLS 16384
 #define MAX_TARGETS 4096
 
 typedef struct {
@@ -194,6 +194,123 @@ static char *match_cdef(const char *line) {
     return NULL;
 }
 
+/* Rust: struct / enum / trait / impl / fn / const / static / type / mod.
+   Returns symbol name (heap) + kind via out_kind, or NULL. */
+static char *match_rust(const char *line, char *kind_out) {
+    const char *p = line;
+    while (*p == ' ' || *p == '\t' || *p == '#' || *p == '!') p++;
+    /* skip attribute lines like #[derive(...)] */
+    if (*p == '[') return NULL;
+    /* strip a leading 'pub ' / 'pub(crate) ' visibility */
+    if (strncmp(p, "pub ", 4) == 0) {
+        p += 4;
+        while (*p == ' ' || *p == '\t') p++;
+    } else if (strncmp(p, "pub(", 4) == 0) {
+        while (*p && *p != ')') p++;
+        if (*p == ')') p++;
+        while (*p == ' ' || *p == '\t') p++;
+    }
+    const char *kw[] = {"fn ", "struct ", "enum ", "trait ", "impl ", "const ",
+                        "static ", "mod ", "type ", "union "};
+    const char *kwkind[] = {"fn", "struct", "enum", "trait", "impl", "const",
+                            "static", "mod", "type", "union"};
+    for (int i = 0; i < 10; i++) {
+        size_t klen = strlen(kw[i]);
+        if (strncmp(p, kw[i], klen) == 0) {
+            /* impl blocks: 'impl Foo for Bar {' — capture the first type */
+            if (kw[i][0] == 'i') {
+                const char *t = p + klen;
+                while (*t == ' ' || *t == '\t') t++;
+                if (*t && *t != '{') {
+                    const char *start = t;
+                    while (isalnum((unsigned char)*t) || *t == '_') t++;
+                    size_t len = (size_t)(t - start);
+                    char *r = malloc(len + 1);
+                    memcpy(r, start, len); r[len] = '\0';
+                    snprintf(kind_out, 16, "impl");
+                    return r;
+                }
+                return NULL;
+            }
+            const char *n = p + klen;
+            while (*n == ' ' || *n == '\t') n++;
+            const char *start = n;
+            while (isalnum((unsigned char)*n) || *n == '_') n++;
+            if (n > start) {
+                size_t len = (size_t)(n - start);
+                char *r = malloc(len + 1);
+                memcpy(r, start, len); r[len] = '\0';
+                snprintf(kind_out, 16, "%s", kwkind[i]);
+                return r;
+            }
+            return NULL;
+        }
+    }
+    return NULL;
+}
+
+/* TypeScript / JavaScript: export function/const/class/interface/type/async. */
+static char *match_ts(const char *line, char *kind_out) {
+    const char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    const char *n = p;
+    if (strncmp(n, "export ", 7) == 0) n += 7;
+    while (*n == ' ' || *n == '\t') n++;
+    /* export default function name */
+    if (strncmp(n, "default ", 8) == 0) n += 8;
+    while (*n == ' ' || *n == '\t') n++;
+    if (strncmp(n, "async ", 6) == 0) n += 6;
+    while (*n == ' ' || *n == '\t') n++;
+    if (strncmp(n, "function ", 9) == 0) {
+        const char *s = n + 9;
+        while (*s == ' ' || *s == '\t') s++;
+        if (isalnum((unsigned char)*s) || *s == '_') {
+            const char *start = s;
+            while (isalnum((unsigned char)*s) || *s == '_') s++;
+            size_t len = (size_t)(s - start);
+            char *r = malloc(len + 1); memcpy(r, start, len); r[len] = '\0';
+            snprintf(kind_out, 16, "function"); return r;
+        }
+        return NULL;
+    }
+    if (strncmp(n, "class ", 6) == 0 || strncmp(n, "interface ", 10) == 0 ||
+        strncmp(n, "enum ", 5) == 0 || strncmp(n, "type ", 5) == 0 ||
+        strncmp(n, "abstract class ", 15) == 0) {
+        const char *s = n;
+        while (*s && *s != ' ' && *s != '\t') s++;
+        while (*s == ' ' || *s == '\t') s++;
+        if (isalnum((unsigned char)*s) || *s == '_') {
+            const char *start = s;
+            while (isalnum((unsigned char)*s) || *s == '_') s++;
+            size_t len = (size_t)(s - start);
+            char *r = malloc(len + 1); memcpy(r, start, len); r[len] = '\0';
+            snprintf(kind_out, 16, "class"); return r;
+        }
+        return NULL;
+    }
+    /* const/let/var name = arrow fn or function — only when it IS a function */
+    if (strncmp(n, "const ", 6) == 0 || strncmp(n, "let ", 4) == 0 ||
+        strncmp(n, "var ", 4) == 0) {
+        /* must be a function: `name = (...) =>` or `name = function` */
+        const char *arrow = strstr(line, "=>");
+        const char *fnk = strstr(line, "= function");
+        const char *fnk2 = strstr(line, "=async ");
+        if (!arrow && !fnk && !fnk2) return NULL;
+        const char *s = n;
+        while (*s && *s != ' ' && *s != '\t') s++;
+        while (*s == ' ' || *s == '\t') s++;
+        const char *start = s;
+        while (isalnum((unsigned char)*s) || *s == '_' || *s == '$') s++;
+        if (s > start) {
+            size_t len = (size_t)(s - start);
+            char *r = malloc(len + 1); memcpy(r, start, len); r[len] = '\0';
+            snprintf(kind_out, 16, "function"); return r;
+        }
+        return NULL;
+    }
+    return NULL;
+}
+
 /* Detect an import/include line and return the imported target (heap) or NULL.
    Handles: import x; import {a} from 'x'; require('x'); #include <x.h>; using x; */
 static char *match_import(const char *line) {
@@ -262,12 +379,40 @@ static char *match_import(const char *line) {
         }
         return NULL;
     }
+    /* Rust: use crate::x; use std::collections::HashMap; use x::y::z; */
+    if (strncmp(low, "use ", 4) == 0 && strstr(low, "::")) {
+        const char *q = p + 4;
+        while (*q == ' ' || *q == '\t') q++;
+        const char *start = q;
+        while (isalnum((unsigned char)*q) || *q == '_' || *q == ':' || *q == ':') q++;
+        if (q > start) {
+            size_t len = (size_t)(q - start);
+            char *r = malloc(len + 1);
+            memcpy(r, start, len); r[len] = '\0';
+            return r;
+        }
+        return NULL;
+    }
     return NULL;
 }
 
 static int is_c_ext(const char *ext) {
-    static const char *exts[] = {".py", ".js", ".ts", ".go", ".rs", ".c", ".h",
-                                 ".cpp", ".hpp", ".java", ".rb", ".php", ".cs"};
+    /* codebase-memory has 158; we cover the agent-workload priority set
+       plus the broad request. Each gets the same line-based extraction. */
+    static const char *exts[] = {
+        /* frontend */
+        ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".svelte", ".vue", ".astro",
+        ".liquid",
+        /* systems */
+        ".rs", ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".mm", ".swift",
+        /* mobile/UI */
+        ".kt", ".kts", ".dart",
+        /* backend / scripts */
+        ".py", ".go", ".java", ".cs", ".php", ".rb", ".lua", ".erl", ".ex",
+        ".exs", ".solidity", ".sol", ".r", ".cob", ".cbl", ".vb", ".nix",
+        /* config-as-code */
+        ".tf", ".hcl", ".ets", ".metal", ".liquid",
+    };
     for (size_t i = 0; i < sizeof(exts) / sizeof(exts[0]); i++) {
         if (strcmp(ext, exts[i]) == 0) return 1;
     }
@@ -305,15 +450,31 @@ static int scan_file(const char *path, const char *ext, FileResult *fr) {
     fr->n_calls = 0;
     char line[MAX_LINE];
     int is_py = (strcmp(ext, ".py") == 0);
+    int is_rust = (strcmp(ext, ".rs") == 0);
+    int is_ts = (strcmp(ext, ".ts") == 0 || strcmp(ext, ".tsx") == 0 ||
+                 strcmp(ext, ".js") == 0 || strcmp(ext, ".jsx") == 0 ||
+                 strcmp(ext, ".mjs") == 0 || strcmp(ext, ".cjs") == 0 ||
+                 strcmp(ext, ".svelte") == 0 || strcmp(ext, ".vue") == 0);
     char current_func[128] = "";
     while (fgets(line, sizeof(line), fp)) {
         char *t = trim(line);
         if (t[0] == '\0' || t[0] == '#' || t[0] == '/' || t[0] == '*' || t[0] == ';')
             continue;
-        char *name = is_py ? match_def(t) : match_cdef(t);
+        char *name = NULL;
+        if (is_py) {
+            name = match_def(t);
+        } else if (is_rust) {
+            char kind[16];
+            name = match_rust(t, kind);
+        } else if (is_ts) {
+            char kind[16];
+            name = match_ts(t, kind);
+        } else {
+            name = match_cdef(t);
+        }
         if (name && fr->n_syms < MAX_SYMS) {
             snprintf(fr->syms[fr->n_syms].name, sizeof(fr->syms[0].name), "%s", name);
-            strcpy(fr->syms[fr->n_syms].kind, is_py ? "function" : "function");
+            strcpy(fr->syms[fr->n_syms].kind, "function");
             fr->n_syms++;
             snprintf(current_func, sizeof(current_func), "%s", name);
             free(name);

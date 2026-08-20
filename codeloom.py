@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.41.0"
+VERSION = "0.42.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -640,6 +640,22 @@ LANG_RULES: dict = {
     ".ml":   ("(*", {"let ", "type ", "module "}),
     ".scala":("//", {"def ", "class ", "object ", "trait "}),
     ".r":    ("#",  {"<- function", "function(", "#'"}),
+    ".svelte":("//", {"function ", "const ", "export "}),
+    ".vue":  ("//", {"function ", "const ", "export "}),
+    ".astro":("//", {"function ", "const ", "export "}),
+    ".erl":  ("%",  {"->"}),
+    ".sol":  ("//", {"function ", "contract ", "interface ", "event ", "modifier "}),
+    ".tf":   ("#",  {"resource ", "variable ", "output ", "module ", "locals "}),
+    ".hcl":  ("#",  {"resource ", "variable ", "output ", "module ", "locals "}),
+    ".nix":  ("#",  {"="}),
+    ".pas":  ("//", {"function ", "procedure ", "type ", "class "}),
+    ".cob":  ("*",  {"SECTION.", "DIVISION."}),
+    ".cbl":  ("*",  {"SECTION.", "DIVISION."}),
+    ".vb":   ("'",  {"Function ", "Sub ", "Class ", "Module ", "Interface "}),
+    ".cc":   ("//", {"int ", "void ", "char ", "struct ", "class ", "static "}),
+    ".cxx":  ("//", {"int ", "void ", "char ", "struct ", "class ", "static "}),
+    ".cu":   ("//", {"int ", "void ", "__global__ ", "__device__ "}),
+    ".mm":   ("//", {"int ", "void ", "char ", "class ", "static "}),
 }
 
 # Entry-point files / dirs worth calling out explicitly.
@@ -4464,6 +4480,25 @@ CALL_LANG_RULES: dict = {
     ".sh":   (r"^\s*(\w+)\s*\(\)\s*\{", r"\b(\w+)\s*\("),
     ".lua":  (r"^\s*(?:local\s+)?function\s+(\w+)", r"\b(\w+)\s*\("),
     ".dart": (r"^\s*(?:void|int|String|bool|double|List|Map|dynamic|Future|Stream|final|var|const|)\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".svelte": (r"^\s*(?:export\s+)?function\s+(\w+)|^\s*(?:export\s+)?const\s+(\w+)\s*=\s*[\w(]*=>", r"\b(\w+)\s*\("),
+    ".vue": (r"^\s*(?:export\s+)?function\s+(\w+)|^\s*(?:export\s+)?const\s+(\w+)\s*=\s*[\w(]*=>", r"\b(\w+)\s*\("),
+    ".astro": (r"^\s*(?:export\s+)?function\s+(\w+)|^\s*(?:export\s+)?const\s+(\w+)\s*=\s*[\w(]*=>", r"\b(\w+)\s*\("),
+    ".scala": (r"^\s*(?:public|private|protected|def|val|var|object|class|case|)\s+def\s+(\w+)|^\s*def\s+(\w+)", r"\b(\w+)\s*\("),
+    ".erl": (r"^\s*(\w+)\s*\([^)]*\)\s*->", r"\b(\w+)\s*\("),
+    ".sol": (r"^\s*(?:public|private|internal|external|function)\s+function\s+(\w+)|^\s*function\s+(\w+)", r"\b(\w+)\s*\("),
+    ".nix": (r"^\s*(\w+)\s*=\s*(?:imports|functions\.[\w.]+)|^\s*(\w+)\s*=", r"\b(\w+)\s*\("),
+    ".tf": (r"^\s*(?:resource|data|variable|output|module|locals|provider)\s+[\"\w]+\s+[\"\w]+", r"\b(\w+)\s*\("),
+    ".hcl": (r"^\s*(?:resource|data|variable|output|module|locals|provider)\s+[\"\w]+\s+[\"\w]+", r"\b(\w+)\s*\("),
+    ".pas": (r"^\s*(?:function|procedure)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".r": (r"^\s*(\w+)\s*<-\s*function|^\s*function\s*\([^)]*\)\s*\{", r"\b(\w+)\s*\("),
+    ".luau": (r"^\s*(?:local\s+)?function\s+(\w+)", r"\b(\w+)\s*\("),
+    ".cfml": (r"^\s*<\s*cffunction\s+name\s*=\s*[\"'](\w+)", r"\b(\w+)\s*\("),
+    ".cob": (r"^\s*(\w+)\s+SECTION\.|^\s*IDENTIFICATION\s+", r"\b(\w+)\s*\("),
+    ".cbl": (r"^\s*(\w+)\s+SECTION\.|^\s*IDENTIFICATION\s+", r"\b(\w+)\s*\("),
+    ".vb": (r"^\s*(?:Public|Private|Protected|Friend|Shared)\s+Function\s+(\w+)", r"\b(\w+)\s*\("),
+    ".cc": (r"^\s*(?:static\s+)?[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".cxx": (r"^\s*(?:static\s+)?[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".cu": (r"^\s*(?:__global__|__device__|__host__)?\s*[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
 }
 
 # String/comment-aware scanner: strips strings and comments (preserving line
@@ -5045,6 +5080,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--install-agents", action="store_true", help="write/update AGENTS.md with a codeloom block")
     p.add_argument("--install-agent", metavar="AGENT", help="print MCP config for an agent (claude|cursor|codex|gemini|opencode)")
     p.add_argument("--detect-agent", action="store_true", help="detect which coding agent's config dir is present")
+    p.add_argument("--build-core", action="store_true", help="build the optional C accelerator (codeloom_core.c -> codeloom_core) if not present")
     p.add_argument("--cost", action="store_true", help="append token-cost estimate to output")
     p.add_argument("--session", action="store_true", help="log this invocation to the local session log (JSONL)")
     p.add_argument("--session-report", action="store_true", help="summarize the local session log (calls, tokens, cost)")
@@ -5353,6 +5389,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         a = detect_agent()
         print(a if a else "no agent config dir detected")
         return 0
+
+    if args.build_core:
+        core_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "codeloom_core.c")
+        if not os.path.isfile(core_src):
+            print(f"C core source not found at {core_src}")
+            return 1
+        if _find_core():
+            print("C accelerator already built — nothing to do.")
+            return 0
+        print("building codeloom_core (cc -O3 codeloom_core.c)…")
+        import subprocess as _sp
+        out = os.path.join(os.path.dirname(core_src), "codeloom_core")
+        r = _sp.run(["cc", "-O3", "-o", out, core_src], capture_output=True, text=True)
+        if r.returncode == 0:
+            print(f"built {out} — now use --index --engine c")
+            return 0
+        print(f"build failed (is cc/clang installed?): {r.stderr[:300]}")
+        return 1
 
     # --diff: git-aware, structure of changed files
     if args.diff:

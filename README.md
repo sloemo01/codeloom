@@ -642,10 +642,12 @@ ceiling rises when you opt in:
   matching, so it doesn't false-positive on `helper()` inside a string or
   comment. *Removed by:* `codeloom --install-grammars --yes` (or `pip install
   tree-sitter tree-sitter-python ...`). codeloom then uses real AST parsing for
-  **25 languages** (Python, JS/TS, Go, Rust, Java, C/C++, C#, Ruby, PHP, Swift,
-  Kotlin, Dart, Lua, bash, Elixir, OCaml, Scala, Haskell, Zig, Perl, F#, PowerShell)
-  instead of regex. Verified: `export function helper` (missed by regex) is
-  caught by tree-sitter. Set `CODELOOM_AUTO_INSTALL_GRAMMARS=1` and codeloom
+  the **tree-sitter language set**, plus a **40+ language regex/C extraction** —
+  TypeScript/JavaScript (incl. `.tsx/.jsx/.mjs`), Rust (struct/enum/trait/impl),
+  Svelte, Vue, Astro, Scala, Erlang, Solidity, Terraform/HCL, Nix, COBOL,
+  VB.NET, Pascal, ArkTS, Metal, Lua/Luau, R, and more — with the same
+  structural extraction + cross-file resolution into one graph, no per-language
+  setup. Set `CODELOOM_AUTO_INSTALL_GRAMMARS=1` and codeloom
   **auto-installs just the grammar for the language it encounters** on first
   use — no manual trigger needed, one grammar at a time.
 - **Static analysis misses runtime wiring.** *Removed by:* `codeloom --trace CMD
