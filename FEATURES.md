@@ -70,13 +70,16 @@ Nobody does this well. Use git history as first-class data:
 
 ## Graph & Search
 
-### 6. Architecture Detection ⬜
+### 6. Architecture Detection ✅
 Auto-detect MVC / Clean Architecture / DDD / Hexagonal / Microservices /
 Feature-first / Layered / Monolith, then expose it to the agent.
+(`--architecture` ✅: detects pattern + scope from repo layout + top-level
+structure.)
 
-### 7. Dependency Heatmap ⬜
+### 7. Dependency Heatmap ✅
 Find: god classes, circular imports, dead packages, unused modules, high
-coupling, hidden dependencies.
+coupling, hidden dependencies. (`--heatmap` ✅: god/hub classes + circular
+imports + unused modules.)
 
 ### 8. Semantic + Graph Search ✅
 Combine BM25 + embeddings + AST + graph traversal + git history, scored
@@ -98,9 +101,10 @@ callers, risk. Only send source if needed. (This is the adaptive `--get-symbol`
 
 ## Intelligence & DX
 
-### 11. Auto Documentation ⬜
+### 11. Auto Documentation ✅
 Generate README, architecture docs, API docs, DB docs, sequence diagrams,
-dependency diagrams — continuously.
+dependency diagrams — continuously. (`--docs readme|arch` ✅ generates README
+or ARCHITECTURE docs from structure; API/DB/diagrams ⬜.)
 
 ### 12. Refactor Engine 🚧
 Ask "refactor auth" → returns files, dependencies, tests affected, risk, order.
@@ -144,10 +148,10 @@ zero-dep identity — a deliberate decision, not automatic.
 Web UI: functions, imports, packages, calls, dependencies, architecture —
 zoomable. (codegraff's strength; ours would be built-in and local.)
 
-### 20. Explain Mode 🚧
+### 20. Explain Mode ✅
 Ask "explain authentication" → flow diagram + relevant files + call chain +
-DB + middleware + routes, automatically. (`--explain` ✅ per-symbol; full
-end-to-end flow ⬜.)
+DB + middleware + routes, automatically. (`--explain-topic X` ✅ returns
+relevant files + call flow for a domain; `--explain` ✅ per-symbol.)
 
 ---
 
