@@ -1948,19 +1948,43 @@ def render_read(files: List[str], root: str, symbol: str) -> str:
 # exact byte ranges + token estimates so agents request only what they need.
 # --------------------------------------------------------------------------- #
 
-def build_byte_index(files, root):
+def _index_file_worker(args):
+    """Module-level worker: extract symbols from ONE file into its own index.
+    Returns (file_index_dict) — merges later. Enables parallel index build."""
+    f, root = args
+    ext = os.path.splitext(f)[1].lower()
+    mod = module_name_of(f, root)
+    index = {}
+    if ext == ".py":
+        _index_python_bytes(f, mod, index)
+    elif ext in CALL_LANG_RULES:
+        _index_other_bytes(f, mod, ext, index)
+    return index
+
+def build_byte_index(files, root, parallel: bool = False):
     """Build a symbol index with precise byte offsets + token estimates.
     Returns {symbol: [{module, kind, line, start_byte, end_byte, tokens,
     source}]}. Python uses ast (precise byte offsets); other languages use
-    tree-sitter or brace-matching."""
+    tree-sitter or brace-matching. With parallel=True, dispatches the per-file
+    extraction across processes (stdlib multiprocessing) — the scaling win for
+    massive monorepos where single-threaded extraction grinds."""
+    if not parallel or len(files) < 100:
+        index = {}
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            mod = module_name_of(f, root)
+            if ext == ".py":
+                _index_python_bytes(f, mod, index)
+            elif ext in CALL_LANG_RULES:
+                _index_other_bytes(f, mod, ext, index)
+        return index
+    import multiprocessing as mp
+    with mp.Pool() as pool:
+        results = pool.map(_index_file_worker, [(f, root) for f in files])
     index = {}
-    for f in files:
-        ext = os.path.splitext(f)[1].lower()
-        mod = module_name_of(f, root)
-        if ext == ".py":
-            _index_python_bytes(f, mod, index)
-        elif ext in CALL_LANG_RULES:
-            _index_other_bytes(f, mod, ext, index)
+    for per_file in results:
+        for name, locs in per_file.items():
+            index.setdefault(name, []).extend(locs)
     return index
 
 def _index_python_bytes(path, mod, index):
@@ -2495,9 +2519,9 @@ def _index_path(root: str) -> str:
 def _index_bin_path(root: str) -> str:
     return os.path.join(root, ".codeloom-index.bin")
 
-def build_persistent_index(files: List[str], root: str) -> dict:
+def build_persistent_index(files: List[str], root: str, parallel: bool = False) -> dict:
     """Build a full byte-offset symbol index (all languages)."""
-    return build_byte_index(files, root)
+    return build_byte_index(files, root, parallel=parallel)
 
 def build_knowledge_graph(files: List[str], root: str) -> dict:
     """Build the knowledge-graph edges (call + import) for the persistent index.
@@ -2597,9 +2621,9 @@ def ensure_fresh_index(root: str, max_files: int) -> Optional[dict]:
     save_persistent_index(root, index, files)
     return load_persistent_index(root)
 
-def render_index(files: List[str], root: str, max_files: int) -> str:
+def render_index(files: List[str], root: str, max_files: int, parallel: bool = False) -> str:
     """Build and save the persistent index + knowledge graph. Returns a summary."""
-    index = build_persistent_index(files, root)
+    index = build_persistent_index(files, root, parallel=parallel)
     kg = build_knowledge_graph(files, root)
     save_persistent_index(root, index, files, kg=kg)
     n_syms = sum(len(v) for v in index.values())
@@ -3558,7 +3582,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--write", metavar="FILE", help="write map to FILE too")
     p.add_argument("--json", action="store_true", help="emit JSON")
     p.add_argument("--no-outline", action="store_true", help="skip per-file outlines (faster)")
-    p.add_argument("--max-files", type=int, default=5000, help="cap traversal (default 5000)")
+    p.add_argument("--max-files", type=int, default=20000, help="cap traversal (default 20000; raise for 10M+ LOC monorepos)")
     p.add_argument("--parallel", action="store_true", help="parallelize file parsing for heavy ops (--cross/--deadcode/--calls) on large repos")
     p.add_argument("--graph", action="store_true", help="show Python import dependency graph")
     p.add_argument("--focus", metavar="MODULE", help="show deps/dependents of one module (with --graph)")
@@ -3630,7 +3654,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
-        print(render_index(files, root, args.max_files))
+        print(render_index(files, root, args.max_files, parallel=args.parallel))
         return 0
 
     # --get-symbol / --search: fast-path from the persistent index (no walk)
