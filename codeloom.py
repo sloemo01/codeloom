@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.43.0"
+VERSION = "0.44.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -1636,6 +1636,23 @@ def render_lsp(root: str) -> str:
     buf.write("  enrichment when a server is already installed — never required.\n")
     buf.write("  `lsp_definition()` starts the server and resolves a symbol's\n")
     buf.write("  real definition across files when present.\n")
+    return buf.getvalue()
+
+
+def render_langs() -> str:
+    """Honest list of supported languages/extensions: the broad regex/C set
+    (every language gets the same structural extraction) + the tree-sitter
+    precision set (opt-in grammars)."""
+    buf = io.StringIO()
+    buf.write("# codeloom language support\n\n")
+    buf.write("## Broad regex/C extraction (structural symbols + imports, no setup)\n")
+    buf.write(f"  {len(CALL_LANG_RULES)} extensions across the agent-workload + long-tail set:\n")
+    exts = sorted(CALL_LANG_RULES.keys())
+    buf.write("  " + ", ".join(exts) + "\n\n")
+    buf.write("## Tree-sitter precision (opt-in, --install-grammars --yes)\n")
+    buf.write("  Real AST parsing for Python, JS/TS, Go, Rust, Java, C/C++, Ruby,\n")
+    buf.write("  PHP, Swift, Kotlin, Dart, Lua, Elixir, Scala, Haskell, Zig, etc.\n")
+    buf.write("  when the grammar is installed; regex/C extraction otherwise.\n")
     return buf.getvalue()
 
 
@@ -4660,6 +4677,100 @@ CALL_LANG_RULES: dict = {
     ".cc": (r"^\s*(?:static\s+)?[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
     ".cxx": (r"^\s*(?:static\s+)?[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
     ".cu": (r"^\s*(?:__global__|__device__|__host__)?\s*[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    # ---- broad breadth: same generic structural extraction, no per-language setup ----
+    ".jsm": (r"^\s*(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\()", r"\b(\w+)\s*\("),
+    ".es6": (r"^\s*(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\()", r"\b(\w+)\s*\("),
+    ".es":  (r"^\s*(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\()", r"\b(\w+)\s*\("),
+    ".qwik":(r"^\s*(?:export\s+)?function\s+(\w+)|^\s*(?:export\s+)?const\s+(\w+)\s*=\s*[\w(]*=>", r"\b(\w+)\s*\("),
+    ".twig":(r"^\s*{%\s*(?:macro|function)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".ejs": (r"^\s*<%[=-]?\s*(?:function\s+(\w+)|const\s+(\w+))", r"\b(\w+)\s*\("),
+    ".hbs": (r"^\s*{{\s*!(?:function\s+(\w+))", r"\b(\w+)\s*\("),
+    ".pug": (r"^\s*mixin\s+(\w+)", r"\b(\w+)\s*\("),
+    ".pl":  (r"^\s*sub\s+(\w+)", r"\b(\w+)\s*\("),
+    ".pm":  (r"^\s*sub\s+(\w+)", r"\b(\w+)\s*\("),
+    ".pyw": (r"^\s*(?:async\s+)?def\s+(\w+)", r"\b(\w+)\s*\("),
+    ".pyi": (r"^\s*(?:async\s+)?def\s+(\w+)", r"\b(\w+)\s*\("),
+    ".rbw": (r"^\s*def\s+(\w+)", r"\b(\w+)\s*\("),
+    ".rake":(r"^\s*task\s+[\"']?(\w+)", r"\b(\w+)\s*\("),
+    ".gemspec": (r"^\s*(\w+)\s*=\s*[\"'][^\"']+[\"']", r"\b(\w+)\s*\("),
+    ".hrl": (r"^\s*(\w+)\s*\([^)]*\)\s*->", r"\b(\w+)\s*\("),
+    ".eex": (r"^\s*<%s?\s*(?:def\s+(\w+)|defp\s+(\w+))", r"\b(\w+)\s*\("),
+    ".leex":(r"^\s*<%s?\s*(?:def\s+(\w+)|defp\s+(\w+))", r"\b(\w+)\s*\("),
+    ".heex":(r"^\s*<%\s*(?:def\s+(\w+)|defp\s+(\w+))", r"\b(\w+)\s*\("),
+    ".c++": (r"^\s*(?:static\s+)?[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".hh":  (r"^\s*(?:static\s+)?[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".hxx": (r"^\s*(?:static\s+)?[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".ino": (r"^\s*(?:void|int|float|bool|String|char)\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".rlib":(r"^\s*(?:pub\s+)?fn\s+(\w+)", r"\b(\w+)\s*\("),
+    ".goc": (r"^\s*func\s+(?:\s*\([^)]*\)\s*)?(\w+)", r"\b(\w+)\s*\("),
+    ".m":   (r"^\s*[-+]?\s*\([\w\*\s,]+\)\s*(\w+)\s*(?::|;|\{)|^\s*def\s+(\w+)", r"\b(\w+)\s*\("),
+    ".mm":  (r"^\s*[-+]\s*\([\w\s\*,]+\)\s*(\w+)\s*(?::|;|\{)", r"\b(\w+)\s*\("),
+    ".cuh": (r"^\s*(?:__global__|__device__)?\s*[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".s":   (r"^\s*(\w+)\s*:", r"\b(\w+)\s*\("),
+    ".asm": (r"^\s*(\w+)\s*:\s*$", r"\b(\w+)\s*\("),
+    ".d":   (r"^\s*(?:void|int|auto|string|bool|double)\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".ada": (r"^\s*(?:procedure|function)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".adb": (r"^\s*(?:procedure|function)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".ads": (r"^\s*(?:procedure|function)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".f":   (r"^\s*(?:subroutine|function)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".f90": (r"^\s*(?:subroutine|function)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".f95": (r"^\s*(?:subroutine|function)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".f03": (r"^\s*(?:subroutine|function)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".f08": (r"^\s*(?:subroutine|function)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".v":   (r"^\s*(?:module|function|task)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".sv":  (r"^\s*(?:module|function|task)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".vh":  (r"^\s*(?:entity|architecture)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".vhd": (r"^\s*(?:entity|architecture)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".sc":  (r"^\s*def\s+(\w+)", r"\b(\w+)\s*\("),
+    ".groovy": (r"^\s*(?:def|void|int|String)\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".gradle": (r"^\s*(?:def|void)\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".clj": (r"^\s*\(defn\s+(\w+)", r"\b(\w+)\s*\("),
+    ".cljs":(r"^\s*\(defn\s+(\w+)", r"\b(\w+)\s*\("),
+    ".cljc":(r"^\s*\(defn\s+(\w+)", r"\b(\w+)\s*\("),
+    ".edn": (r"^\s*(\w+)\s+:", r"\b(\w+)\s*\("),
+    ".fs":  (r"^\s*let\s+(\w+)\s*=\s*", r"\b(\w+)\s*\("),
+    ".fsx": (r"^\s*let\s+(\w+)\s*=\s*", r"\b(\w+)\s*\("),
+    ".fsi": (r"^\s*val\s+(\w+)", r"\b(\w+)\s*\("),
+    ".fsharp": (r"^\s*let\s+(\w+)\s*=\s*", r"\b(\w+)\s*\("),
+    ".razor": (r"^\s*@(?:functions|code)\s*\{", r"\b(\w+)\s*\("),
+    ".plsql": (r"^\s*(?:CREATE|create)\s+OR\s+REPLACE\s+(?:PROCEDURE|FUNCTION|PACKAGE)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".pgsql": (r"^\s*(?:CREATE|create)\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".psql": (r"^\s*(?:CREATE|create)\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".gql":  (r"^\s*(?:type|schema|mutation|query)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".graphql": (r"^\s*(?:type|schema|mutation|query)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".proto":(r"^\s*(?:message|service|enum)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".tfvars": (r"^\s*(\w+)\s*=\s*", r"\b(\w+)\s*\("),
+    ".bzl":  (r"^\s*def\s+(\w+)", r"\b(\w+)\s*\("),
+    ".mk":   (r"^\s*(\w+)\s*:\s*$", r"\b(\w+)\s*\("),
+    ".cmake":(r"^\s*function\s*\(\s*(\w+)", r"\b(\w+)\s*\("),
+    ".dockerfile": (r"^\s*(?:FROM|CMD|ENTRYPOINT|RUN)\s+(\S+)", r"\b(\w+)\s*\("),
+    ".bash": (r"^\s*(\w+)\s*\(\s*\)\s*\{", r"\b(\w+)\s*\("),
+    ".zsh":  (r"^\s*(\w+)\s*\(\s*\)\s*\{", r"\b(\w+)\s*\("),
+    ".ksh":  (r"^\s*(\w+)\s*\(\s*\)\s*\{", r"\b(\w+)\s*\("),
+    ".fish": (r"^\s*function\s+(\w+)", r"\b(\w+)\s*\("),
+    ".ps1":  (r"^\s*function\s+(\w+)", r"\b(\w+)\s*\("),
+    ".bat":  (r"^\s*:(label)", r"\b(\w+)\s*\("),
+    ".cmd":  (r"^\s*:(label)", r"\b(\w+)\s*\("),
+    ".awk":  (r"^\s*function\s+(\w+)", r"\b(\w+)\s*\("),
+    ".sed":  (r"^\s*(\w+)\s*:", r"\b(\w+)\s*\("),
+    ".rmd":  (r"^\s*```\s*\{r\s*(\w*)", r"\b(\w+)\s*\("),
+    ".jl":   (r"^\s*function\s+(\w+)", r"\b(\w+)\s*\("),
+    ".octave": (r"^\s*function\s+(\w+)", r"\b(\w+)\s*\("),
+    ".scilab": (r"^\s*function\s+(\w+)", r"\b(\w+)\s*\("),
+    ".pco":  (r"^\s*(?:PROCEDURE|FUNCTION)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".cobol":(r"^\s*(\w+)\s+SECTION\.|^\s*IDENTIFICATION\s+", r"\b(\w+)\s*\("),
+    ".for":  (r"^\s*(?:subroutine|function)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".pp":   (r"^\s*(?:function|procedure)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".dpr":  (r"^\s*(?:function|procedure)\s+(\w+)", r"\b(\w+)\s*\("),
+    ".nw":   (r"^\s*(\w+)\s*=", r"\b(\w+)\s*\("),
+    ".e":    (r"^\s*(\w+)\s*:", r"\b(\w+)\s*\("),
+    ".eq":   (r"^\s*(\w+)\s*=", r"\b(\w+)\s*\("),
+    ".coffee": (r"^\s*(\w+)\s*=\s*\(?\s*\)?\s*->", r"\b(\w+)\s*\("),
+    ".litcoffee": (r"^\s*(\w+)\s*=\s*\(?\s*\)?\s*->", r"\b(\w+)\s*\("),
+    ".co":   (r"^\s*(\w+)\s*=", r"\b(\w+)\s*\("),
+    ".tcl":  (r"^\s*proc\s+(\w+)", r"\b(\w+)\s*\("),
+    ".jq":   (r"^\s*def\s+(\w+)", r"\b(\w+)\s*\("),
+    ".pas":  (r"^\s*(?:function|procedure)\s+(\w+)", r"\b(\w+)\s*\("),
 }
 
 # String/comment-aware scanner: strips strings and comments (preserving line
@@ -5293,6 +5404,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--dedup", action="store_true", help="session dedupe: skip already-read files, show the new delta")
     p.add_argument("--plugin-sdk", action="store_true", help="show the plugin SDK surface for framework-aware extraction")
     p.add_argument("--lsp", action="store_true", help="show LSP bridge status (optional semantic enrichment)")
+    p.add_argument("--langs", action="store_true", help="list supported languages/extensions (broad regex + tree-sitter set)")
     p.add_argument("--lsp-symbol", metavar="SYMBOL", help="resolve a symbol's real definition via an installed LSP server (optional)")
     p.add_argument("--graph-html", action="store_true", help="write a local zoomable HTML graph view (codeloom-graph.html)")
     p.add_argument("--find", metavar="QUERY", help="natural-language flow discovery: 'find where login starts'")
@@ -5387,6 +5499,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.lsp:
         print(render_lsp(root))
+        return 0
+
+    if args.langs:
+        print(render_langs())
         return 0
 
     if args.lsp_symbol:

@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.43.0"
+SERVER_VERSION = "0.44.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -718,6 +718,17 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "codeloom_langs",
+        "description": (
+            "List supported languages/extensions: the broad 130+ regex/C "
+            "structural-extraction set plus the opt-in tree-sitter precision set."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
         "name": "codeloom_lsp",
         "description": (
             "LSP bridge status: detect installed language servers (pyright, "
@@ -1088,6 +1099,8 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         text = codeloom.render_plugin_sdk(root)
     elif name == "codeloom_lsp":
         text = codeloom.render_lsp(root)
+    elif name == "codeloom_langs":
+        text = codeloom.render_langs()
     elif name == "codeloom_lsp_symbol":
         symbol = args.get("symbol")
         if not symbol:

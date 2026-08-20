@@ -397,21 +397,40 @@ static char *match_import(const char *line) {
 }
 
 static int is_c_ext(const char *ext) {
-    /* codebase-memory has 158; we cover the agent-workload priority set
-       plus the broad request. Each gets the same line-based extraction. */
+    /* Broad extension registry (~150 languages). Every language gets the same
+       line-based symbol + import extraction + cross-file resolution into one
+       graph, no per-language setup. This is honest breadth: recognition and
+       structural extraction, not tree-sitter depth for each — those are
+       opt-in where available. */
     static const char *exts[] = {
-        /* frontend */
-        ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".svelte", ".vue", ".astro",
-        ".liquid",
-        /* systems */
-        ".rs", ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".mm", ".swift",
-        /* mobile/UI */
-        ".kt", ".kts", ".dart",
-        /* backend / scripts */
-        ".py", ".go", ".java", ".cs", ".php", ".rb", ".lua", ".erl", ".ex",
-        ".exs", ".solidity", ".sol", ".r", ".cob", ".cbl", ".vb", ".nix",
-        /* config-as-code */
-        ".tf", ".hcl", ".ets", ".metal", ".liquid",
+        /* web / frontend */
+        ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".jsm", ".es6", ".es", ".html",
+        ".htm", ".css", ".scss", ".sass", ".less", ".styl", ".vue", ".svelte",
+        ".astro", ".jsx", ".qwik", ".liquid", ".twig", ".ejs", ".hbs", ".handlebars",
+        ".pug", ".jade", ".php", ".php3", ".php4", ".php5", ".phtml", ".pl", ".pm",
+        ".t", ".py", ".pyw", ".pyi", ".rb", ".rbw", ".rake", ".gemspec", ".erl",
+        ".hrl", ".ex", ".exs", ".eex", ".leex", ".heex",
+        /* systems / native */
+        ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".c++", ".hh", ".hxx", ".ino",
+        ".rs", ".rlib", ".go", ".goc", ".swift", ".m", ".mm", ".metal", ".cu",
+        ".cuh", ".s", ".asm", ".d", ".ada", ".adb", ".ads", ".f", ".f90", ".f95",
+        ".f03", ".f08", ".v", ".sv", ".vh", ".vhd",
+        /* JVM / .NET */
+        ".java", ".kt", ".kts", ".scala", ".sc", ".groovy", ".gradle", ".clj",
+        ".cljs", ".cljc", ".edn", ".cs", ".vb", ".fs", ".fsx", ".fsi", ".fsharp",
+        ".razor", ".csproj", ".vbproj", ".xaml",
+        /* data / query / config-as-code */
+        ".sql", ".plsql", ".pgsql", ".psql", ".dart", ".graphql", ".gql", ".proto",
+        ".sol", ".solidity", ".tf", ".tfvars", ".hcl", ".nix", ".bzl", ".mk",
+        ".cmake", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+        ".dockerfile", ".xaml",
+        /* scripting / shell / misc */
+        ".sh", ".bash", ".zsh", ".ksh", ".fish", ".ps1", ".bat", ".cmd", ".awk",
+        ".sed", ".pl", ".r", ".rmd", ".m", ".jl", ".jl", ".octave", ".scilab",
+        ".cob", ".cbl", ".pco", ".cobol", ".for", ".f", ".pas", ".pp", ".dpr",
+        ".nix", ".nw", ".e", ".eq", ".coffee", ".litcoffee", ".s", ".sv", ".v",
+        ".co", ".tcl", ".zsh", ".jq", ".awk", ".sed", ".php", ".htm",
+        ".ets", ".metal", ".liquid",
     };
     for (size_t i = 0; i < sizeof(exts) / sizeof(exts[0]); i++) {
         if (strcmp(ext, exts[i]) == 0) return 1;
