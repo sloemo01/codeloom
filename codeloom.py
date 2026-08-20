@@ -3396,11 +3396,14 @@ def _c_scan(files: List[str]) -> List[dict]:
                 continue
     return results
 
-def _c_symbol_index(files: List[str], root: str) -> dict:
+def _c_symbol_index(files: List[str], root: str, scan: Optional[List[dict]] = None) -> dict:
     """Build a symbol index (name -> locs) using the C core's fast scan.
-    Faster than Python parsing; used by --engine c. Snippet is the def line."""
+    Faster than Python parsing; used by --engine c. Snippet is the def line.
+    `scan` is an optional pre-computed _c_scan() result (avoids re-scanning)."""
     idx: dict = {}
-    for fr in _c_scan(files):
+    if scan is None:
+        scan = _c_scan(files)
+    for fr in scan:
         path = fr.get("file", "")
         if not path:
             continue
@@ -3414,6 +3417,46 @@ def _c_symbol_index(files: List[str], root: str) -> dict:
                 "sig": name, "tokens": 3,
             })
     return idx
+
+def _c_kg(files: List[str], root: str, all_defined: set, scan: Optional[List[dict]] = None) -> dict:
+    """Build the knowledge graph (calls + imports) using the C core, filtering
+    callees to repo-defined symbols (like the Python fused worker). Much faster
+    than tree-sitter for the call-edge pass on massive repos.
+    `scan` is an optional pre-computed _c_scan() result (avoids re-scanning)."""
+    calls: dict = {}
+    graph: dict = {}
+    module_map = {module_name_of(f, root): f for f in files}
+    if scan is None:
+        scan = _c_scan(files)
+    for fr in scan:
+        path = fr.get("file", "")
+        if not path:
+            continue
+        mod = module_name_of(path, root)
+        # call edges: keep only targets defined in the repo
+        c_edges = {}
+        for c in fr.get("calls", []):
+            caller = c.get("caller", "")
+            if not caller:
+                continue
+            targets = [t for t in c.get("targets", [])
+                       if t in all_defined and t != caller]
+            if targets:
+                c_edges[caller] = set(targets)
+        if c_edges:
+            calls[mod] = c_edges
+        # imports: resolve to local modules
+        deps = set()
+        for imp in fr.get("imports", []):
+            resolved = _resolve_import(imp, mod, root, module_map)
+            if resolved and resolved != mod:
+                deps.add(resolved)
+        if deps:
+            graph[mod] = deps
+    return {
+        "calls": {m: {c: sorted(s) for c, s in funcs.items()} for m, funcs in calls.items()},
+        "imports": {m: sorted(d) for m, d in graph.items()},
+    }
 
 def save_persistent_index(root: str, index: dict, files: List[str], kg: Optional[dict] = None) -> None:
     """Save the persistent index with per-file (mtime, size) for incremental
@@ -3603,10 +3646,13 @@ def render_index(files: List[str], root: str, max_files: int, parallel: bool = F
     engine='c' uses the optional compiled C core for the symbol scan (much
     faster on 100k-file repos). Pure-Python ('py') is the default."""
     if engine == "c" and _find_core():
-        index = _c_symbol_index(files, root)
+        scan = _c_scan(files)  # scan each file ONCE, reuse for symbols + kg
+        index = _c_symbol_index(files, root, scan=scan)
+        all_defined = set(index.keys())
+        kg = _c_kg(files, root, all_defined, scan=scan)
     else:
         index = build_persistent_index(files, root, parallel=parallel)
-    kg = build_knowledge_graph(files, root, parallel=parallel)
+        kg = build_knowledge_graph(files, root, parallel=parallel)
     save_persistent_index(root, index, files, kg=kg)
     n_syms = sum(len(v) for v in index.values())
     n_edges = sum(len(v) for v in kg["calls"].values()) + sum(len(v) for v in kg["imports"].values())

@@ -31,6 +31,8 @@
 #define MAX_LINE 4096
 #define MAX_SYMS 4096
 #define MAX_IMPORTS 4096
+#define MAX_CALLS 4096
+#define MAX_TARGETS 4096
 
 typedef struct {
     char name[128];
@@ -38,11 +40,19 @@ typedef struct {
 } Sym;
 
 typedef struct {
+    char caller[128];
+    char *targets[MAX_TARGETS];
+    int n;
+} CallRec;
+
+typedef struct {
     char file[4096];
     Sym syms[MAX_SYMS];
     int n_syms;
     char *imports[MAX_IMPORTS];
     int n_imports;
+    CallRec calls[MAX_CALLS];
+    int n_calls;
 } FileResult;
 
 /* Trim surrounding whitespace in place. */
@@ -263,6 +273,27 @@ static int is_c_ext(const char *ext) {
     return 0;
 }
 
+/* Record a call target under the current caller (dedupe). */
+static void add_call(FileResult *fr, const char *caller, const char *callee) {
+    if (fr->n_calls >= MAX_CALLS) return;
+    int cidx = -1;
+    for (int i = 0; i < fr->n_calls; i++) {
+        if (strcmp(fr->calls[i].caller, caller) == 0) { cidx = i; break; }
+    }
+    if (cidx == -1) {
+        cidx = fr->n_calls;
+        snprintf(fr->calls[cidx].caller, sizeof(fr->calls[0].caller), "%s", caller);
+        fr->calls[cidx].n = 0;
+        fr->n_calls++;
+    }
+    if (fr->calls[cidx].n >= MAX_TARGETS) return;
+    for (int i = 0; i < fr->calls[cidx].n; i++) {
+        if (strcmp(fr->calls[cidx].targets[i], callee) == 0) return;
+    }
+    char *copy = strdup(callee);
+    if (copy) fr->calls[cidx].targets[fr->calls[cidx].n++] = copy;
+}
+
 /* Scan one file. Returns 1 if OK, 0 on error. */
 static int scan_file(const char *path, const char *ext, FileResult *fr) {
     FILE *fp = fopen(path, "rb");
@@ -270,8 +301,10 @@ static int scan_file(const char *path, const char *ext, FileResult *fr) {
     snprintf(fr->file, sizeof(fr->file), "%s", path);
     fr->n_syms = 0;
     fr->n_imports = 0;
+    fr->n_calls = 0;
     char line[MAX_LINE];
     int is_py = (strcmp(ext, ".py") == 0);
+    char current_func[128] = "";
     while (fgets(line, sizeof(line), fp)) {
         char *t = trim(line);
         if (t[0] == '\0' || t[0] == '#' || t[0] == '/' || t[0] == '*' || t[0] == ';')
@@ -281,11 +314,11 @@ static int scan_file(const char *path, const char *ext, FileResult *fr) {
             snprintf(fr->syms[fr->n_syms].name, sizeof(fr->syms[0].name), "%s", name);
             strcpy(fr->syms[fr->n_syms].kind, is_py ? "function" : "function");
             fr->n_syms++;
+            snprintf(current_func, sizeof(current_func), "%s", name);
             free(name);
         }
         char *imp = match_import(t);
         if (imp && fr->n_imports < MAX_IMPORTS) {
-            /* dedupe */
             int dup = 0;
             for (int i = 0; i < fr->n_imports; i++) {
                 if (strcmp(fr->imports[i], imp) == 0) { dup = 1; break; }
@@ -298,6 +331,33 @@ static int scan_file(const char *path, const char *ext, FileResult *fr) {
             }
         } else if (imp) {
             free(imp);
+        }
+        /* record calls: "word(" within the current function */
+        if (current_func[0] != '\0') {
+            const char *p = t;
+            while (*p) {
+                if (isalpha((unsigned char)*p) || *p == '_') {
+                    const char *start = p;
+                    while (isalnum((unsigned char)*p) || *p == '_') p++;
+                    /* skip whitespace to '(' */
+                    const char *q = p;
+                    while (*q == ' ' || *q == '\t') q++;
+                    if (*q == '(' && (size_t)(p - start) < 128) {
+                        char callee[128];
+                        memcpy(callee, start, (size_t)(p - start));
+                        callee[p - start] = '\0';
+                        if (strcmp(callee, current_func) != 0 &&
+                            strcmp(callee, "if") != 0 && strcmp(callee, "for") != 0 &&
+                            strcmp(callee, "while") != 0 && strcmp(callee, "switch") != 0 &&
+                            strcmp(callee, "return") != 0 && strcmp(callee, "sizeof") != 0) {
+                            add_call(fr, current_func, callee);
+                        }
+                    }
+                    p = q;
+                } else {
+                    p++;
+                }
+            }
         }
     }
     fclose(fp);
@@ -316,6 +376,16 @@ static void print_json(const FileResult *fr) {
         if (i) printf(",");
         printf("\"%s\"", fr->imports[i]);
     }
+    printf("],\"calls\":[");
+    for (int i = 0; i < fr->n_calls; i++) {
+        if (i) printf(",");
+        printf("{\"caller\":\"%s\",\"targets\":[", fr->calls[i].caller);
+        for (int j = 0; j < fr->calls[i].n; j++) {
+            if (j) printf(",");
+            printf("\"%s\"", fr->calls[i].targets[j]);
+        }
+        printf("]}");
+    }
     printf("]}\n");
 }
 
@@ -328,11 +398,11 @@ int main(int argc, char **argv) {
             const char *ext = strrchr(path, '.');
             if (!ext) continue;
             if (!is_c_ext(ext)) continue;
-            FileResult fr;
-            memset(&fr, 0, sizeof(fr));
-            if (scan_file(path, ext, &fr)) {
-                print_json(&fr);
+            FileResult *fr = calloc(1, sizeof(FileResult));
+            if (scan_file(path, ext, fr)) {
+                print_json(fr);
             }
+            free(fr);
         }
         return 0;
     }
@@ -343,11 +413,11 @@ int main(int argc, char **argv) {
         const char *ext = strrchr(path, '.');
         if (!ext) continue;
         if (!is_c_ext(ext)) continue;
-        FileResult fr;
-        memset(&fr, 0, sizeof(fr));
-        if (scan_file(path, ext, &fr)) {
-            print_json(&fr);
+        FileResult *fr = calloc(1, sizeof(FileResult));
+        if (scan_file(path, ext, fr)) {
+            print_json(fr);
         }
+        free(fr);
     }
     return 0;
 }
