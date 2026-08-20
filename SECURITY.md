@@ -28,17 +28,28 @@ the output to the release checksum to confirm the file wasn't tampered with.
 - **No daemon** — no background process, no idle resource use.
 - **No hidden deps** — stdlib only. No `pip install` required for the core.
 
-## `--trace` executes code (opt-in)
+## Optional surface (all opt-in — the core works without any of it)
 
-`codeloom --trace CMD` runs a command under `sys.settrace` to record runtime
-call edges. This **executes code** and may have side effects (network, files).
-It requires `--force` to acknowledge, and you should run it in an isolated
-sandbox/container/CI job.
+codeloom stays zero-dep by default, but each opt-in enrichment you add expands
+the trust surface. Know what each one does:
 
-## `--install-grammars` installs packages (opt-in)
-
-`codeloom --install-grammars --yes` runs `pip install` for tree-sitter grammars.
-This is opt-in and only runs when you pass `--yes`. The core works without it.
+- **`--engine c` / `--watch-core` / `--serve`** — build `codeloom_core.c`
+  (once, `cc -O3`) for a faster scan + native file watcher + resident symbol
+  server. You compile the C core from the committed source yourself, so you
+  can audit exactly what runs.
+- **`--install-grammars --yes` / `--auto-grammars`** — runs `pip install` for
+  tree-sitter grammars. `--install-grammars` only runs when you pass `--yes`;
+  `--auto-grammars` only installs when `CODELOOM_AUTO_INSTALL_GRAMMARS=1`.
+  Installing a pip package from PyPI is standard package trust, not a codeloom
+  runtime behavior.
+- **Embedding API (`CODELOOM_EMBED_BASE_URL`/`CODELOOM_EMBED_API_KEY`)** —
+  sends symbol names to your configured endpoint for semantic scoring. Only
+  when you set the env vars. Your key stays in your env, never in codeloom.
+- **`--lsp-symbol`** — starts an LSP server (pyright/clangd/...) as a
+  subprocess to resolve a symbol's real definition. Only when you run it;
+  falls back to static parsing otherwise.
+- **`--trace CMD`** — runs a command under `sys.settrace`. **Executes code**,
+  may have side effects; requires `--force`; run in a sandbox/CI job.
 
 ## The trust model
 
