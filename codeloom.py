@@ -2603,6 +2603,15 @@ def hybrid_search(files: List[str], root: str, query: str, limit: int = 20) -> L
         except Exception:
             q_emb = None
     scores = []
+    # persistent vector cache: skip re-embedding symbols unchanged since last run
+    emb_cache = {}
+    cache_path = os.path.join(root, ".codeloom-embeds.json")
+    if model is not None and os.path.isfile(cache_path):
+        try:
+            with open(cache_path, "r", encoding="utf-8") as fh:
+                emb_cache = json.load(fh)
+        except Exception:
+            emb_cache = {}
     for name, locs in index.items():
         name_toks = _bm25(name)
         mod_toks = _bm25(locs[0]["module"]) if locs else []
@@ -2624,7 +2633,11 @@ def hybrid_search(files: List[str], root: str, query: str, limit: int = 20) -> L
         total = lex * kind_b * (0.7 + size_b)
         if model is not None and q_emb is not None:
             try:
-                emb = list(model.embed([name + " " + loc.get("module", "")]))[0]
+                key = name + "::" + loc.get("module", "")
+                emb = emb_cache.get(key)
+                if emb is None:
+                    emb = list(model.embed([name + " " + loc.get("module", "")]))[0]
+                    emb_cache[key] = [round(float(x), 6) for x in emb]
                 sim = _embed_cosine(q_emb, emb)
                 total = total * (1.0 - 0.6) + sim * 0.6 * (lex + 1.0)
             except Exception:
@@ -2632,6 +2645,13 @@ def hybrid_search(files: List[str], root: str, query: str, limit: int = 20) -> L
         scores.append({"name": name, "kind": kind, "module": loc["module"],
                        "line": loc.get("line", 0), "score": round(total, 2),
                        "snippet": loc.get("sig", "") or name})
+    # persist the vector cache so the next search on this repo is instant
+    if model is not None and emb_cache:
+        try:
+            with open(cache_path, "w", encoding="utf-8") as fh:
+                json.dump(emb_cache, fh)
+        except Exception:
+            pass
     scores.sort(key=lambda x: -x["score"])
     return scores[:limit]
 
