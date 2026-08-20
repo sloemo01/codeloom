@@ -144,7 +144,7 @@ That's it. Under a second, zero setup, works offline. Cross-platform — macOS, 
 | `codeloom --find "q"` | Natural-language flow discovery ("find where login starts") |
 | `codeloom --files "*.py"` | Find files by name/glob ("engine" or "*.py") |
 | `codeloom --context-diff BASE HEAD` | Branch-to-branch architecture-level diff |
-| `codeloom --install-agent claude` | Print MCP config for an agent (claude/cursor/codex/gemini/opencode/cline/openhands/devin/hermes/aider/roo/windsurf) |
+| `codeloom --install-agent claude` | Print MCP config for 17 agents (claude/cursor/codex/gemini/opencode/cline/openhands/devin/hermes/aider/roo/windsurf/amazon-q/jetbrains/junie/kimi/qwen) |
 | `codeloom --detect-agent` | Detect which installed agent's config dir is present |
 | `codeloom --precision X` | Graph precision: call edges with confidence + class relationships |
 | `codeloom --cross` | "What calls what, across files?" (resolved call graph) |

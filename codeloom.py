@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.51.0"
+VERSION = "0.52.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -5186,6 +5186,21 @@ def _mcp_config(agent: str, core_path: str) -> str:
     if a == "windsurf":
         # Windsurf: ~/.codeium/windsurf/mcp.json — mcpServers object
         return mcp_block
+    if a in ("amazon-q", "amazonq", "amazon", "q-developer"):
+        # Amazon Q Developer: ~/.aws/amazonq/mcp.json — mcpServers object
+        return mcp_block
+    if a in ("jetbrains", "intellij", "goland", "pycharm", "webstorm"):
+        # JetBrains IDEs: ~/.config/JetBrains/<product>/mcp.json — mcpServers
+        return mcp_block
+    if a in ("junie",):
+        # Junie (JetBrains' coding agent): mcpServers JSON
+        return mcp_block
+    if a in ("kimi", "kimi-cli"):
+        # Kimi CLI: ~/.kimi/ — mcpServers object
+        return mcp_block
+    if a in ("qwen", "qwen-code"):
+        # Qwen Code: ~/.qwen/ — mcpServers object
+        return mcp_block
     return inline
 
 def install_agent_config(agent: str, core_path: str) -> str:
@@ -5209,6 +5224,11 @@ def detect_agent() -> Optional[str]:
         ("aider", os.path.join(home, ".aider")),
         ("roo", os.path.join(home, ".roo")),
         ("windsurf", os.path.join(home, ".codeium")),
+        ("amazon-q", os.path.join(home, ".aws", "amazonq")),
+        ("jetbrains", os.path.join(home, ".config", "JetBrains")),
+        ("junie", os.path.join(home, ".junie")),
+        ("kimi", os.path.join(home, ".kimi")),
+        ("qwen", os.path.join(home, ".qwen")),
     ]
     for name, path in cands:
         if os.path.isdir(path):
@@ -5442,7 +5462,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--calls", action="store_true", help="show function-level call graph (multi-language)")
     p.add_argument("--diff", action="store_true", help="show structure of files changed vs HEAD (git)")
     p.add_argument("--install-agents", action="store_true", help="write/update AGENTS.md with a codeloom block")
-    p.add_argument("--install-agent", metavar="AGENT", help="print MCP config for an agent (claude|cursor|codex|gemini|opencode|cline|openhands|devin|hermes|aider|roo|windsurf)")
+    p.add_argument("--install-agent", metavar="AGENT", help="print MCP config for an agent (claude|cursor|codex|gemini|opencode|cline|openhands|devin|hermes|aider|roo|windsurf|amazon-q|jetbrains|junie|kimi|qwen)")
     p.add_argument("--detect-agent", action="store_true", help="detect which coding agent's config dir is present")
     p.add_argument("--build-core", action="store_true", help="build the optional C accelerator (codeloom_core.c -> codeloom_core) if not present")
     p.add_argument("--cost", action="store_true", help="append token-cost estimate to output")
@@ -5823,7 +5843,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         valid = {"claude", "claude-code", "claudecode", "cursor", "codex",
                  "gemini", "gemini-cli", "opencode", "cline", "openhands",
                  "openhands-cli", "devin", "hermes", "hermes-agent", "aider",
-                 "roo", "roo-code", "windsurf"}
+                 "roo", "roo-code", "windsurf", "amazon-q", "amazonq",
+                 "amazon", "q-developer", "jetbrains", "intellij", "goland",
+                 "pycharm", "webstorm", "junie", "kimi", "kimi-cli", "qwen",
+                 "qwen-code"}
         if agent not in valid:
             print(f"unknown agent '{agent}'. Valid: {', '.join(sorted(valid))}")
             return 1

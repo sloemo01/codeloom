@@ -635,7 +635,8 @@ class TestCodeLoom(unittest.TestCase):
         # install-agent emits a valid MCP config snippet for an agent
         for agent in ("claude", "cursor", "codex", "gemini", "opencode",
                       "cline", "openhands", "devin", "hermes", "aider",
-                      "roo", "windsurf"):
+                      "roo", "windsurf", "amazon-q", "jetbrains", "junie",
+                      "kimi", "qwen"):
             cfg = codeloom.install_agent_config(agent, "/tmp/codeloom.py")
             self.assertIn("codeloom", cfg)
             self.assertIn("python3", cfg)

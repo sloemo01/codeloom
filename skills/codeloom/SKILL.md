@@ -127,7 +127,7 @@ python3 codeloom.py --index-status /path/to/repo
 | `--calls --focus X` | calls inside one module |
 | `--diff` | structure of files changed vs git HEAD |
 | `--install-agents` | write/update AGENTS.md with a codeloom block |
-| `--install-agent AGENT` | print MCP config for claude/cursor/codex/gemini/opencode/cline/openhands/devin/hermes/aider/roo/windsurf |
+| `--install-agent AGENT` | print MCP config for 17 agents (claude/cursor/codex/gemini/opencode/cline/openhands/devin/hermes/aider/roo/windsurf/amazon-q/jetbrains/junie/kimi/qwen) |
 | `--detect-agent` | detect which coding agent's config dir is present |
 | `--cost` | append token-cost estimate |
 | `--task "text"` | rank modules relevant to a task |

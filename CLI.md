@@ -111,7 +111,7 @@ codeloom [OPTIONS] [ROOT]
 | `--plugin-sdk` / `--lsp` | Plugin surface / LSP bridge status |
 | `--graph-html` | Write local zoomable HTML graph view |
 | `codeloom --check-edit X` / `--check-delete X` | Preflight refactoring safety verdicts |
-| `codeloom --install-agent claude` | Print MCP config for an agent (claude/cursor/codex/gemini/opencode/cline/openhands/devin/hermes/aider/roo/windsurf) |
+| `codeloom --install-agent claude` | Print MCP config for 17 agents (claude/cursor/codex/gemini/opencode/cline/openhands/devin/hermes/aider/roo/windsurf/amazon-q/jetbrains/junie/kimi/qwen) |
 | `codeloom --detect-agent` | Detect which coding agent's config dir is present |
 | `codeloom --langs` | List supported languages/extensions (130+ regex + tree-sitter set) |
 | `codeloom --build-core` | Build the optional C accelerator (cc -O3 codeloom_core.c) if absent |

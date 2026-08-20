@@ -74,7 +74,7 @@ Everything codeloom can do, in one place. Zero-dependency, single file, no daemo
 | `codeloom --install-grammars --yes` | Install tree-sitter grammars (opt-in precision) |
 | `codeloom --auto-grammars` | Scan repo + install grammars for its languages |
 | `codeloom --install-agents` | Write AGENTS.md block |
-| `codeloom --install-agent claude` | Print MCP config for an agent (claude/cursor/codex/gemini/opencode/cline/openhands/devin/hermes/aider/roo/windsurf) |
+| `codeloom --install-agent claude` | Print MCP config for 17 agents (claude/cursor/codex/gemini/opencode/cline/openhands/devin/hermes/aider/roo/windsurf/amazon-q/jetbrains/junie/kimi/qwen) |
 | `codeloom --detect-agent` | Detect which coding agent's config dir is present |
 
 ## MCP server (54 tools)
