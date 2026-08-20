@@ -8,8 +8,31 @@
   <a href="#demo"><img src="https://img.shields.io/badge/see%20it%20run-Demo-brightgreen"/></a>
   <a href="https://github.com/sloemo01/codeloom/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue"/></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.8+-blue"/></a>
-  <a href="https://img.shields.io/badge/python-stdlib%20only-blue"><img src="https://img.shields.io/badge/deps-zero-brightgreen"/></a>
+  <a href="https://github.com/sloemo01/codeloom#readme"><img src="https://img.shields.io/badge/deps-zero-brightgreen"/></a>
   <a href="https://github.com/sloemo01/codeloom/stargazers"><img src="https://img.shields.io/github/stars/sloemo01/codeloom"/></a>
+</p>
+
+<p align="center">
+  <b>17 coding agents supported</b>
+</p>
+<p align="center">
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Claude_Code-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Codex-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Cursor-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Gemini_CLI-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/OpenCode-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Cline-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/OpenHands-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Devin-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Hermes_Agent-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Aider-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Roo_Code-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Windsurf-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Amazon_Q-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/JetBrains-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Junie-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Kimi_CLI-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Qwen_Code-supported-blueviolet"/></a>
 </p>
 
 <p align="center">
