@@ -140,6 +140,9 @@ That's it. Under a second, zero setup, works offline. Cross-platform — macOS, 
 | `codeloom --graph-html` | Write a local zoomable HTML graph view |
 | `codeloom --find "q"` | Natural-language flow discovery ("find where login starts") |
 | `codeloom --context-diff BASE HEAD` | Branch-to-branch architecture-level diff |
+| `codeloom --install-agent claude` | Print MCP config for an agent (claude/cursor/codex/gemini/opencode) |
+| `codeloom --detect-agent` | Detect which installed agent's config dir is present |
+| `codeloom --precision X` | Graph precision: call edges with confidence + class relationships |
 | `codeloom --cross` | "What calls what, across files?" (resolved call graph) |
 | `codeloom --search X` | "Where is symbol X defined?" (symbol index + snippet) |
 | `codeloom --usages X` | "Where is symbol X used?" (call sites + snippet) |

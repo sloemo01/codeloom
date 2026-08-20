@@ -104,4 +104,7 @@ codeloom [OPTIONS] [ROOT]
 | `--context-diff BASE HEAD` | Branch-to-branch architecture diff |
 | `--plugin-sdk` / `--lsp` | Plugin surface / LSP bridge status |
 | `--graph-html` | Write local zoomable HTML graph view |
-| `--check-edit X` / `--check-delete X` | Preflight refactoring safety verdicts |
+| `codeloom --check-edit X` / `--check-delete X` | Preflight refactoring safety verdicts |
+| `codeloom --install-agent claude` | Print MCP config for an agent (claude/cursor/codex/gemini/opencode) |
+| `codeloom --detect-agent` | Detect which coding agent's config dir is present |
+| `codeloom --precision X` | Graph precision: call edges with confidence + class relationships |
