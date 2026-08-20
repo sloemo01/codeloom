@@ -332,35 +332,14 @@ retrieval vs a grep-and-read baseline:
 
 Summary-first retrieval turns the huge-symbol case (which used to *lose* 983%
 tokens) into a 99%+ win. That's the honest 95%+ claim — measured, not marketed.
-
-**On jcodemunch's own benchmark corpus** (the repos it benchmarks against):
-
-| repo | symbols found | baseline (grep+read) | codeloom | savings |
-|---|---|---|---|---|
-| **fastapi** | 5/5 | 665,765 | 7,465 | **98.9%** |
-| **express** | 4/4 | 17,806 | ~210 | **98.8%** |
-| **gin** | 4/4 | 2,227 | ~93 | **95.8%** |
-
-**The honest headline: 95.8–98.9% token savings on all three repos** — codeloom
-now resolves every queried symbol on jcodemunch's own benchmark corpus. Full
-methodology in [`benchmarks/`](benchmarks/README.md).
-
-**Side-by-side vs jcodemunch** (same repo, same symbols, retrieval tokens —
-`benchmarks/side_by_side.py` drives both tools via MCP):
-
-| symbol | codeloom | jcodemunch | codeloom wins |
-|---|---|---|---|
-| `Body` | 13 | 89 | YES |
-| `Cookie` | 13 | 810 | YES |
-| `File` | 13 | 821 | YES |
-| `Header` | 5 | 95 | YES |
+The same token-shaving edge, benchmarked on real repos (fastapi/express/gin) and
+side-by-side against jcodemunch, is folded into the **unified comparison table**
+in ["Why it's different"](#why-its-different). Full methodology in
+[`benchmarks/`](benchmarks/README.md).
 
 The honest caveat: codeloom returns a **summary** (signature + docstring +
-call graph) by default, while jcodemunch's `get_symbol_source` returns **full
-source** — so codeloom wins on token count by design (summary-first is the
-point). You opt into `--full` when you need the implementation. Symbols
-jcodemunch's fuzzy search couldn't cleanly resolve are excluded — only
-both-resolved symbols are reported.
+call graph) by default, so it wins on token count by design — summary-first is
+the point. You opt into `--full` when you need the implementation.
 
 ## Task-aware intelligence (`--task`, `--impact`, `--plan`)
 
@@ -727,6 +706,8 @@ single zero-dependency file.
 | **Code-embedded `--pack`** | **yes** | partial | no | partial |
 | **Reading plan (`--plan`)** | **yes** | no | no | no |
 | **Blast radius (`--impact`/`--refactor`/`--rename`)** | **yes** | partial | yes | yes |
+| **Token-shaving (`--get-symbol` summary-first, 99% savings)** | **yes** | partial (full source) | no | partial |
+| **Byte-range snippets (`--snippet`)** | **yes** | yes | no | partial |
 | Import graph | **yes — `--graph`** | partial | yes | yes |
 | Cross-file call graph | **yes — `--cross`** | yes | yes | yes |
 | Symbol index / search | **yes — `--search`** | yes | yes | yes |
@@ -735,6 +716,7 @@ single zero-dependency file.
 | **Repo memory (`--remember`/`--loom`)** | **yes** | no | no | no |
 | Native file watcher | **yes — `--watch-core`** | no | yes | — |
 | Sub-ms resident lookups | **yes — `--serve`** | yes | yes | yes |
+| **Runtime call edges (`--trace`)** | **yes** | no | no | no |
 | Offline | **yes** | yes | yes | yes |
 | **MCP tools** | **53** | 91 actions (6 routers) | ~10 | varies |
 | Zero-dependency single file | **yes** | no | no | no |
