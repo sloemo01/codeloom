@@ -3370,6 +3370,21 @@ def _find_core() -> Optional[str]:
     import shutil
     return shutil.which(_CORE_NAME)
 
+def _c_walk(root: str) -> List[str]:
+    """List code files via the C core's fast walker (--list ROOT). Falls back
+    to Python _walk on any error. Much faster than Python os.walk + gitignore
+    matching on huge repos."""
+    core = _find_core()
+    if not core:
+        return []
+    import subprocess
+    try:
+        r = subprocess.run([core, "--list", root], capture_output=True, text=True, timeout=300)
+    except Exception:
+        return []
+    out = [l for l in r.stdout.splitlines() if l.strip()]
+    return [os.path.join(root, l.lstrip("./")) if not os.path.isabs(l) else l for l in out]
+
 def _c_scan(files: List[str]) -> List[dict]:
     """Run the C core over files (argv mode). Returns per-file dicts
     {file, symbols:[{name,kind}], imports:[...]}. Empty on any error."""
@@ -5036,7 +5051,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
-        _walk(root, rules, args.max_files, files)
+        if args.engine == "c" and _find_core():
+            files = _c_walk(root)  # C walker — much faster on huge repos
+            if not files:
+                _walk(root, rules, args.max_files, files)
+        else:
+            _walk(root, rules, args.max_files, files)
         print(render_index(files, root, args.max_files, parallel=args.parallel, engine=args.engine))
         return 0
 

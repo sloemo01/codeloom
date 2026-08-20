@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <dirent.h>
 
 /* Max sizes (per-file — a single file won't have this many). */
 #define MAX_LINE 4096
@@ -390,6 +391,46 @@ static void print_json(const FileResult *fr) {
 }
 
 int main(int argc, char **argv) {
+    /* --list ROOT : walk the tree in C, print code file paths (one per line).
+       Much faster than Python os.walk + per-file gitignore matching on huge
+       repos. Skips hidden dirs (.git, node_modules-like) for speed. */
+    if (argc >= 3 && strcmp(argv[1], "--list") == 0) {
+        const char *root = argv[2];
+        char path[4096];
+        /* simple recursive walk via a manual stack of directories */
+        char **dirs = malloc(16384 * sizeof(char*));
+        int ndirs = 0, cap = 16384;
+        dirs[ndirs++] = strdup(root);
+        while (ndirs > 0) {
+            const char *d = dirs[--ndirs];
+            snprintf(path, sizeof(path), "%s", d);
+            DIR *dp = opendir(d);
+            if (!dp) { free((void*)d); continue; }
+            struct dirent *de;
+            while ((de = readdir(dp)) != NULL) {
+                if (de->d_name[0] == '.') continue; /* hidden incl. .git */
+                char full[4096];
+                snprintf(full, sizeof(full), "%s/%s", d, de->d_name);
+                if (de->d_type == DT_DIR) {
+                    /* skip node_modules / build / dist for index speed */
+                    if (strcmp(de->d_name, "node_modules") == 0 ||
+                        strcmp(de->d_name, "build") == 0 ||
+                        strcmp(de->d_name, "dist") == 0 ||
+                        strcmp(de->d_name, ".venv") == 0 ||
+                        strcmp(de->d_name, "venv") == 0) continue;
+                    if (ndirs >= cap) { cap *= 2; dirs = realloc(dirs, cap * sizeof(char)); }
+                    dirs[ndirs++] = strdup(full);
+                } else if (de->d_type == DT_REG) {
+                    const char *ext = strrchr(de->d_name, '.');
+                    if (ext && is_c_ext(ext)) printf("%s\n", full);
+                }
+            }
+            closedir(dp);
+            free((void*)d);
+        }
+        free(dirs);
+        return 0;
+    }
     /* Read file paths from argv (skip argv[0]) or stdin (one per line). */
     char path[4096];
     if (argc > 1) {
