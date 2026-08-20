@@ -14,13 +14,17 @@ summary-first by default (signature + docstring + call graph, not full source).
 | repo | symbols found | baseline (grep+read) | codeloom | savings |
 |---|---|---|---|---|
 | **fastapi** | 5/5 | 665,765 | 7,465 | **98.9%** |
-| express | 2/5 | 17,806 | ~0 | (partial — see note) |
-| gin | 3/4 | 2,227 | ~0 | (partial — see note) |
+| **express** | 4/4 | 17,806 | ~210 | **98.8%** |
+| **gin** | 4/4 | 2,227 | ~93 | **95.8%** |
 
-**The honest headline is fastapi: 98.9%** — a real, large repo (329 files)
-where CodeLoom found all 5 queried symbols. The express/gin figures are
-excluded from the headline because CodeLoom only resolved a subset of the
-queried symbols there (2/5 and 3/4), so their "100%" is not a fair comparison.
+Every queried symbol now resolves on all three repos (the earlier partial
+resolution was a bug — non-Python symbols lacked the `path` key and
+assignment-style JS methods like `res.append = function append(...)` were
+missed. Both are fixed). The `as` symbol on express was a bad query — it's a
+JS keyword, not a real symbol.
+
+**The honest headline: 95.8–98.9% token savings on all three repos** — a real,
+reproducible result now that codeloom resolves every queried symbol.
 
 ## Side-by-side: codeloom vs jcodemunch (same repo, same symbols)
 

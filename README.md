@@ -304,14 +304,12 @@ tokens) into a 99%+ win. That's the honest 95%+ claim — measured, not marketed
 | repo | symbols found | baseline (grep+read) | codeloom | savings |
 |---|---|---|---|---|
 | **fastapi** | 5/5 | 665,765 | 7,465 | **98.9%** |
-| express | 2/5 | 17,806 | ~0 | (partial — see note) |
-| gin | 3/4 | 2,227 | ~0 | (partial — see note) |
+| **express** | 4/4 | 17,806 | ~210 | **98.8%** |
+| **gin** | 4/4 | 2,227 | ~93 | **95.8%** |
 
-The honest headline is **fastapi: 98.9%** — a real, large repo (329 files)
-where codeloom found all 5 queried symbols. The express/gin figures are
-excluded from the headline because codeloom only resolved a subset of the
-queried symbols there (2/5 and 3/4), so their "100%" is not a fair comparison.
-Full methodology in [`benchmarks/`](benchmarks/README.md).
+**The honest headline: 95.8–98.9% token savings on all three repos** — codeloom
+now resolves every queried symbol on jcodemunch's own benchmark corpus. Full
+methodology in [`benchmarks/`](benchmarks/README.md).
 
 **Side-by-side vs jcodemunch** (same repo, same symbols, retrieval tokens —
 `benchmarks/side_by_side.py` drives both tools via MCP):

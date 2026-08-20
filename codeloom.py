@@ -1911,7 +1911,7 @@ def _index_other_bytes(path, mod, ext, index):
                         source = text[start_byte:end_byte]
                         kind = "class" if "class" in node.type or "struct" in node.type else "function"
                         index.setdefault(name, []).append({
-                            "module": mod, "kind": kind, "line": node.start_point[0] + 1,
+                            "module": mod, "path": path, "kind": kind, "line": node.start_point[0] + 1,
                             "start_byte": start_byte, "end_byte": end_byte,
                             "tokens": estimate_tokens(source), "source": source,
                         })
@@ -1919,15 +1919,23 @@ def _index_other_bytes(path, mod, ext, index):
             for child in node.children:
                 walk(child)
         walk(ts_root)
-        return
+        # fall through to the assignment-style pass so methods like
+        # `res.append = function append(...)` (missed by tree-sitter's
+        # function_declaration node) are also indexed.
     # brace-matching fallback
     import re as _re
     def_re, _ = CALL_LANG_RULES[ext]
+    # also catch assignment-style methods: res.append = function append(field, val) {
+    assign_re = _re.compile(r"[A-Za-z_$][\w$]*\.([A-Za-z_$][\w$]*)\s*=\s*function\b")
     for i, line in enumerate(lines):
         m = _re.match(def_re, line)
-        if not m:
-            continue
-        name = next((g for g in m.groups() if g), None)
+        name = None
+        if m:
+            name = next((g for g in m.groups() if g), None)
+        else:
+            am = assign_re.search(line)
+            if am:
+                name = am.group(1)
         if not name:
             continue
         start_byte = offsets[i]
@@ -1946,7 +1954,7 @@ def _index_other_bytes(path, mod, ext, index):
                 break
         source = text[start_byte:end_byte]
         index.setdefault(name, []).append({
-            "module": mod, "kind": "function", "line": i + 1,
+            "module": mod, "path": path, "kind": "function", "line": i + 1,
             "start_byte": start_byte, "end_byte": end_byte,
             "tokens": estimate_tokens(source), "source": source,
         })
@@ -2031,13 +2039,19 @@ def render_get_symbol(files, root, symbol, context_lines=2, summary=False, adapt
             for caller, cs in funcs.items():
                 if symbol in cs:
                     called_by.add(f"{cm}.{caller}")
+        # cap the lists so a summary stays tiny even for heavily-used symbols
+        MAX_LIST = 10
+        callees_list = sorted(callees)[:MAX_LIST]
+        called_by_list = sorted(called_by)[:MAX_LIST]
+        callees_note = f", +{len(callees) - len(callees_list)} more" if len(callees) > MAX_LIST else ""
+        called_by_note = f", +{len(called_by) - len(called_by_list)} more" if len(called_by) > MAX_LIST else ""
         summary_text = (
             f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
             f"~{estimate_tokens(sig_str + doc_str)} tokens (summary)\n\n"
             f"Signature: {sig_str}\n"
             f"Docstring: {doc_str}\n"
-            f"Calls ({len(callees)}): {', '.join(sorted(callees)) or 'none'}\n"
-            f"Called by ({len(called_by)}): {', '.join(sorted(called_by)) or 'none'}\n"
+            f"Calls ({len(callees)}): {', '.join(callees_list) or 'none'}{callees_note}\n"
+            f"Called by ({len(called_by)}): {', '.join(called_by_list) or 'none'}{called_by_note}\n"
             f"\nUse `--get-symbol {symbol} --full` for the full source.\n"
         )
         buf.write(summary_text)
@@ -2060,9 +2074,13 @@ def render_get_symbol(files, root, symbol, context_lines=2, summary=False, adapt
     if callees or called_by:
         buf.write(f"\n# call context\n")
         if callees:
-            buf.write(f"# calls: {', '.join(sorted(callees))}\n")
+            c_list = sorted(callees)[:10]
+            note = f" (+{len(callees)-10} more)" if len(callees) > 10 else ""
+            buf.write(f"# calls: {', '.join(c_list)}{note}\n")
         if called_by:
-            buf.write(f"# called by: {', '.join(sorted(called_by))}\n")
+            cb_list = sorted(called_by)[:10]
+            note = f" (+{len(called_by)-10} more)" if len(called_by) > 10 else ""
+            buf.write(f"# called by: {', '.join(cb_list)}{note}\n")
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
