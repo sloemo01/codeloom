@@ -2526,6 +2526,49 @@ def _index_path(root: str) -> str:
 def _index_bin_path(root: str) -> str:
     return os.path.join(root, ".codeloom-index.bin")
 
+def _index_lazy_path(root: str) -> str:
+    """Path to the lazy per-symbol index (dbm/shelve). Each symbol is a keyed
+    record, so --get-symbol X does ONE keyed read instead of deserializing the
+    whole index — the no-daemon way to get near-resident lookup latency."""
+    return os.path.join(root, ".codeloom-index.lazy")
+
+def save_lazy_index(root: str, index: dict) -> bool:
+    """Write the symbol index as a keyed dbm store (one record per symbol).
+    Returns True on success. This is what kills cold-start: a single-symbol
+    lookup reads one record (~ms) instead of loading a multi-hundred-MB dict."""
+    try:
+        import dbm
+        path = _index_lazy_path(root)
+        with dbm.open(path, "n") as db:
+            for name, locs in index.items():
+                db[name.encode("utf-8")] = json.dumps(locs).encode("utf-8")
+        return True
+    except Exception:
+        return False
+
+def load_symbol_lazy(root: str, symbol: str) -> Optional[list]:
+    """Look up ONE symbol from the lazy index — a single keyed read (~ms).
+    Returns the list of locs, or None if the symbol isn't present/loaded."""
+    try:
+        import dbm
+        path = _index_lazy_path(root)
+        with dbm.open(path, "r") as db:
+            raw = db.get(symbol.encode("utf-8"))
+        if raw is None:
+            return None
+        return json.loads(raw.decode("utf-8"))
+    except Exception:
+        return None
+
+def lazy_index_has(root: str) -> bool:
+    """True if a lazy per-symbol index exists for this root."""
+    try:
+        import dbm
+        with dbm.open(_index_lazy_path(root), "r"):
+            return True
+    except Exception:
+        return False
+
 def _read_source_from_loc(loc: dict, root: str) -> str:
     """Re-read a symbol's full source from disk using the stored byte range.
     Used by --full and the adaptive small-symbol path, since the persisted
@@ -2581,6 +2624,11 @@ def save_persistent_index(root: str, index: dict, files: List[str], kg: Optional
             loc.pop("source", None)
     if kg:
         data["kg"] = kg
+    # also write the lazy per-symbol index for near-resident single-symbol lookups
+    try:
+        save_lazy_index(root, index)
+    except Exception:
+        pass
     try:
         with open(_index_path(root), "w", encoding="utf-8") as f:
             json.dump(data, f)
@@ -3692,6 +3740,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     # --get-symbol / --search: fast-path from the persistent index (no walk)
     # --full also uses the index (it stores the full source) — no repo re-scan.
     if (args.get_symbol or args.search):
+        # lazy per-symbol index: one keyed read (~ms), no full-dict load.
+        # This is the near-resident lookup — beats the ~3.5s cold-start.
+        lazy_locs = None
+        if args.get_symbol and not args.full:
+            lazy_locs = load_symbol_lazy(root, args.get_symbol)
+            if lazy_locs:
+                loc = lazy_locs[0]
+                if loc.get("tokens", 0) <= ADAPTIVE_FULL_THRESHOLD:
+                    src = _read_source_from_loc(loc, root)
+                    print(f"# get_symbol: {args.get_symbol}\n"
+                          f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
+                          f"bytes {loc.get('start_byte',0)}-{loc.get('end_byte',0)}  "
+                          f"~{loc.get('tokens',0)} tokens\n\n"
+                          f"{src}\n")
+                else:
+                    sig = loc.get("sig") or args.get_symbol
+                    print(f"# get_symbol: {args.get_symbol}\n"
+                          f"{loc['module']}:{loc['line']}  [{loc['kind']}]  ~10 tokens (summary)\n\n"
+                          f"Signature: {sig}\n"
+                          f"Use `--get-symbol {args.get_symbol} --full` for the full source.\n")
+                return 0
         pidx = ensure_fresh_index(root, args.max_files)
         if pidx is not None:
             if args.get_symbol:
