@@ -71,10 +71,11 @@ Everything codeloom can do, in one place. Zero-dependency, single file, no daemo
 | `codeloom --watch` | Incremental daemon-less refresh (re-index only changed files) |
 | `codeloom --index-status` | Index freshness |
 | `codeloom --verify FILE` | SHA-256 checksum (security) |
-| `codeloom --install-grammars --yes` | Install tree-sitter grammars (25 languages) |
+| `codeloom --install-grammars --yes` | Install tree-sitter grammars (opt-in precision) |
+| `codeloom --auto-grammars` | Scan repo + install grammars for its languages |
 | `codeloom --install-agents` | Write AGENTS.md block |
 
-## MCP server (48 tools)
+## MCP server (53 tools)
 
 `codeloom-mcp.py` is a zero-dependency MCP server (stdlib JSON-RPC over stdio).
 Tools: `codeloom_map`, `codeloom_graph`, `codeloom_focus`, `codeloom_calls`,
@@ -87,9 +88,14 @@ Tools: `codeloom_map`, `codeloom_graph`, `codeloom_focus`, `codeloom_calls`,
 
 ## Language support
 
-25 languages via `--install-grammars --yes`: Python, JS/TS, Go, Rust, Java,
-C/C++, C#, Ruby, PHP, Swift, Kotlin, Dart, Lua, bash, Elixir, OCaml, Scala,
-Haskell, Zig, Perl, F#, PowerShell. Plus regex fallback for 18+ more.
+Broad tree-sitter precision via `--install-grammars --yes` or repo-aware
+`--auto-grammars` (installs grammars for the languages your repo actually
+uses). Core grammars: Python, JS/TS (incl. TSX), Go, Rust, Java, C/C++, C#,
+Ruby, PHP, Swift, Kotlin, Dart, Lua, Bash, Elixir, OCaml, Scala, Haskell, Zig,
+Perl, F#, PowerShell. Plus 130+ extensions via regex/C extraction (every
+language gets the same structural extraction + cross-file resolution, no
+per-language setup) — with a data-driven tree-sitter resolver that uses real
+AST depth for ANY grammar you install, falling back to regex otherwise.
 
 ## Optional C engine (scale)
 

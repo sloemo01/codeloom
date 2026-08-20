@@ -7,3 +7,8 @@ demo-repo/
 .DS_Store
 frames_*.png
 build/
+# codeloom runtime artifacts (generated, never committed)
+.codeloom-index.*
+.codeloom-embeds.json
+codeloom_core
+codeloom-graph.html

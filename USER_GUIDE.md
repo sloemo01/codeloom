@@ -100,7 +100,8 @@ codeloom --index-status .   # is the index fresh?
 ## Multi-language precision
 
 ```bash
-codeloom --install-grammars --yes   # one command, 25 languages
+codeloom --install-grammars --yes   # one command: core AST grammars
+codeloom --auto-grammars            # scan repo, install grammars for ITS languages
 ```
 
 ## Security

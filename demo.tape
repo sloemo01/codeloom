@@ -15,27 +15,17 @@ Enter
 Sleep 1s
 Sleep 500ms
 
-Type "codeloom --task 'add retry logic' ."
+Type "codeloom --ask 'add retry logic' ."
 Enter
 Sleep 1s
-Sleep 500ms
+Sleep 1s
 
 Type "codeloom --get-symbol Engine ."
 Enter
 Sleep 1s
 Sleep 500ms
 
-Type "codeloom --explain Engine ."
-Enter
-Sleep 1s
-Sleep 500ms
-
-Type "codeloom --index ."
-Enter
-Sleep 1s
-Sleep 500ms
-
-Type "codeloom --deadcode ."
+Type "codeloom --rename retry retry_with_backoff ."
 Enter
 Sleep 1s
 Sleep 500ms

@@ -36,13 +36,13 @@ What it does:
 - **Zero-install, zero-telemetry, offline** — one stdlib file, no `pip install`, no model downloads, no license validation, no telemetry that phones home. The heavyweight tools can't say that.
 - **Git-diffable** — `codeloom --write MAP.md` produces a reviewable text artifact you commit and diff in PRs. jcodemunch's index is a binary blob.
 - **CI action** — `codeloom --install-agents .` writes AGENTS.md + a GitHub Action that runs `--pack` on every PR and posts the brief as a comment. One line to add.
-- **MCP server** — zero-dep, **48 tools**, resident in-memory knowledge graph + `--watch` incremental refresh (daemon-speed, no daemon).
-- **25 languages** — `--install-grammars --yes` gives tree-sitter precision.
+- **MCP server** — zero-dep, **53 tools**, resident in-memory knowledge graph + `--watch` incremental refresh (daemon-speed, no daemon).
+- **AST depth, repo-aware** — `--install-grammars --yes` for core languages, or `--auto-grammars` scans the repo and installs grammars for the languages it actually uses (no per-language setup). 130+ extensions via regex/C extraction.
 - **Optional C engine, Linux-kernel scale** — build `codeloom_core.c` once, `--index --engine c` indexes the **full Linux kernel (64k files, 3.2M symbols, 408k edges) in ~91s**. Pure-Python stays zero-dep; the C accelerator is opt-in for huge monorepos.
 
 The whole thing is Python stdlib only. No `pip install`, no indexing daemon, no GPU. Copy one file into your repo, point your agent at it, done.
 
-**Why not just use the existing tools (semble, codebase-memory-mcp, jcodemunch)?** They're great at retrieval — but they're search engines, not task-orientation engines. They answer "where is this symbol?" codeloom answers "what code actually runs for this task?" — and embeds it. Plus it's the fastest possible structural context, in one file, in under a second, always fresh (no stale index).
+**Why not just use the existing tools (codebase-memory-mcp, codegraph, jcodemunch)?** They're great at retrieval — but they're search engines, not task-orientation engines. They answer "where is this symbol?" codeloom answers "what code actually runs for this task?" — and embeds it, with the blast radius and a files-to-touch checklist (`--ask`). Plus it's the fastest possible structural context, in one file, in under a second, always fresh (no stale index) — and it indexes the Linux kernel in ~91s (vs their ~3 min).
 
 Drop the output into your `AGENTS.md` and every future session auto-loads the map before touching anything.
 
@@ -101,8 +101,8 @@ Also:
 - **Zero-install, zero-telemetry, offline** — one file, no pip, no model downloads, no license checks, no telemetry that phones home
 - **Git-diffable** — `codeloom --write MAP.md` is a reviewable text artifact you commit and diff in PRs
 - **CI action** — `codeloom --install-agents .` writes AGENTS.md + a GitHub Action that posts the `--pack` brief on every PR
-- **MCP server** — zero-dep, 28 tools, resident in-memory knowledge graph + `--watch` incremental refresh (daemon-speed, no daemon)
-- **25 languages** — `--install-grammars --yes` gives tree-sitter precision
+- **MCP server** — zero-dep, 53 tools, resident in-memory knowledge graph + `--watch` incremental refresh (daemon-speed, no daemon)
+- **AST depth, repo-aware** — `--auto-grammars` scans the repo and installs grammars for its languages; 130+ extensions via regex/C extraction
 
 Repo: https://github.com/sloemo01/codeloom
 

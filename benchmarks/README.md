@@ -1,10 +1,11 @@
 # CodeLoom benchmarks
 
 Honest, reproducible numbers comparing CodeLoom to the heavyweight competitors
-(semble, codebase-memory-mcp, jcodemunch-mcp). The point is not "CodeLoom is
+(jcodemunch, codegraph, codebase-memory-mcp). The point is not "CodeLoom is
 faster at everything" — it's that CodeLoom wins decisively on the axis that
 matters for everyday agent work: **token-efficient, task-oriented retrieval
-with zero setup and always-fresh context.**
+with zero setup and always-fresh context**, plus Linux-kernel-class index
+speed (~91s vs their ~3 min).
 
 ## Scale / hardware scaling (Linux kernel)
 
@@ -144,10 +145,12 @@ and "what code actually runs when a login happens" (codeloom, task-shaped).
 ## The honest scope
 
 CodeLoom is a **single-file, zero-dependency replacement for the heavyweight
-code-intelligence tools** — that's the design. It covers 25 languages via
-`--install-grammars`, keeps a persistent knowledge graph on disk, makes
+code-intelligence tools** — that's the design. It covers 130+ extensions via
+regex/C extraction plus repo-aware AST depth via `--install-grammars` /
+`--auto-grammars`, keeps a persistent knowledge graph on disk, makes
 retrieval irrelevant for the load-once, task-shaped workflow with its
-code-embedded `--pack` brief, and runs zero-install, zero-telemetry, offline.
+code-embedded `--ask`/`--pack` brief, and runs zero-install, zero-telemetry,
+offline.
 For everyday agent work it replaces what the search tools do **and** adds
 task-orientation they don't have — no daemon, no install, no stale index, no
 telemetry.

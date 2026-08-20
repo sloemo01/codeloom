@@ -689,38 +689,44 @@ ceiling rises when you opt in:
 - **`--trace` safety** — requires `--force` (it executes code); run in an
   isolated sandbox/CI job.
 
-codeloom covers the full stack in one file: tree-sitter precision (25 languages
-via `--install-grammars`), a persistent knowledge graph (`--index`), and
-snippet-level retrieval (`--search`/`--get-symbol`). On top of that it does
-what the search tools don't — task-orientation and the code-embedded `--pack`
-brief — with **speed, zero-setup, freshness, and offline operation** as the
-default.
+codeloom covers the full stack in one file: tree-sitter precision (via
+`--install-grammars` / `--auto-grammars`), a persistent knowledge graph
+(`--index`), and snippet-level retrieval (`--search`/`--get-symbol`). On top
+of that it does what the search tools don't — task-orientation and the
+code-embedded `--ask`/`--pack` brief — with **speed, zero-setup, freshness,
+and offline operation** as the default.
 
 ## Why it's different
 
-| | codeloom | jcodemunch | semble / codebase-memory-mcp |
-|---|---|---|---|
-| Install | one file, copy it | `pip install` + MCP + deps | `pip install` + deps |
-| Setup | none | index once | indexing daemon |
-| Runs on | stdlib only | tree-sitter + index | heavy runtime |
-| Time to first result | < 1s | after indexing | after indexing |
-| Always fresh | yes (reads live) | re-index | re-index |
-| Import graph | **yes — `--graph`** | partial | yes |
-| Cross-file call graph | **yes — `--cross`** | yes (`get_call_hierarchy`) | yes |
-| Symbol index / search | **yes — `--search`** | yes (`search_symbols`) | yes |
-| Token-shaving retrieval | **yes — `--get-symbol`** | yes (`get_symbol_source`) | partial |
-| Byte-range snippets | **yes — `--snippet`** | yes | partial |
-| **Task relevance (`--task`)** | **yes** | **no** | **no** |
-| **Reading plan (`--plan`)** | **yes** | **no** | **no** |
-| **Explain (`--explain`)** | **yes (no LLM)** | **no** | **no** |
-| **Similar (`--similar`)** | **yes** | **no** | **no** |
-| **Dead code (`--deadcode`)** | **yes** | **no** | **no** |
-| **Runtime trace (`--trace`)** | **yes** | **no** | **no** |
-| Git-aware `--diff` | **yes — always fresh** | partial (`get_changed_symbols`) | no |
-| **Tool surface** | **48 tools + 1 entry point** (`codeloom_ask`/`--loom`) | 6 router tools over **91 actions** | varies |
-| MCP server | **yes — zero-dep, 48 tools** | yes | yes |
-| **Linux kernel index (C engine)** | **~91s** (optional `--engine c`) | — | ~180s |
-| Offline | yes | yes | varies |
+Honest comparison against the field. codeloom wins decisively on the axis
+that matters for everyday agent work: **task-shaped context, zero install,
+compaction survival, and Linux-kernel-class index speed** — while keeping a
+single zero-dependency file.
+
+| | codeloom | jcodemunch | codegraph | codebase-memory-mcp |
+|---|---|---|---|---|
+| Install | **one file, copy it** | `pip install` + MCP + deps | compiled Rust binary | `pip install` + deps |
+| Setup | none | index once | watch/daemon | indexing daemon |
+| Runs on | **stdlib only** (C core opt-in) | tree-sitter + index | Rust + SQLite + FTS5 | compiled C engine |
+| Time to first result | **< 1s** | after indexing | after indexing | after indexing |
+| Always fresh | **yes (reads live)** | re-index | native watcher | re-index |
+| **Linux kernel index** | **~91s** (`--engine c`) | — | Rust tree-sitter build | ~180s (3 min) |
+| **Task context (`--ask`)** | **yes — complete brief** | no | no | no |
+| **Compaction survival (`--resume`)** | **yes** | no | no | no |
+| **Code-embedded `--pack`** | **yes** | partial | no | partial |
+| **Reading plan (`--plan`)** | **yes** | no | no | no |
+| **Blast radius (`--impact`/`--refactor`/`--rename`)** | **yes** | partial | yes | yes |
+| Import graph | **yes — `--graph`** | partial | yes | yes |
+| Cross-file call graph | **yes — `--cross`** | yes | yes | yes |
+| Symbol index / search | **yes — `--search`** | yes | yes | yes |
+| **Hybrid search (semantic opt-in)** | **yes** | no | no | yes |
+| **Graph precision (`--precision`)** | **yes** | no | no | no |
+| **Repo memory (`--remember`/`--loom`)** | **yes** | no | no | no |
+| Native file watcher | **yes — `--watch-core`** | no | yes | — |
+| Sub-ms resident lookups | **yes — `--serve`** | yes | yes | yes |
+| Offline | **yes** | yes | yes | yes |
+| **MCP tools** | **53** | 91 actions (6 routers) | ~10 | varies |
+| Zero-dependency single file | **yes** | no | no | no |
 
 The heavyweight tools are great at retrieval — but they're *search engines*,
 not *task-orientation engines*. codeloom does retrieval (token-shaving, byte
