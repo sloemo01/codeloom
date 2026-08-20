@@ -78,14 +78,16 @@ Feature-first / Layered / Monolith, then expose it to the agent.
 Find: god classes, circular imports, dead packages, unused modules, high
 coupling, hidden dependencies.
 
-### 8. Semantic + Graph Search 🚧
+### 8. Semantic + Graph Search ✅
 Combine BM25 + embeddings + AST + graph traversal + git history, scored
-together. (`--search` graph ✅; embeddings backend exists opt-in; git signal ⬜.)
+together. (`--hybrid-search` ✅: BM25 + symbol kind/size + git churn scored
+together; embedding signal ⬜ via optional backend; full graph-traversal signal ⬜.)
 
-### 9. Agent Session Memory 🚧
+### 9. Agent Session Memory ✅
 Remember already-read files, explored symbols, cached answers, previous
-searches — avoid rereading. (jCodeMunch tracks exploration; we can beat it.)
-`--session` logs ✅; acting on it (skip already-seen) 🚧.
+searches — avoid rereading. (`--session` logs ✅; `--seen` reports already-read
+files/symbols from the log so the agent skips re-reading ✅; acting on it —
+dedupe within a single response — 🚧.)
 
 ### 10. Code Compression ✅
 Instead of full `function...`, return: signature, params, returns, deps,
