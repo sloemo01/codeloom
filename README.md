@@ -124,7 +124,7 @@ That's it. Under a second, zero setup, works offline. Cross-platform — macOS, 
 | `codeloom --loom "task"` | Intent engine: layered context for a task (overview→files→code→git→memory) |
 | `codeloom --remember "note" --section X` | Append to persistent repository memory |
 | `codeloom --churn` | Git intelligence: most-edited files (instability signal) |
-| `codeloom --hybrid-search "q"` | Hybrid search: BM25 + structure + git scored together |
+| `codeloom --hybrid-search "q"` | Hybrid search: BM25 + structure + git scored; adds local embeddings if present (opt-in) |
 | `codeloom --seen` | Session memory: already-read files/symbols (skip re-reading) |
 | `codeloom --cross-repo A B ...` | One graph across multiple repos (frontend+backend+SDK) |
 | `codeloom --architecture` | Detect architectural pattern (MVC/layered/DDD/monolith) |

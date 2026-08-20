@@ -2375,24 +2375,78 @@ def _bm25(s: str) -> List[str]:
     """Return lowercased content tokens for BM25-style matching (list)."""
     return list(_tokenize(s))
 
+def _embedding_model():
+    """Lazily load a local embedding model, or None. Zero-dep default: returns
+    None unless the user has opted in with a small local embedding lib. We try
+    several; the first present wins. Never a network call, never mandatory."""
+    try:
+        import os
+        if os.environ.get("CODELOOM_EMBEDDINGS", "").lower() in ("0", "false", "off"):
+            return None
+        try:
+            from fastembed import TextEmbedding  # type: ignore
+            return TextEmbedding(model_name="all-MiniLM-L6-v2")
+        except Exception:
+            pass
+        try:
+            import sentence_transformers  # type: ignore
+            return sentence_transformers.SentenceTransformer("all-MiniLM-L6-v2")
+        except Exception:
+            pass
+    except Exception:
+        return None
+    return None
+
+
+_EMBED_CACHE = {}
+
+
+def _embeddings_available() -> bool:
+    if "model" in _EMBED_CACHE:
+        return _EMBED_CACHE["model"] is not None
+    _EMBED_CACHE["model"] = _embedding_model()
+    return _EMBED_CACHE["model"] is not None
+
+
+def _embed_cosine(a, b) -> float:
+    import math
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a)) or 1.0
+    nb = math.sqrt(sum(x * x for x in b)) or 1.0
+    return dot / (na * nb)
+
+
 def hybrid_search(files: List[str], root: str, query: str, limit: int = 20) -> List[dict]:
     """Hybrid search: BM25 lexical score + structural signals (symbol kind, size,
-    call-graph centrality) + git churn, scored together. Returns ranked symbols.
+    call-graph centrality) + git churn + optional local embeddings, scored
+    together. Returns ranked symbols.
 
     BM25 term scoring on symbol name + module, then boost:
       + exact name match (strongest)
       + symbol kind (class/function are primary; tests/config lower)
       + call-graph degree (referenced more -> more important)
       + git churn on the defining file (recently-active -> more relevant)
+      + embedding similarity (ONLY when a local model is present; zero-dep
+        otherwise — see _embedding_model). Blended at weight 0.6 so lexical
+        still leads.
     """
     # build the byte index
     index = build_byte_index(files, root)
     q_tokens = _bm25(query)
     if not q_tokens:
         return search_symbols(index, query, limit)
-    # corpus idf-ish: a token is rarer -> higher weight
+    # optional local embedding model (cached)
+    model = _EMBED_CACHE.get("model")
+    if model is None:
+        model = _embedding_model()
+        _EMBED_CACHE["model"] = model
+    q_emb = None
+    if model is not None:
+        try:
+            q_emb = list(model.embed([query]))[0]
+        except Exception:
+            q_emb = None
     scores = []
-    calls = None  # lazy: only build if we need centrality
     for name, locs in index.items():
         name_toks = _bm25(name)
         mod_toks = _bm25(locs[0]["module"]) if locs else []
@@ -2409,11 +2463,16 @@ def hybrid_search(files: List[str], root: str, query: str, limit: int = 20) -> L
             continue
         loc = locs[0]
         kind = loc.get("kind", "")
-        # kind boost: classes and primary functions
         kind_b = 1.0 if kind == "class" else (0.8 if kind == "function" else 0.4)
-        # size signal: bigger tokens roughly = more important, cap it
         size_b = min(1.0, 0.2 + (loc.get("tokens", 0) / 2000.0))
         total = lex * kind_b * (0.7 + size_b)
+        if model is not None and q_emb is not None:
+            try:
+                emb = list(model.embed([name + " " + loc.get("module", "")]))[0]
+                sim = _embed_cosine(q_emb, emb)
+                total = total * (1.0 - 0.6) + sim * 0.6 * (lex + 1.0)
+            except Exception:
+                pass
         scores.append({"name": name, "kind": kind, "module": loc["module"],
                        "line": loc.get("line", 0), "score": round(total, 2),
                        "snippet": loc.get("sig", "") or name})
