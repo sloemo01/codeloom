@@ -8,7 +8,12 @@
   <a href="#demo"><img src="https://img.shields.io/badge/see%20it%20run-Demo-brightgreen"/></a>
   <a href="https://github.com/sloemo01/codeloom/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue"/></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.8+-blue"/></a>
+  <a href="https://img.shields.io/badge/python-stdlib%20only-blue"><img src="https://img.shields.io/badge/deps-zero-brightgreen"/></a>
   <a href="https://github.com/sloemo01/codeloom/stargazers"><img src="https://img.shields.io/github/stars/sloemo01/codeloom"/></a>
+</p>
+
+<p align="center">
+  <b>17 agents</b> · <b>130+ languages</b> · <b>57 MCP tools</b> · <b>91s Linux kernel</b>
 </p>
 
 ---
@@ -608,9 +613,43 @@ refactoring candidates, detect dead code, retrieve token-counted snippets,
 extract byte ranges, verify a download, capture runtime call edges, detect the
 framework, and summarize session cost — natively, no install, no index.
 
+## Supported agents
+
+codeloom drops into **17 coding agents** with the exact MCP config each expects.
+`codeloom --install-agent AGENT` prints it; `codeloom --detect-agent` finds
+which one is already configured on your machine:
+
+| Agent | Install | Config format |
+|---|---|---|
+| Claude Code | `codeloom --install-agent claude` | `mcpServers` JSON |
+| Codex | `codeloom --install-agent codex` | `mcpServers` JSON |
+| Cursor | `codeloom --install-agent cursor` | `mcpServers` JSON |
+| Gemini CLI | `codeloom --install-agent gemini` | `mcpServers` JSON |
+| OpenCode | `codeloom --install-agent opencode` | bare `{codeloom:{…}}` |
+| Cline | `codeloom --install-agent cline` | `mcpServers` JSON |
+| OpenHands | `codeloom --install-agent openhands` | TOML `[mcp_servers.codeloom]` |
+| Devin | `codeloom --install-agent devin` | TOML `[mcp_servers.codeloom]` |
+| Hermes Agent | `codeloom --install-agent hermes` | TOML `[mcp_servers.codeloom]` |
+| Aider | `codeloom --install-agent aider` | `mcpServers` JSON |
+| Roo Code | `codeloom --install-agent roo` | `mcpServers` JSON |
+| Windsurf | `codeloom --install-agent windsurf` | `mcpServers` JSON |
+| Amazon Q Developer | `codeloom --install-agent amazon-q` | `mcpServers` JSON |
+| JetBrains IDEs | `codeloom --install-agent jetbrains` | `mcpServers` JSON |
+| Junie | `codeloom --install-agent junie` | `mcpServers` JSON |
+| Kimi CLI | `codeloom --install-agent kimi` | `mcpServers` JSON |
+| Qwen Code | `codeloom --install-agent qwen` | `mcpServers` JSON |
+
 ## How it works
 
-codeloom is a single Python file using only the standard library:
+codeloom is **three parts working together**, all zero-dependency:
+
+| Part | Language | Role |
+|---|---|---|
+| `codeloom.py` | **Python** (stdlib) | The engine — walks, parses, graphs, and the CLI |
+| `codeloom-mcp.py` | **Python** (stdlib) | The MCP server your agent calls as native tools |
+| `codeloom_core.c` | **C** (optional) | The compiled accelerator — faster scan, native watcher, resident server |
+
+**Python (stdlib only).** The core CLI and engine use only the standard library:
 
 - **Tree + outlines** — walks the repo, respects `.gitignore` (full pattern
   support: negation, anchoring, `**`, dir-only), guards against symlink loops,
@@ -629,6 +668,20 @@ codeloom is a single Python file using only the standard library:
   repeated runs only re-parse changed files.
 - **MCP server** — a minimal JSON-RPC 2.0 stdio transport, so any MCP client
   can call codeloom without installing the `mcp` package.
+
+**Shell (macOS / Linux / Windows).** The CLI is a plain command you run from any
+shell — `codeloom .`, `codeloom --ask "task" .`, `codeloom --export map.json .`.
+No daemon, no background process, no network. It reads your files, computes the
+structure, prints it, and exits.
+
+**C (optional accelerator).** For huge monorepos, `codeloom_core.c` is a
+compile-once accelerator you build yourself (`cc -O3 -o codeloom_core
+codeloom_core.c`) and opt into with `--engine c`. It does a faster
+multi-language file-walk + symbol + call + import scan (sharded across cores),
+a **native recursive file watcher** (`--watch-core`, kqueue/inotify), and a
+**C-resident index server** (`--serve`) that answers symbol lookups sub-ms with
+zero Python per query. The default pure-Python path stays zero-dependency; the C
+core is strictly optional. Build it once, audit it from the committed source.
 
 No indexing daemon, no background process, no network. It reads your files,
 computes the structure, prints it, and exits.
@@ -816,6 +869,12 @@ the fastest way to answer "what is this project, actually?"
 - [x] Optional embedding backend (task-scoring precision)
 - [x] Runtime trace mode (`--trace`, static blind spots)
 - [x] Persistent knowledge-graph index (symbols + call/import edges)
+- [x] Framework-aware HTTP routes (`--routes`: METHOD path → handler)
+- [x] Pub-sub / event channel map (`--channels`: EMITS → LISTENS_ON)
+- [x] Portable graph snapshot export (`--export`: commit-and-share)
+- [x] Repo-aware AST depth (`--auto-grammars`: installs grammars for your repo's languages)
+- [x] `--files` find-by-name/glob + `--grep` searches docs (self-maintaining)
+- [x] MCP config for 17 coding agents (`--install-agent` + `--detect-agent`)
 
 ## Benchmarks
 

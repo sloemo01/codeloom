@@ -10,7 +10,10 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
 authors = [{ name = "sloemo01" }]
-keywords = ["ai-agents", "codebase", "mcp", "code-intelligence", "token-savings"]
+keywords = ["ai-agents", "codebase", "mcp", "code-intelligence", "token-savings",
+            "code-graph", "call-graph", "claude-code", "cursor", "codex",
+            "context-engineering", "llm-tooling", "repository-memory",
+            "semantic-search", "tree-sitter", "codebase-memory", "codegraph"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",

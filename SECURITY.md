@@ -50,6 +50,11 @@ the trust surface. Know what each one does:
   falls back to static parsing otherwise.
 - **`--trace CMD`** — runs a command under `sys.settrace`. **Executes code**,
   may have side effects; requires `--force`; run in a sandbox/CI job.
+- **`--routes` / `--channels`** — static, read-only analysis of your files to
+  extract HTTP routes and pub-sub channels. No code executes, nothing is sent.
+- **`--export FILE`** — writes a **local** graph snapshot (symbols + edges +
+  routes + channels) to the file you name. Same pattern as `--write MAP.md`;
+  stays on your machine, never leaves it.
 
 ## The trust model
 
