@@ -519,12 +519,12 @@ at **~0.11s** (index load, no re-parse).
 
 **Tested on the Linux kernel (~28M LOC, 95k files):** with the optional C
 accelerator (`--engine c`), the **full knowledge graph + symbol index builds
-the kernel in ~120s** — 64,814 code files → **3.2M symbols, 408k call/import
+the kernel in ~91s** — 64,814 code files → **3.2M symbols, 408k call/import
 edges**. The C core (one `cc -O3` build, `codeloom_core.c`) does fast
-multi-language file-walk + symbol + call + import extraction; the symbol
-index alone is ~13s. The pure-Python default stays zero-dependency.
-Tree-sitter walks are iterative so deeply-nested kernel source doesn't hit
-the recursion limit.
+multi-language file-walk + symbol + call + import extraction, sharded across
+cores; the symbol index alone is ~13s. The pure-Python default stays
+zero-dependency. Tree-sitter walks are iterative so deeply-nested kernel
+source doesn't hit the recursion limit.
 
 **No cold-start on repeated queries.** `--get-symbol` uses a **lazy per-symbol
 index** (stdlib dbm, one keyed record per symbol) — a single lookup is a

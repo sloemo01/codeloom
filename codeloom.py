@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.39.0"
+VERSION = "0.40.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -3386,22 +3386,37 @@ def _c_walk(root: str) -> List[str]:
     return [os.path.join(root, l.lstrip("./")) if not os.path.isabs(l) else l for l in out]
 
 def _c_scan(files: List[str]) -> List[dict]:
-    """Run the C core over files (argv mode). Returns per-file dicts
-    {file, symbols:[{name,kind}], imports:[...]}. Empty on any error."""
+    """Run the C core over files. Returns per-file dicts
+    {file, symbols:[{name,kind}], imports:[...], calls:[...]}. Empty on error.
+    Shards the file list across parallel C-core processes (the C core is
+    single-threaded; on a 64k-file kernel repo this turns ~80s of scanning
+    into ~15-20s across cores). Each shard uses stdin mode (no argv limits)."""
     core = _find_core()
     if not core:
         return []
     import subprocess, json as _json
-    # batch in chunks to avoid argv limits on 100k-file repos
-    results = []
-    chunk = 2000
-    for i in range(0, len(files), chunk):
-        batch = files[i:i + chunk]
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _run_shard(shard):
         try:
-            r = subprocess.run([core] + batch, capture_output=True, text=True, timeout=300)
+            payload = "\n".join(shard) + "\n"
+            r = subprocess.run([core], input=payload, capture_output=True, text=True, timeout=600)
+            return r.stdout
         except Exception:
-            continue
-        for line in r.stdout.splitlines():
+            return ""
+
+    results = []
+    workers = max(1, min(os.cpu_count() or 2, 8))
+    if len(files) < 2000 or workers == 1:
+        shards = [files]
+    else:
+        step = (len(files) + workers - 1) // workers
+        shards = [files[i:i + step] for i in range(0, len(files), step)]
+    outputs = []
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        outputs = list(ex.map(_run_shard, shards))
+    for out in outputs:
+        for line in out.splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -3485,12 +3500,15 @@ def _c_kg(files: List[str], root: str, all_defined: set, scan: Optional[List[dic
         "imports": {m: sorted(d) for m, d in graph.items()},
     }
 
-def save_persistent_index(root: str, index: dict, files: List[str], kg: Optional[dict] = None) -> None:
+def save_persistent_index(root: str, index: dict, files: List[str], kg: Optional[dict] = None,
+                          skip_json: bool = False) -> None:
     """Save the persistent index with per-file (mtime, size) for incremental
     refresh. Size is tracked because Windows mtime has ~2s resolution, so a
     quick append may not change mtime — but it always changes size.
     `kg` is the optional knowledge-graph edges (call + import).
-    Writes a binary (marshal) copy for fast load at scale."""
+    Writes a binary (marshal) copy for fast load at scale. `skip_json=True`
+    (used by --engine c) omits the redundant JSON copy — the loader prefers
+    marshal anyway — for a real win on 3M-symbol repos."""
     data = {
         "version": INDEX_VERSION,
         "root": root,
@@ -3513,11 +3531,12 @@ def save_persistent_index(root: str, index: dict, files: List[str], kg: Optional
         save_lazy_index(root, index)
     except Exception:
         pass
-    try:
-        with open(_index_path(root), "w", encoding="utf-8") as f:
-            json.dump(data, f)
-    except OSError:
-        pass
+    if not skip_json:
+        try:
+            with open(_index_path(root), "w", encoding="utf-8") as f:
+                json.dump(data, f)
+        except OSError:
+            pass
     # binary copy for fast load (marshal is stdlib, ~10x faster than json)
     try:
         import marshal
@@ -3680,7 +3699,7 @@ def render_index(files: List[str], root: str, max_files: int, parallel: bool = F
     else:
         index = build_persistent_index(files, root, parallel=parallel)
         kg = build_knowledge_graph(files, root, parallel=parallel)
-    save_persistent_index(root, index, files, kg=kg)
+    save_persistent_index(root, index, files, kg=kg, skip_json=(engine == "c"))
     n_syms = sum(len(v) for v in index.values())
     n_edges = sum(len(v) for v in kg["calls"].values()) + sum(len(v) for v in kg["imports"].values())
     buf = io.StringIO()
