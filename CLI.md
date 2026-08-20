@@ -82,6 +82,7 @@ codeloom [OPTIONS] [ROOT]
 | `--index-status` | Index freshness |
 | `--verify FILE` | SHA-256 checksum |
 | `--install-grammars --yes` | Install tree-sitter grammars (25 languages) |
+| `--auto-grammars` | Scan the repo + install grammars for its languages (beats the manual per-language step) |
 | `--install-agents` | Write AGENTS.md block |
 | `--force` | Acknowledge `--trace` executes code |
 
