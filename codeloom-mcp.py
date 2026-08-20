@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.36.0"
+SERVER_VERSION = "0.37.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -630,6 +630,105 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "codeloom_refactor",
+        "description": (
+            "Refactor engine for a symbol: files touched, dependencies, risk "
+            "assessment (preflight), and suggested safe order."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "symbol": {"type": "string", "description": "Symbol/area to refactor"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+            "required": ["symbol"],
+        },
+    },
+    {
+        "name": "codeloom_bug_predict",
+        "description": (
+            "Bug prediction: files statistically likely to break, scored by "
+            "churn + coupling + complexity. Priority hotfix/refactor targets."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+        },
+    },
+    {
+        "name": "codeloom_timeline",
+        "description": (
+            "Repository timeline: replay architecture evolution via git log — "
+            "who changed what, when."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "limit": {"type": "integer", "description": "Max commits (default 15)"},
+            },
+        },
+    },
+    {
+        "name": "codeloom_dedup",
+        "description": (
+            "Session dedupe: skip files already read this session and return "
+            "only the new delta — saves tokens across repeated calls."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+        },
+    },
+    {
+        "name": "codeloom_plugin_sdk",
+        "description": (
+            "Show the plugin SDK surface: how to write a framework-aware "
+            "extraction hook that extends codeloom."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+            },
+        },
+    },
+    {
+        "name": "codeloom_lsp",
+        "description": (
+            "LSP bridge status: detect installed language servers (pyright, "
+            "clangd, rust-analyzer, gopls...) for optional semantic enrichment. "
+            "codeloom stays zero-dep — LSP is never required."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+            },
+        },
+    },
+    {
+        "name": "codeloom_graph_html",
+        "description": (
+            "Write a local zoomable HTML graph view of imports/calls to "
+            "codeloom-graph.html. Self-contained, no daemon — open in a browser."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 5000)"},
+            },
+        },
+    },
+    {
         "name": "codeloom_session_report",
         "description": (
             "Summarize the local session log: total calls, tokens, and estimated "
@@ -904,6 +1003,27 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         kind = args.get("kind", "readme")
         f = _collect_files(root, max_files)
         text = codeloom.render_auto_docs(f, root, kind)
+    elif name == "codeloom_refactor":
+        sym = args.get("symbol")
+        if not sym:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
+        f = _collect_files(root, max_files)
+        text = codeloom.render_refactor(f, root, sym, max_files)
+    elif name == "codeloom_bug_predict":
+        f = _collect_files(root, max_files)
+        text = codeloom.render_bug_predict(f, root)
+    elif name == "codeloom_timeline":
+        text = codeloom.render_repo_timeline(root, int(args.get("limit", 15)))
+    elif name == "codeloom_dedup":
+        f = _collect_files(root, max_files)
+        text = codeloom.render_dedup(root, f)
+    elif name == "codeloom_plugin_sdk":
+        text = codeloom.render_plugin_sdk(root)
+    elif name == "codeloom_lsp":
+        text = codeloom.render_lsp(root)
+    elif name == "codeloom_graph_html":
+        f = _collect_files(root, max_files)
+        text = codeloom.render_graph_html(f, root)
     elif name == "codeloom_session_report":
         return {"content": [{"type": "text", "text": codeloom.render_session_report(root)}]}
 
