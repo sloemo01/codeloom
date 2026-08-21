@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.54.0"
+SERVER_VERSION = "0.55.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -505,6 +505,39 @@ TOOLS: List[Dict[str, Any]] = [
                 "section": {"type": "string", "description": "ARCHITECTURE|DECISIONS|PATTERNS|CONVENTIONS (default DECISIONS)"},
             },
             "required": ["note"],
+        },
+    },
+    {
+        "name": "codeloom_adr",
+        "description": (
+            "Write a structured Architectural Decision Record (context + decision "
+            "+ status) to .codeloom-memory/adr/. Captures the human 'why' behind "
+            "an architecture choice so it survives compaction and cross-session "
+            "work. List with codeloom_adr_list."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "title": {"type": "string", "description": "ADR title, e.g. 'Use Postgres over MySQL'"},
+                "context": {"type": "string", "description": "The context/problem that motivated the decision"},
+                "decision": {"type": "string", "description": "The decision made"},
+                "status": {"type": "string", "description": "Accepted | Proposed | Superseded (default Accepted)"},
+            },
+            "required": ["title", "decision"],
+        },
+    },
+    {
+        "name": "codeloom_adr_list",
+        "description": (
+            "List all saved Architectural Decision Records. Use before writing a "
+            "new ADR to avoid duplicating an existing decision."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+            },
         },
     },
     {
@@ -1306,6 +1339,17 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if not note:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'note' argument"}]}
         text = codeloom.memory_remember(root, section, note)
+
+    if name == "codeloom_adr":
+        title = args.get("title")
+        decision = args.get("decision")
+        if not title or not decision:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'title'/'decision' arguments"}]}
+        text = codeloom.render_adr(root, title, args.get("context", ""), decision,
+                                   args.get("status", "Accepted"))
+
+    if name == "codeloom_adr_list":
+        text = codeloom.render_adr_list(root)
 
     if name == "codeloom_churn":
         f = _collect_files(root, max_files)

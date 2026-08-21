@@ -5,7 +5,7 @@ so it renders inline on both platforms.
 
 - Demo GIF: `https://raw.githubusercontent.com/sloemo01/codeloom/main/demo.gif`
 - Repo: `https://github.com/sloemo01/codeloom`
-- Latest release: `https://github.com/sloemo01/codeloom/releases/tag/v0.54.0`
+- Latest release: `https://github.com/sloemo01/codeloom/releases/tag/v0.55.0`
 
 ---
 
@@ -36,7 +36,7 @@ What it does:
 - **Zero-install, zero-telemetry, offline** — one stdlib file, no `pip install`, no model downloads, no license validation, no telemetry that phones home. The heavyweight tools can't say that.
 - **Git-diffable** — `codeloom --write MAP.md` produces a reviewable text artifact you commit and diff in PRs. jcodemunch's index is a binary blob.
 - **CI action** — `codeloom --install-agents .` writes AGENTS.md + a GitHub Action that runs `--pack` on every PR and posts the brief as a comment. One line to add.
-- **MCP server** — zero-dep, **59 tools**, resident in-memory knowledge graph + `--watch` incremental refresh (daemon-speed, no daemon).
+- **MCP server** — zero-dep, **61 tools**, resident in-memory knowledge graph + `--watch` incremental refresh (daemon-speed, no daemon).
 - **AST depth, repo-aware** — `--install-grammars --yes` for core languages, or `--auto-grammars` scans the repo and installs grammars for the languages it actually uses (no per-language setup). 130+ extensions via regex/C extraction.
 - **Optional C engine, Linux-kernel scale** — build `codeloom_core.c` once, `--index --engine c` indexes the **full Linux kernel (64k files, 3.2M symbols, 408k edges) in ~91s**. Pure-Python stays zero-dep; the C accelerator is opt-in for huge monorepos.
 
@@ -73,7 +73,7 @@ So I built codeloom: a map of your repo for agents. One file, zero deps, no daem
 • `codeloom --write MAP.md` → a reviewable text artifact you commit and diff in PRs (their index is a binary blob)
 • `codeloom --install-agents .` → writes AGENTS.md + a GitHub Action that posts the `--pack` brief on every PR. One line.
 
-**6/6** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.54.0 released. `--resume` restores your agent's structural context after a compaction. Code-embedded task brief (`--ask`/`--pack`), edit-relevance, 99% token savings, lazy per-symbol index + `--watch`/`--watch-core` (near-resident or native, no daemon), 59 MCP tools, optional C engine + `--serve` — indexes the full Linux kernel (3.2M symbols, 408k edges) in **~91s**. Go use it.
+**6/6** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.55.0 released. `--resume` restores your agent's structural context after a compaction. Code-embedded task brief (`--ask`/`--pack`), edit-relevance, 99% token savings, lazy per-symbol index + `--watch`/`--watch-core` (near-resident or native, no daemon), 61 MCP tools, optional C engine + `--serve` — indexes the full Linux kernel (3.2M symbols, 408k edges) in **~91s**. Go use it.
 
 ---
 
@@ -101,7 +101,7 @@ Also:
 - **Zero-install, zero-telemetry, offline** — one file, no pip, no model downloads, no license checks, no telemetry that phones home
 - **Git-diffable** — `codeloom --write MAP.md` is a reviewable text artifact you commit and diff in PRs
 - **CI action** — `codeloom --install-agents .` writes AGENTS.md + a GitHub Action that posts the `--pack` brief on every PR
-- **MCP server** — zero-dep, 59 tools, resident in-memory knowledge graph + `--watch` incremental refresh (daemon-speed, no daemon)
+- **MCP server** — zero-dep, 61 tools, resident in-memory knowledge graph + `--watch` incremental refresh (daemon-speed, no daemon)
 - **AST depth, repo-aware** — `--auto-grammars` scans the repo and installs grammars for its languages; 130+ extensions via regex/C extraction
 
 Repo: https://github.com/sloemo01/codeloom

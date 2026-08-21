@@ -94,6 +94,8 @@ codeloom [OPTIONS] [ROOT]
 |---|---|
 | `--loom "task"` | Intent engine: layered context (overview→files→code→git→memory) |
 | `--remember "note" --section X` | Append to persistent repository memory |
+| `--adr "title" --context "..." --decision "..."` | Write a structured Architectural Decision Record |
+| `--adr-list` | List saved Architectural Decision Records |
 | `--churn` | Git intelligence: most-edited files (instability signal) |
 | `--hybrid-search "q"` | Hybrid search (BM25 + structure + git scored) |
 | `--seen` / `--dedup` | Session memory: already-read files/symbols |

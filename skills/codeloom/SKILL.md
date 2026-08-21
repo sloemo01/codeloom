@@ -233,6 +233,8 @@ This is the decision guide: given what you're trying to do, which flag serves it
 ### Session / persistence / compaction
 - `codeloom --write MAP.md` — commit the map as a reviewable artifact
 - `codeloom --remember "note" --section X` — persist a conclusion (survives compaction)
+- `codeloom --adr "title" --context "..." --decision "..."` — write a structured Architectural Decision Record (the human "why")
+- `codeloom --adr-list` — list saved ADRs
 - `codeloom --seen` — "what have I already explored?" (avoid re-reading)
 - `codeloom --resume` — restore the structural map after a compaction
 - `codeloom --session` / `--session-report` — log & summarize what was done
@@ -276,7 +278,11 @@ to disk**. Make this a default habit, not an optional step:
    work:** `codeloom --checkpoint "<what you're doing / decided>"` writes the
    uncommitted git diff + status note to `.codeloom-checkpoint.md`. After a
    wipe, `codeloom --checkpoint-restore` brings the in-progress work back.
-6. **Every invocation should log itself:** `codeloom --session` (or rely on the
+6. **Record architectural decisions as structured ADRs:** when you make a
+   design choice, `codeloom --adr "<title>" --context "..." --decision "..."`.
+   This captures the human "why" that a raw code graph can't, and it survives
+   compaction + cross-session work. List with `codeloom --adr-list`.
+7. **Every invocation should log itself:** `codeloom --session` (or rely on the
    MCP server's resident session log) so `--session-report` can later summarize
    what was done and tokens spent.
 

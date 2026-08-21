@@ -786,6 +786,18 @@ class TestCodeLoom(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
+    def test_adr_writes_and_lists(self):
+        # --adr writes a structured record; --adr-list lists it
+        tmp = tempfile.mkdtemp()
+        try:
+            out = codeloom.render_adr(tmp, "Use Postgres", "Need ACID", "Adopt PG16")
+            self.assertIn("ADR-001", out)
+            self.assertIn("Use Postgres", out)
+            listing = codeloom.render_adr_list(tmp)
+            self.assertIn("ADR-001", listing)
+        finally:
+            shutil.rmtree(tmp)
+
     def test_install_grammars_prints(self):
         # without --yes, install_grammars prints the command (doesn't install)
         out = codeloom.install_grammars(do_install=False)

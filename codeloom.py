@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.54.0"
+VERSION = "0.55.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -4714,6 +4714,68 @@ def memory_remember(root: str, section: str, note: str) -> str:
     except OSError as e:
         return f"memory write failed: {e}"
 
+# --------------------------------------------------------------------------- #
+# --adr: Architectural Decision Records (structured, cross-session)
+# --------------------------------------------------------------------------- #
+# Matches codebase-memory's manage_adr: save human architectural constraints
+# (context + decision + status) so they survive alongside the raw codebase
+# graph. Stored as numbered ADR files in .codeloom-memory/adr/.
+ADR_DIR = "adr"
+
+def _adr_dir(root: str) -> str:
+    d = os.path.join(_memory_dir(root), ADR_DIR)
+    if not os.path.isdir(d):
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError:
+            pass
+    return d
+
+def render_adr(root: str, title: str, context: str, decision: str,
+               status: str = "Accepted") -> str:
+    """Write a structured Architectural Decision Record. Returns the ADR text.
+    Survives compaction because it's a file on disk, and it captures the human
+    'why' that a raw code graph can't."""
+    d = _adr_dir(root)
+    # next ADR number
+    n = 1
+    for fn in os.listdir(d):
+        if fn.startswith("ADR-") and fn.endswith(".md"):
+            try:
+                n = max(n, int(fn.split("-")[1].split("_")[0]) + 1)
+            except (ValueError, IndexError):
+                pass
+    safe = re.sub(r"[^A-Za-z0-9]+", "-", title.strip().lower()).strip("-")[:40] or "decision"
+    path = os.path.join(d, f"ADR-{n:03d}_{safe}.md")
+    body = (f"# ADR-{n:03d}: {title}\n\n"
+            f"**Status:** {status}\n\n"
+            f"## Context\n{context.strip()}\n\n"
+            f"## Decision\n{decision.strip()}\n")
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        return f"ADR-{n:03d} written: {path}\n\n{body}"
+    except OSError as e:
+        return f"ADR write failed: {e}\n"
+
+def render_adr_list(root: str) -> str:
+    """--adr-list: list all saved Architectural Decision Records."""
+    d = _adr_dir(root)
+    buf = io.StringIO()
+    buf.write("# codeloom --adr-list\n")
+    adrs = sorted(f for f in os.listdir(d) if f.startswith("ADR-") and f.endswith(".md"))
+    if not adrs:
+        buf.write("  No ADRs yet. Run `codeloom --adr \"<title>\" --context \"...\" --decision \"...\"`.\n")
+        return buf.getvalue()
+    for fn in adrs:
+        try:
+            with open(os.path.join(d, fn), "r", encoding="utf-8") as fh:
+                first = fh.readline().strip()
+            buf.write(f"  {fn}  ({first})\n")
+        except OSError:
+            continue
+    return buf.getvalue()
+
 # git intelligence ---------------------------------------------------------
 def git_churn(root: str, files: List[str], limit: int = 8) -> str:
     """Most-churned files (most git commits touching them) — instability signal."""
@@ -5740,6 +5802,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--loom", metavar="TEXT", help="intent engine: layered context for a task (overview->files->symbols->code->git->memory)")
     p.add_argument("--remember", metavar="NOTE", help="append a note to repository memory (default DECISIONS); use --section ARCHITECTURE|DECISIONS|PATTERNS|CONVENTIONS")
     p.add_argument("--section", metavar="NAME", default="DECISIONS", help="memory section for --remember")
+    p.add_argument("--adr", metavar="TITLE", help="write an Architectural Decision Record (use --context and --decision)")
+    p.add_argument("--context", metavar="TEXT", help="context for --adr")
+    p.add_argument("--decision", metavar="TEXT", help="decision for --adr")
+    p.add_argument("--adr-status", metavar="STATUS", default="Accepted", help="status for --adr (default Accepted)")
+    p.add_argument("--adr-list", action="store_true", help="list saved Architectural Decision Records")
     p.add_argument("--churn", action="store_true", help="git churn: most-edited files (instability signal)")
     p.add_argument("--cross", action="store_true", help="show cross-file call graph (resolved across modules)")
     p.add_argument("--cross-repo", nargs="+", metavar="PATH", help="build a combined knowledge graph across multiple repo roots")
@@ -6287,7 +6354,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
     # --impact / --task / --plan / --pack: task-aware intelligence
-    if args.impact or args.task or args.plan or args.pack or args.check_edit or args.check_delete or args.resume or args.loom or args.remember or args.checkpoint is not None or args.checkpoint_restore:
+    if args.impact or args.task or args.plan or args.pack or args.check_edit or args.check_delete or args.resume or args.loom or args.remember or args.checkpoint is not None or args.checkpoint_restore or args.adr or args.adr_list:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
@@ -6356,6 +6423,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.remember:
             print(memory_remember(root, args.section, args.remember))
+            return 0
+
+        if args.adr_list:
+            print(render_adr_list(root))
+            return 0
+
+        if args.adr:
+            print(render_adr(root, args.adr, args.context or "", args.decision or "",
+                             args.adr_status))
             return 0
 
     if args.churn:
