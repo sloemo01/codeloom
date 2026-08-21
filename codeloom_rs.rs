@@ -9,10 +9,13 @@
 //   codeloom_rs read <root> <sym>    extract the symbol's exact source
 //   codeloom_rs calls <root>         function-level call graph
 //   codeloom_rs imports <root>       import graph
-//   codeloom_rs files <root>         list code files
-//   codeloom_rs json <root> <sym>    structured symbol lookup (for MCP)
+//   codeloom_rs files <root>       list code files
+//   codeloom_rs json <root> <sym>  structured symbol lookup (for MCP)
+//   codeloom_rs cross <a> <b> ...  multi-repo / cross-service graph (path 5)
 //
-// All output is deterministic and token-minimal. MIT © 2026 sloemo01.
+// Plus engine_rs/ (optional cargo project): real tree-sitter AST parsing for
+// 8 major languages (Python/JS/TS/Go/Rust/C/C++/Java), same JSON contract.
+// Kept separate so codeloom.py + codeloom_rs stay dependency-free.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
@@ -490,7 +493,7 @@ fn cmd_json(repo: &Repo, query: &str) {
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("codeloom_rs <map|search|usages|read|calls|imports|files|json> <root> [query]");
+        eprintln!("codeloom_rs <map|search|usages|read|calls|imports|files|json|cross> <root> [roots...] [query]");
         process::exit(1);
     }
     let cmd = args[1].as_str();
@@ -502,13 +505,59 @@ fn main() {
         "files" => cmd_files(&repo),
         "calls" => cmd_calls(&repo),
         "imports" => cmd_imports(&repo),
+        "cross" => cmd_cross(&args[2..]),
         "search" if args.len() > 3 => cmd_search(&repo, &args[3]),
         "usages" if args.len() > 3 => cmd_usages(&repo, &args[3]),
         "read" if args.len() > 3 => cmd_read(&repo, &args[3], false),
         "json" if args.len() > 3 => cmd_json(&repo, &args[3]),
         _ => {
-            eprintln!("codel_oom: usage: codeloom_rs <cmd> <root> [query]");
+            eprintln!("codeloom_rs: usage: codeloom_rs <cmd> <root> [query]");
             process::exit(2);
         }
     }
+}
+
+// ---------------------------------------------------------- cross ----
+// Multi-repo / cross-service analysis: analyze N repo roots together, build a
+// unified cross-repo symbol -> origin map, and report cross-service call edges
+// (a symbol defined in repo A called from repo B). This is the "what breaks
+// across services" primitive.
+fn cmd_cross(roots: &[String]) {
+    let mut mod_of: HashMap<String, String> = HashMap::new(); // symbol -> "repo.module"
+    let mut origins: HashMap<String, String> = HashMap::new(); // symbol -> repo
+    let mut all_calls: Vec<(String, String)> = Vec::new(); // (repo, symbol) calls
+
+    for root in roots {
+        let repo = analyze(root);
+        let root_label = Path::new(root).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| root.clone());
+        for f in &repo.files {
+            let modname = format!("{}.{}", root_label, module_name(root, f));
+            let info = &repo.info[f];
+            for (name, _, _) in &info.symbols {
+                origins.entry(name.clone()).or_insert_with(|| root_label.clone());
+                mod_of.entry(name.clone()).or_insert_with(|| modname.clone());
+            }
+            for c in &info.calls {
+                all_calls.push((root_label.clone(), c.clone()));
+            }
+        }
+    }
+
+    let mut sb = String::new();
+    write!(sb, "# cross-repo graph — {} repo(s)\n", roots.len()).ok();
+    write!(sb, "{} distinct symbols across {} repo(s)\n\n", origins.len(), roots.len()).ok();
+    write!(sb, "## Cross-repo calls (symbol in one service, called from another)\n").ok();
+    let mut shown = 0;
+    for (caller_repo, callee_sym) in &all_calls {
+        if let Some(callee_repo) = origins.get(callee_sym) {
+            if callee_repo != caller_repo {
+                write!(sb, "  {} -> {} (defined in {})\n", caller_repo, callee_sym, callee_repo).ok();
+                shown += 1;
+            }
+        }
+    }
+    if shown == 0 {
+        write!(sb, "  (no cross-repo calls detected — services may be decoupled)\n").ok();
+    }
+    print!("{}", sb);
 }
