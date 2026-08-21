@@ -861,6 +861,13 @@ class TestCodeLoom(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
+    def test_subword_embed_similarity(self):
+        # subword-hash embedding gives fuzzy semantic similarity (typos)
+        self.assertGreater(codeloom._subword_similarity("engine", "engine"), 0.9)
+        self.assertGreater(codeloom._subword_similarity("engine", "engin"), 0.6)
+        self.assertGreater(codeloom._subword_similarity("getengine", "engine"), 0.5)
+        self.assertLess(codeloom._subword_similarity("engine", "banana"), 0.4)
+
     def test_install_grammars_prints(self):
         # without --yes, install_grammars prints the command (doesn't install)
         out = codeloom.install_grammars(do_install=False)

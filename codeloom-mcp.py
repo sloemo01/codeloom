@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.60.0"
+SERVER_VERSION = "0.61.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -252,6 +252,25 @@ TOOLS: List[Dict[str, Any]] = [
                 "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["symbol"],
+        },
+    },
+    {
+        "name": "codeloom_embed_search",
+        "description": (
+            "Fuzzy semantic symbol search using a zero-dependency subword-hash "
+            "embedding (fastText n-gram technique, pure-Python). Finds symbols "
+            "whose identifier is semantically/cosmetically similar to the query "
+            "even on typos, camelCase splits, or cross-language names that exact "
+            "match misses."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "query": {"type": "string", "description": "fuzzy/semantic query, e.g. 'engin' finds Engine"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
+            },
+            "required": ["query"],
         },
     },
     {
@@ -1747,6 +1766,12 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         # use the in-memory index (incremental, always fresh)
         index = _INDEX.symbols(root, max_files)
         text = codeloom.render_search(index, symbol)
+    elif name == "codeloom_embed_search":
+        query = args.get("query")
+        if not query:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'query' argument"}]}
+        f = _collect_files(root, max_files)
+        text = codeloom.render_embed_search(f, root, query)
     elif name == "codeloom_usages":
         symbol = args.get("symbol")
         if not symbol:

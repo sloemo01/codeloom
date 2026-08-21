@@ -141,6 +141,7 @@ python3 codeloom.py --index-status /path/to/repo
 | `--checkpoint-restore` | read the last checkpoint back to resume in-progress work |
 | `--cross` | cross-file call graph (AST-resolved) |
 | `--search X` | search the symbol index (definitions + snippet) |
+| `--embed-search "q"` | fuzzy semantic search (subword-hash embedding, zero-dep — catches typos) |
 | `--usages X` | find where a symbol is used (call sites + snippet) |
 | `--grep X` | search file contents for a snippet (ranked + context) |
 | `--read X` | extract exact source of a symbol (AST / tree-sitter / brace-match) |

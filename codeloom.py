@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.60.0"
+VERSION = "0.61.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -425,6 +425,74 @@ def _embedding_backend():
             return [d["embedding"] for d in data["data"]]
         return _api
     return None
+
+# --- Zero-dependency subword-hash embedding (fastText n-gram trick) ---------
+# Borrowed technique from facebookresearch/fastText (MIT): map subword n-grams
+# (2-6 chars) of an identifier into a fixed-size hash bucket, sum -> normalize.
+# This gives a *local, always-available* semantic embedding with NO neural net
+# and NO pip deps — enough to do fuzzy/"semantic" symbol search that plain
+# string match misses (typos, camelCase/snake_case splits, partial names).
+#------------------------------------------------------------------------------
+
+def _subword_hashes(word: str, dim: int = 256) -> List[float]:
+    """FastText-style subword n-gram hash embedding. Pure-Python, zero-dep.
+    Returns a normalized vector over `dim` buckets. Always available."""
+    vec = [0.0] * dim
+    w = word.lower()
+    # word-level n-grams 2..6 + the full word
+    grams = [w]
+    for n in range(2, 7):
+        if len(w) >= n:
+            for i in range(len(w) - n + 1):
+                grams.append(w[i:i+n])
+    for g in grams:
+        # fnv-1a hash -> bucket
+        h = 2166136261
+        for ch in g.encode("utf-8", "replace"):
+            h ^= ch
+            h = (h * 16777619) & 0xFFFFFFFF
+        idx = h % dim
+        # sign-symmetry so similar hashes land near each other
+        vec[idx] += 1.0 if (h & 1) else -1.0
+    # L2 normalize
+    norm = sum(v*v for v in vec) ** 0.5
+    if norm > 0:
+        vec = [v / norm for v in vec]
+    return vec
+
+def _subword_similarity(a: str, b: str) -> float:
+    """Cosine similarity of two subword-hash embeddings (0..1)."""
+    va = _subword_hashes(a)
+    vb = _subword_hashes(b)
+    return sum(x*y for x, y in zip(va, vb))
+
+def render_embed_search(files: List[str], root: str, query: str, limit: int = 15) -> str:
+    """--embed-search: fuzzy semantic symbol search via subword-hash embeddings.
+    Finds symbols whose identifier is semantically/cosmetically similar to the
+    query even when the strings don't exactly match (typos, case splits,
+    cross-language naming). Zero-dependency — always works."""
+    index = build_byte_index(files, root)
+    scored = []
+    for name, locs in index.items():
+        sim = _subword_similarity(query, name)
+        # also match against the module name for relevance
+        mod = locs[0].get("module", "") if locs else ""
+        mod_sim = _subword_similarity(query, mod)
+        score = max(sim, mod_sim * 0.7)
+        if score >= 0.35:  # semantic-ish threshold
+            scored.append({"name": name, "module": mod, "score": round(score, 3),
+                           "line": locs[0].get("line", 0) if locs else 0})
+    scored.sort(key=lambda x: -x["score"])
+    buf = io.StringIO()
+    buf.write(f"# embed search: {query}  (subword-hash semantic similarity)\n")
+    if not scored:
+        buf.write("  No semantically-similar symbols found. Try --search for exact matches.\n")
+        return buf.getvalue()
+    buf.write(f"{len(scored)} semantically-similar symbol(s) (zero-dep subword embedding):\n\n")
+    for r in scored[:limit]:
+        buf.write(f"  {r['name']}  [{r['module']}:{r['line']}]  (sim {r['score']})\n")
+    buf.write("\n# Catches typos, camelCase splits, and cross-language names that exact match misses.\n")
+    return buf.getvalue()
 
 def _cosine_sim(a, b):
     """Cosine similarity between two vectors (stdlib, no numpy needed)."""
@@ -6271,7 +6339,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--churn", action="store_true", help="git churn: most-edited files (instability signal)")
     p.add_argument("--cross", action="store_true", help="show cross-file call graph (resolved across modules)")
     p.add_argument("--cross-repo", nargs="+", metavar="PATH", help="build a combined knowledge graph across multiple repo roots")
-    p.add_argument("--search", metavar="SYMBOL", help="search the symbol index for a function/class/method")
+    p.add_argument("--search", metavar="SYMBOL", help="search the symbol index (definitions + snippet)")
+    p.add_argument("--embed-search", metavar="QUERY", help="fuzzy semantic symbol search (subword-hash embedding, zero-dep)")
     p.add_argument("--hybrid-search", metavar="QUERY", help="hybrid search: BM25 lexical + structural signals scored together")
     p.add_argument("--seen", action="store_true", help="session memory: report already-read files/symbols to avoid re-reading")
     p.add_argument("--usages", metavar="SYMBOL", help="find where a symbol is used (not just defined)")
@@ -6705,7 +6774,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     # --cross / --search / --usages / --grep / --read / --explain / --similar / --deadcode / --get-symbol
-    if args.cross or args.search or args.usages or args.grep or args.read \
+    if args.cross or args.search or args.embed_search or args.usages or args.grep or args.read \
        or args.explain or args.similar or args.deadcode or args.get_symbol or args.precision:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
@@ -6756,6 +6825,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             index = cached_symbols(files, root, cache)
             save_cache(root, cache)
             print(render_search(index, args.search))
+            return 0
+
+        if args.embed_search:
+            print(render_embed_search(files, root, args.embed_search))
             return 0
 
         if args.usages:
