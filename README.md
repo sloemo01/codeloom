@@ -805,48 +805,40 @@ and offline operation** as the default.
 
 ## Why it's different
 
-Honest comparison against the field. codeloom wins decisively on the axis
-that matters for everyday agent work: **task-shaped context, zero install,
-compaction survival, and Linux-kernel-class index speed** — while keeping a
-single zero-dependency file.
+Honest comparison against the field — every competitor cell checked against
+that project's own repo this week (full source-cited matrix in
+[docs/COMPETITION.md](docs/COMPETITION.md)). codeloom wins on: **zero-dep
+single file under MIT, fixture-proven grammar quality, memory depth, and the
+widest surface behind a 1-tool agent interface** — while stating plainly where
+each competitor is ahead.
 
 | | codeloom | jcodemunch | codegraph | codebase-memory-mcp |
 |---|---|---|---|---|
-| Install | **one file, copy it** | `pip install` + MCP + deps | compiled Rust binary | `pip install` + deps |
-| Setup | none | index once | watch/daemon | indexing daemon |
-| Runs on | **stdlib only** (C core opt-in) | tree-sitter + index | Rust + SQLite + FTS5 | compiled C engine |
-| Time to first result | **< 1s** | after indexing | after indexing | after indexing |
-| Always fresh | **yes (reads live)** | re-index | native watcher | re-index |
-| **Linux kernel index** | **~91s** (`--engine c`) | — | Rust tree-sitter build | ~180s (3 min) |
-| **Task context (`--ask`)** | **yes — complete brief** | no | no | no |
-| **Compaction survival (`--resume`)** | **yes** | no | no | no |
-| **Code-embedded `--pack`** | **yes** | partial | no | partial |
-| **Reading plan (`--plan`)** | **yes** | no | no | no |
-| **Blast radius (`--impact`/`--refactor`/`--rename`)** | **yes** | partial | yes | yes |
-| **Token-shaving (`--get-symbol` summary-first, 99% savings)** | **yes** | partial (full source) | no | partial |
-| **Byte-range snippets (`--snippet`)** | **yes** | yes | no | partial |
-| Import graph | **yes — `--graph`** | partial | yes | yes |
-| Cross-file call graph | **yes — `--cross`** | yes | yes | yes |
-| Symbol index / search | **yes — `--search`** | yes | yes | yes |
-| **Hybrid search (semantic opt-in)** | **yes** | no | no | yes |
-| **Graph precision (`--precision`)** | **yes** | no | no | no |
-| **Repo memory (`--remember`/`--loom`)** | **yes** | no | no | no |
-| Native file watcher | **yes — `--watch-core`** | no | yes | — |
-| Sub-ms resident lookups | **yes — `--serve`** | yes | yes | yes |
-| **Runtime call edges (`--trace`)** | **yes** | no | no | no |
-| **Structural pattern search (`--pattern`)** | **yes** | no | no | no |
-| **Change-risk score (`--risk`)** | **yes** | no | no | no |
-| **Code health screen (`--health`, 0.2s)** | **yes** | partial | no | partial |
-| Offline | **yes** | yes | yes | yes |
-| Tree-sitter grammars | **51 dispatched / 46 fixture-proven** | varies | 20 | ~158 claimed |
-| **MCP tools** | **77** (+1 NL router) | 91 actions (6 routers) | ~10 | varies |
+| License | **MIT** | dual-use (paid commercial) | MIT | MIT |
+| Install | **one file, stdlib-only** | pip + deps + index store | bundled runtime binary | single static binary |
+| MCP surface | **77 tools + 1 NL router** | 90+ actions via 6 routers | **1 listed tool** + 7 unlisted | 15 |
+| Tree-sitter languages | **50 / 46 fixture-gated in CI** | 70+ claimed (no per-lang tests seen) | 20, byte-for-byte verified | **158 vendored** |
+| Time to first result | **<1s** | after indexing | after watcher init | after indexing |
+| Freshness | reads-live + watcher→merge pipe | watch modes + hooks + VS Code ext | watcher default-on | daemon-owned watchers |
+| Compaction-survival memory | ✅ decision ledger (`--decide/--checkpoint/--resume/--supersede`) | ❌ | ✅ session memory + learning/SKILL.md | ❌ (daemon coordinates, doesn't remember) |
+| Structural pattern search | ✅ `$VAR`/`$$$REST` capture | ✅ `search_ast` presets + DSL | ❌ | ❌ |
+| Change-risk on PRs | ✅ `--risk` + PR bot task briefs | ✅ `get_pr_risk_profile` | blast-radius inline | risk classification |
+| Health screen speed | **0.01–0.2s**, heuristic-labeled | hotspots/dead-code | inline | hotspots/Louvain |
+| Offline semantic search | ✅ zero-dep subword-hash | opt-in embeddings | ❌ | ✅ bundled Nomic weights |
+| Token-efficiency evidence | replay bench w/ published loss row; live run pending | A/B: success 80% vs 72% | sealed −44%; honest residual-context disclosure (+80% resident) | arXiv eval: 10× fewer tokens |
 | Zero-dependency single file | **yes** | no | no | no |
 
-The heavyweight tools are great at retrieval — but they're *search engines*,
-not *task-orientation engines*. codeloom does retrieval (token-shaving, byte
-offsets) *and* tells the agent what matters, what breaks, and what to read
-first — the reasoning the search tools don't do. And it's the fastest possible
-structural context, in one file, in under a second, always fresh.
+The heavyweight tools are great at retrieval — but codeloom pairs retrieval
+with *task orientation* and *agent working memory*, keeps the whole thing in
+one auditable file, and gates every shipped grammar with CI fixtures.
+
+**Where each competitor is genuinely ahead (stated plainly):** jcodemunch has
+broader safety preflight (`check_edit_safe`/`check_delete_safe`, SCIP
+compiler-verified references, secret redaction). codegraph has the community
+scale (67k★), byte-for-byte graph verification culture, and publishes honest
+residual-context research. codebase-memory ships 158 vendored grammars,
+bundled embeddings, Cypher queries, IaC indexing, and an arXiv-published eval.
+Full detail: [docs/COMPETITION.md](docs/COMPETITION.md).
 
 **On tool count (verified by driving the actual jcodemunch server):** jcodemunch
 exposes **6 MCP tools** (`set_tool_tier`, `announce_model`, `jcodemunch_guide`,
