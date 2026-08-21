@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.55.0"
+VERSION = "0.56.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -3846,14 +3846,31 @@ def render_precision(files: List[str], root: str, symbol: str) -> str:
 _CORE_NAME = "codeloom_core"
 
 def _find_core() -> Optional[str]:
-    """Locate the compiled codeloom_core binary next to codeloom.py or on PATH."""
+    """Locate the compiled codeloom_core binary next to codeloom.py or on PATH.
+    If it's not built, auto-build it from the committed codeloom_core.c source
+    (no download — compiles locally with cc). Returns None only if cc is
+    unavailable or the source is missing."""
     here = os.path.dirname(os.path.abspath(__file__))
     cands = [os.path.join(here, _CORE_NAME), os.path.join(here, _CORE_NAME + ".exe")]
     for c in cands:
         if os.path.isfile(c) and os.access(c, os.X_OK):
             return c
     import shutil
-    return shutil.which(_CORE_NAME)
+    on_path = shutil.which(_CORE_NAME)
+    if on_path:
+        return on_path
+    # not built — auto-build from committed source (integrated, no download)
+    core_src = os.path.join(here, "codeloom_core.c")
+    if os.path.isfile(core_src) and shutil.which("cc"):
+        import subprocess as _sp
+        out = os.path.join(here, _CORE_NAME)
+        try:
+            r = _sp.run(["cc", "-O3", "-o", out, core_src], capture_output=True, text=True, timeout=120)
+            if r.returncode == 0 and os.path.isfile(out):
+                return out
+        except Exception:
+            pass
+    return None
 
 def _c_walk(root: str) -> List[str]:
     """List code files via the C core's fast walker (--list ROOT). Falls back

@@ -157,7 +157,7 @@ python3 codeloom.py --index-status /path/to/repo
 | `--install-grammars` | install tree-sitter grammars (opt-in precision) |
 | `--install-grammars --yes` | actually run pip install (one-command) |
 | `--index` | build + save a persistent knowledge graph (symbols + call/import edges) |
-| `--index --engine c` | use the compiled C accelerator (build `cc -O3 -o codeloom_core codeloom_core.c`) — Linux kernel ~91s |
+| `--index --engine c` | use the compiled C accelerator (auto-builds from codeloom_core.c on first use) — Linux kernel ~91s |
 | `--auto-grammars` | scan repo + install grammars for its languages (repo-aware AST depth) |
 | `--ask "task"` | one-shot complete task brief: loom + blast radius + files-to-touch |
 | `--rename OLD NEW` | what a rename touches: definitions, files, dependents, edges |

@@ -701,14 +701,16 @@ shell — `codeloom .`, `codeloom --ask "task" .`, `codeloom --export map.json .
 No daemon, no background process, no network. It reads your files, computes the
 structure, prints it, and exits.
 
-**C (optional accelerator).** For huge monorepos, `codeloom_core.c` is a
-compile-once accelerator you build yourself (`cc -O3 -o codeloom_core
-codeloom_core.c`) and opt into with `--engine c`. It does a faster
-multi-language file-walk + symbol + call + import scan (sharded across cores),
-a **native recursive file watcher** (`--watch-core`, kqueue/inotify), and a
-**C-resident index server** (`--serve`) that answers symbol lookups sub-ms with
-zero Python per query. The default pure-Python path stays zero-dependency; the C
-core is strictly optional. Build it once, audit it from the committed source.
+**C (integrated accelerator).** For huge monorepos, `codeloom_core.c` is a
+compile-once accelerator that **auto-builds on first use** — `_find_core()`
+compiles it from the committed source (`cc -O3 -o codeloom_core
+codeloom_core.c`) the first time you use `--engine c`, no manual step, no
+download. It does a faster multi-language file-walk + symbol + call + import
+scan (sharded across cores), a **native recursive file watcher**
+(`--watch-core`, kqueue/inotify), and a **C-resident index server** (`--serve`)
+that answers symbol lookups sub-ms with zero Python per query. The default
+pure-Python path stays zero-dependency; the C core is strictly optional and
+compiles from the auditable committed source.
 
 No indexing daemon, no background process, no network. It reads your files,
 computes the structure, prints it, and exits.
