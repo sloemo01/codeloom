@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.56.0"
+SERVER_VERSION = "0.57.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -1206,6 +1206,98 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
         if any(k in q for k in ["dependencies", "imports", "what touches"]):
             return {"content": [{"type": "text", "text": codeloom.render_graph(codeloom.build_graph(files, root), root)}]}
         return {"content": [{"type": "text", "text": codeloom.render_text(codeloom.build_map(root, True, max_files))}]}
+
+    # 4. HTTP routes / pub-sub — "what endpoints / what channels"
+    if any(k in q for k in ["http route", "endpoint", "api route", "what routes", "url pattern",
+                            "rest api", "get post put delete", "web framework routes"]):
+        return {"content": [{"type": "text", "text": codeloom.render_routes(root, max_files)}]}
+    if any(k in q for k in ["pub sub", "pubsub", "event channel", "emits", "listens on",
+                            "socket.io", "kafka", "rabbitmq", "message queue", "event emitter"]):
+        return {"content": [{"type": "text", "text": codeloom.render_channels(root, max_files)}]}
+
+    # 5. Framework / architecture / docs
+    if any(k in q for k in ["what framework", "which framework", "framework", "web stack"]):
+        return {"content": [{"type": "text", "text": codeloom.render_framework(root, max_files)}]}
+    if any(k in q for k in ["architecture", "big picture", "overall design", "system design",
+                            "how is this organized", "layers"]):
+        return {"content": [{"type": "text", "text": codeloom.render_architecture(files, root)}]}
+    if any(k in q for k in ["generate readme", "write readme", "make docs", "documentation",
+                            "arch doc", "architecture doc"]):
+        kind = "arch" if any(k in q for k in ["arch", "architecture doc"]) else "readme"
+        return {"content": [{"type": "text", "text": codeloom.render_auto_docs(files, root, kind)}]}
+
+    # 6. Rename / refactor / similar / deadcode / precision
+    if any(k in q for k in ["rename", "what does renaming", "rename impact"]):
+        import re as _re
+        m = _re.findall(r"([A-Za-z_][\w.]*)", q.replace("rename", "").replace("what does renaming", ""))
+        if len(m) >= 2:
+            return {"content": [{"type": "text", "text": codeloom.render_rename(files, root, m[0], m[1])}]}
+        return {"content": [{"type": "text", "text": codeloom.render_rename(files, root, m[0] if m else "", "new")}]}
+    if any(k in q for k in ["refactor", "how to refactor", "refactoring"]):
+        import re as _re
+        m = _re.search(r"([A-Za-z_][\w.]*)", q.replace("refactor", "").replace("how to refactor", ""))
+        return {"content": [{"type": "text", "text": codeloom.render_refactor(files, root, m.group(1) if m else "")}]}
+    if any(k in q for k in ["similar", "same shape", "similar function", "similar class", "duplicate"]):
+        import re as _re
+        m = _re.search(r"([A-Za-z_][\w.]*)", q.replace("similar", "").replace("same shape", ""))
+        return {"content": [{"type": "text", "text": codeloom.render_similar(files, root, m.group(1) if m else "")}]}
+    if any(k in q for k in ["dead code", "unused", "never called", "deadcode"]):
+        return {"content": [{"type": "text", "text": codeloom.render_deadcode(files, root)}]}
+    if any(k in q for k in ["precision", "confidence", "class relationship", "implements", "overrides"]):
+        import re as _re
+        m = _re.search(r"([A-Za-z_][\w.]*)", q.replace("precision", ""))
+        return {"content": [{"type": "text", "text": codeloom.render_precision(files, root, m.group(1) if m else "")}]}
+
+    # 7. Memory / persistence / compaction — the "never forgets" layer
+    if any(k in q for k in ["remember", "save this", "note this", "record that", "write down"]):
+        import re as _re
+        note = q.replace("remember", "").replace("save this", "").replace("note this", "").replace("record that", "").replace("write down", "").strip()
+        section = "DECISIONS"
+        if any(k in q for k in ["architecture"]):
+            section = "ARCHITECTURE"
+        elif any(k in q for k in ["pattern"]):
+            section = "PATTERNS"
+        elif any(k in q for k in ["convention"]):
+            section = "CONVENTIONS"
+        return {"content": [{"type": "text", "text": codeloom.memory_remember(root, section, note or q)}]}
+    if any(k in q for k in ["what did i remember", "my memory", "read memory", "what do i know"]):
+        return {"content": [{"type": "text", "text": codeloom.memory_read(root)}]}
+    if any(k in q for k in ["adr", "architectural decision", "record decision", "decision record"]):
+        if any(k in q for k in ["list", "what adrs", "show adrs"]):
+            return {"content": [{"type": "text", "text": codeloom.render_adr_list(root)}]}
+        import re as _re
+        m = _re.search(r"adr[:\s]+([A-Za-z0-9 _-]+)", q)
+        title = m.group(1).strip() if m else "Decision"
+        return {"content": [{"type": "text", "text": codeloom.render_adr(root, title, "", "recorded via ask")}]}
+    if any(k in q for k in ["checkpoint", "save my progress", "snapshot my work", "in progress"]):
+        import re as _re
+        note = q.replace("checkpoint", "").replace("save my progress", "").replace("snapshot my work", "").strip()
+        return {"content": [{"type": "text", "text": codeloom.render_checkpoint(root, note or None)}]}
+    if any(k in q for k in ["restore checkpoint", "resume my work", "what was i doing", "checkpoint restore"]):
+        return {"content": [{"type": "text", "text": codeloom.render_checkpoint_restore(root)}]}
+    if any(k in q for k in ["resume", "restore context", "compaction", "i forgot", "where was i", "structural map"]):
+        return {"content": [{"type": "text", "text": codeloom.render_resume(files, root, max_files)}]}
+    if any(k in q for k in ["what have i explored", "what did i read", "seen", "already read"]):
+        return {"content": [{"type": "text", "text": codeloom.render_seen(root)}]}
+    if any(k in q for k in ["session report", "what did i do", "session summary", "tokens spent", "cost"]):
+        return {"content": [{"type": "text", "text": codeloom.render_session_report(root)}]}
+
+    # 8. Export / cross-repo / context-diff / files / langs
+    if any(k in q for k in ["export", "share graph", "snapshot", "portable graph"]):
+        import re as _re
+        m = _re.search(r"export[:\s]+([\w./-]+)", q)
+        out = m.group(1) if m else os.path.join(root, "codeloom-snapshot.json")
+        return {"content": [{"type": "text", "text": codeloom.render_export(root, out, max_files)}]}
+    if any(k in q for k in ["cross repo", "across repos", "multiple repos", "services", "frontend and backend"]):
+        return {"content": [{"type": "text", "text": codeloom.render_cross_repo([root], max_files)}]}
+    if any(k in q for k in ["context diff", "branch diff", "what changed between", "architecture diff"]):
+        return {"content": [{"type": "text", "text": codeloom.render_context_diff(root)}]}
+    if any(k in q for k in ["find file", "which file", "file named", "locate file", "glob"]):
+        import re as _re
+        m = _re.search(r"([\w.*/]+)", q.replace("find file", "").replace("which file", "").replace("file named", "").replace("locate file", ""))
+        return {"content": [{"type": "text", "text": codeloom.render_files(files, root, m.group(1) if m else "*")}]}
+    if any(k in q for k in ["what languages", "supported languages", "langs"]):
+        return {"content": [{"type": "text", "text": codeloom.render_langs()}]}
 
     # 4. Default — map + task relevance (never an error, always useful)
     map_text = codeloom.render_text(codeloom.build_map(root, True, max_files))
