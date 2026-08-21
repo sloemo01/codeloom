@@ -167,6 +167,7 @@ python3 codeloom.py --index-status /path/to/repo
 | `--routes` | extract HTTP routes: METHOD path → handler (framework-aware) |
 | `--channels` | pub-sub / event channel map (EMITS → LISTENS_ON) |
 | `--export FILE` | export a portable graph snapshot (symbols + edges + routes + channels) |
+| `--query "callers X"` | fast structural query against the persisted graph (callers/callees/hubs/routes) |
 | `--files GLOB` | find files by name/glob: `--files engine` or `--files "*.py"` |
 | `--watch` | incremental daemon-less refresh (re-index only changed files) |
 | `--index-status` | show persistent index status/freshness |

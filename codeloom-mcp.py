@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.57.0"
+SERVER_VERSION = "0.58.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -924,6 +924,22 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "codeloom_query",
+        "description": (
+            "Fast structural query against the persisted graph (build with --index "
+            "first): callers X, callees X, dependents X, hubs, routes, symbol X. "
+            "One graph query replaces many file scans — sub-ms once indexed."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "query": {"type": "string", "description": "e.g. 'callers Engine', 'hubs', 'routes', 'dependents auth'"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "codeloom_context_diff",
         "description": (
             "Branch-to-branch architecture-level diff: which modules changed "
@@ -1397,6 +1413,11 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'glob' argument"}]}
         f = _collect_files(root, max_files)
         text = codeloom.render_files(f, root, glob)
+    elif name == "codeloom_query":
+        query = args.get("query")
+        if not query:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'query' argument"}]}
+        text = codeloom.render_query(root, query)
     elif name == "codeloom_context_diff":
         base = args.get("base", "main")
         head = args.get("head", "HEAD")

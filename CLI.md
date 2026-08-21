@@ -106,6 +106,7 @@ codeloom [OPTIONS] [ROOT]
 | `--routes` | Extract HTTP routes: METHOD path → handler (framework-aware) |
 | `--channels` | Pub-sub/event channel map (EMITS → LISTENS_ON) |
 | `--export FILE` | Export a portable graph snapshot |
+| `--query "callers X"` | Fast structural query against the persisted graph |
 | `--docs readme\|arch` | Generate a README or ARCHITECTURE doc |
 | `codeloom --refactor X` | Refactor engine: files, deps, risk, order for symbol X |
 | `codeloom --rename OLD NEW` | What a rename touches: definitions, files, dependents, edges |

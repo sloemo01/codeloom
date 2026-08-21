@@ -798,6 +798,21 @@ class TestCodeLoom(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
+    def test_query_runs_structural_queries(self):
+        # --query answers structural questions from the persisted graph
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, "a.py"), "w") as f:
+                f.write("def helper():\n    pass\n\ndef main():\n    helper()\n")
+            files = [os.path.join(tmp, "a.py")]
+            codeloom.save_persistent_index(tmp, {}, files, kg={"calls": {"main": ["helper"]}, "imports": {}})
+            out = codeloom.render_query(tmp, "callers helper")
+            self.assertIn("main", out)
+            out2 = codeloom.render_query(tmp, "callees main")
+            self.assertIn("helper", out2)
+        finally:
+            shutil.rmtree(tmp)
+
     def test_install_grammars_prints(self):
         # without --yes, install_grammars prints the command (doesn't install)
         out = codeloom.install_grammars(do_install=False)

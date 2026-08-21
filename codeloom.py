@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.57.0"
+VERSION = "0.58.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -281,10 +281,16 @@ def _ensure_grammars_for_root(root: str) -> str:
     """BEAT-THE-TRADEOFF: scan the repo for its actual code extensions and
     auto-install just the tree-sitter grammars those languages need, in one
     shot. No per-language manual trigger. Returns a summary. Only installs
-    grammars that have a known package in _EXT_GRAMMAR_PKG. Opt-in via
-    CODELOOM_AUTO_INSTALL_GRAMMARS=1 (never touches the system without it)."""
-    if os.environ.get("CODELOOM_AUTO_INSTALL_GRAMMARS") != "1":
-        return "Auto-install off (set CODELOOM_AUTO_INSTALL_GRAMMARS=1 to auto-install grammars for this repo's languages).\n"
+    grammars that have a known package in _EXT_GRAMMAR_PKG.
+
+    INTEGRATED (default-on) since v0.58.0: it auto-installs only the *missing*
+    grammars for this repo's actual languages, so AST depth is automatic. It
+    only pip-installs the first time it encounters a language without a
+    grammar, then is a no-op. Set CODELOOM_AUTO_INSTALL_GRAMMARS=0 to disable
+    (fully opt-out), or =1 to force (the old opt-in behavior)."""
+    # opt-out via CODELOOM_AUTO_INSTALL_GRAMMARS=0; default is ON
+    if os.environ.get("CODELOOM_AUTO_INSTALL_GRAMMARS", "1").lower() in ("0", "false", "off"):
+        return "Auto-install off (set CODELOOM_AUTO_INSTALL_GRAMMARS=1 to enable).\n"
     if not _TS_AVAILABLE:
         return "tree-sitter not installed. Run: codeloom --install-grammars --yes\n"
     # discover the repo's extensions
@@ -4217,6 +4223,99 @@ def render_index(files: List[str], root: str, max_files: int, parallel: bool = F
     buf.write(f"  subsequent --get-symbol/--search/--cross/--deadcode load it in milliseconds\n")
     return buf.getvalue()
 
+def render_query(root: str, query: str) -> str:
+    """Fast structural query against the persisted knowledge graph — no re-walk.
+    Loads the saved index (symbols + call/import edges) and answers:
+      callers X | callees X | dependents X | hubs | routes | symbol X
+    This is the 'one graph query replaces many greps' primitive: sub-ms once the
+    index exists, mirroring codebase-memory's fast structural queries."""
+    import time
+    t0 = time.time()
+    pidx = load_persistent_index(root)
+    if pidx is None:
+        return ("No persistent index. Run `codeloom --index` first, then "
+                "queries answer in milliseconds.\n")
+    q = query.strip()
+    ql = q.lower()
+    buf = io.StringIO()
+    buf.write(f"# codeloom --query \"{query}\"  ({time.time() - t0:.0f}ms load)\n")
+    kg = pidx.get("kg", {})
+    calls = kg.get("calls", {}) or {}
+    imports = kg.get("imports", {}) or {}
+    symbols = pidx.get("symbols", {}) or {}
+
+    def _resolve_sym(s):
+        if s in calls or s in symbols:
+            return s
+        # suffix-match module names
+        for name in list(calls) + list(symbols):
+            if name.endswith(s) or s in name.split(".")[-1]:
+                return name
+        return s
+
+    # query types
+    if ql.startswith("callers "):
+        sym = _resolve_sym(q[8:].strip())
+        hits = [m for m, cs in calls.items() if sym in cs]
+        buf.write(f"## Callers of {sym}\n")
+        for m in sorted(hits):
+            buf.write(f"  {m}\n")
+        if not hits:
+            buf.write("  (none)\n")
+        buf.write(f"\n  {len(hits)} caller(s) — 1 query vs N file scans.\n")
+        return buf.getvalue()
+    if ql.startswith("callees"):
+        sym = _resolve_sym(q[7:].strip())
+        callees = sorted(calls.get(sym, []))
+        buf.write(f"## Callees of {sym}\n")
+        for c in callees:
+            buf.write(f"  {c}\n")
+        buf.write(f"\n  {len(callees)} callee(s).\n")
+        return buf.getvalue()
+    if ql.startswith("dependents") or ql.startswith("depends on"):
+        sym = _resolve_sym(q.split(" ", 1)[1].strip())
+        hits = [m for m, deps in imports.items() if sym in deps]
+        buf.write(f"## Dependents of {sym}\n")
+        for m in sorted(hits):
+            buf.write(f"  {m}\n")
+        if not hits:
+            buf.write("  (none)\n")
+        buf.write(f"\n  {len(hits)} dependent(s).\n")
+        return buf.getvalue()
+    if ql.startswith("hubs"):
+        # most-depended-on modules (change these -> breaks many)
+        from collections import Counter
+        dep_count = Counter()
+        for deps in imports.values():
+            for d in deps:
+                dep_count[d] += 1
+        buf.write("## Hub modules (most-depended-on — change these -> breaks many)\n")
+        for m, n in dep_count.most_common(10):
+            buf.write(f"  {m} ({n} importers)\n")
+        return buf.getvalue()
+    if ql.startswith("routes"):
+        return render_routes(root)
+    if ql.startswith("symbol "):
+        sym = q[7:].strip()
+        locs = symbols.get(sym)
+        buf.write(f"## Symbol {sym}\n")
+        if locs:
+            for l in locs[:10]:
+                buf.write(f"  {l.get('module', '?')}:{l.get('line', '?')}\n")
+        else:
+            buf.write("  not found in index\n")
+        return buf.getvalue()
+    # default: fuzzy — show matching callers/callees for any symbol in the query
+    words = [w for w in re.findall(r"[A-Za-z_][\w.]*", q) if w.lower() not in
+             {"callers", "callees", "dependents", "depends", "on", "hubs",
+              "routes", "symbol", "of", "the", "who", "calls", "what", "uses"}]
+    if words:
+        sym = _resolve_sym(words[-1])
+        if sym:
+            return render_query(root, f"callers {sym}")
+    return ("Query not recognized. Try: 'callers X', 'callees X', "
+            "'dependents X', 'hubs', 'routes', 'symbol X'.\n")
+
 def render_index_status(root: str) -> str:
     """Show whether a persistent index exists and how fresh it is."""
     data = load_persistent_index(root)
@@ -5854,6 +5953,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--watch-core", metavar="ROOT", help="native C file watcher (kqueue/inotify): print changed code files live")
     p.add_argument("--serve", metavar="ROOT", help="C-resident index server: answer symbol lookups sub-ms (no Python per query)")
     p.add_argument("--index-status", action="store_true", help="show persistent index status/freshness")
+    p.add_argument("--query", metavar="Q", help="fast structural query against the persisted graph: callers X, callees X, dependents X, hubs, routes")
     p.add_argument("--framework", action="store_true", help="detect framework + surface routes/models/config/conventions")
     p.add_argument("--routes", action="store_true", help="extract HTTP routes: METHOD path -> handler (framework-aware)")
     p.add_argument("--channels", action="store_true", help="pub-sub / event channel map (EMITS -> LISTENS_ON)")
@@ -5898,6 +5998,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     # --index-status: show persistent index status
     if args.index_status:
         print(render_index_status(root))
+        return 0
+
+    # --query: fast structural query against the persisted graph (no re-walk)
+    if args.query:
+        print(render_query(root, args.query))
         return 0
 
     # --framework: detect the web/app framework and surface its structure
@@ -6056,8 +6161,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             files = _c_walk(root)  # C walker — much faster on huge repos
             if not files:
                 _walk(root, rules, args.max_files, files)
+            # integrated: ensure AST grammars for the repo's languages (default-on)
+            _ensure_grammars_for_root(root)
         else:
             _walk(root, rules, args.max_files, files)
+            _ensure_grammars_for_root(root)
         print(render_index(files, root, args.max_files, parallel=args.parallel, engine=args.engine))
         return 0
 
