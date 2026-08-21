@@ -92,7 +92,7 @@ def touched_health(files, cap: int = 9000) -> str:
     if not paths:
         return "No code files to screen."
     out = run_codeloom(
-        "python3 codeloom.py --health " + " ".join(f"'{p}'" for p in paths[:20]),
+        "python3 codeloom.py . --health " + " ".join(f"'{p}'" for p in paths[:20]),
         cap=cap)
     # keep headline + worst-file lines only
     keep: list = []
@@ -139,7 +139,8 @@ def new_symbols(revspec: str, files) -> str:
 
 SECURITY_PATTERNS = [
     (r"eval\(|exec\(", "dynamic execution (`eval`/`exec`)"),
-    (r"(password|secret|api_key|token)\s*=\s*[\"'][^\"']{8,}", "possible hardcoded secret"),
+    (r"(?i)(password|secret|api_key|apikey|auth_token)\s*[=:]\s*[\"'][^\"']{8,}[\"']",
+     "possible hardcoded secret"),
     (r"http://(?!localhost|127\.0\.0\.1)", "insecure http:// URL"),
     (r"subprocess\.\w+\([^)]*shell\s*=\s*True", "shell=True subprocess"),
 ]
@@ -147,6 +148,7 @@ SECURITY_PATTERNS = [
 
 def security_sweep(revspec: str, files) -> str:
     findings = []
+    self_path = "scripts/pr_bot.py"
     for path, _, _ in files[:40]:
         patch = sh(f"git diff '{revspec}' -- '{path}'")
         for pat, label in SECURITY_PATTERNS:
@@ -154,6 +156,11 @@ def security_sweep(revspec: str, files) -> str:
             for line in hits:
                 if re.search(pat, line):
                     snippet = line[1:].strip()[:110]
+                    # don't flag the bot's own pattern definitions
+                    if path == self_path and ("SECURITY_PATTERNS" in snippet
+                                              or "insecure http" in snippet
+                                              or "hardcoded secret" in snippet):
+                        continue
                     findings.append((path, label, snippet))
     if not findings:
         return ("✅ Clean — no `eval`, hardcoded secrets, insecure URLs, or "
@@ -195,7 +202,7 @@ def checklist(files, sec_findings_clean: bool, risk_body: str) -> str:
                      "reviewable chunks.")
     if total_d > max(total_a * 2, 100):
         items.append(f"Deletion-heavy (−{total_d}) — confirm removals are intended.")
-    if "critical" in risk_body or "[high]" in risk_body:
+    if re.search(r"\[(high|critical)\]", risk_body):
         items.append("Risk band is high/critical — request a second reviewer.")
     if not sec_findings_clean:
         items.append("Security sweep flagged lines above — verify each one.")
