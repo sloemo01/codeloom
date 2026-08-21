@@ -33,7 +33,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.71.0"
+SERVER_VERSION = "0.72.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -359,6 +359,25 @@ TOOLS: List[Dict[str, Any]] = [
                 "revspec": {"type": "string", "description": "Commit or range, e.g. HEAD~1..HEAD, main..feature"},
                 "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
+        },
+    },
+    {
+        "name": "codeloom_pattern",
+        "description": (
+            "Structural AST pattern search (ast-grep-style, zero-dep): find "
+            "every code site matching a code shape. $VAR captures one node, "
+            "$$$REST captures lists. Example: 'try: $B except Exception: pass' "
+            "finds over-broad exception handlers with the handler body bound. "
+            "Python files; no external binary needed."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "pattern": {"type": "string", "description": "Code pattern with $VAR / $$$REST metavariables"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
+            },
+            "required": ["pattern"],
         },
     },
     {
@@ -1957,6 +1976,11 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     elif name == "codeloom_risk":
         revspec = args.get("revspec") or "HEAD~1..HEAD"
         text = codeloom.render_change_risk(files, root, revspec)
+    elif name == "codeloom_pattern":
+        pattern = args.get("pattern")
+        if not pattern:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'pattern' argument"}]}
+        text = codeloom.render_pattern_search(files, root, pattern)
     elif name == "codeloom_usages":
         symbol = args.get("symbol")
         if not symbol:

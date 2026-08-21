@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.71.0"
+VERSION = "0.72.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -3947,6 +3947,152 @@ def render_change_risk(files: List[str], root: str, revspec: str = "HEAD~1..HEAD
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
+# Structural pattern search (ast-grep-style, pure-Python over real ASTs).
+# Pattern syntax: $NAME captures one identifier/expression, $$$BODY captures a
+# rest-arg. Example: "try: $BODY except Exception: pass" or "$F($$$A)".
+# Neither codebase-memory nor codegraph ship this; ast-grep needs its binary.
+# We match on Python via the stdlib ast module — zero deps, always available.
+# --------------------------------------------------------------------------- #
+
+def _pattern_to_ast(pattern: str):
+    """Compile a pattern like '$F($$$ARGS)' into an AST template with
+    metavariables marked. Returns (tree, meta_names) or None if unparseable."""
+    import ast as _ast
+    import re as _re
+    # $ / $$$ aren't valid Python identifier chars — swap to safe placeholders
+    # (__codo_meta_NAME) before parsing, so '$F($$$ARGS)' becomes parseable.
+    def _sub(m):
+        return "__codo_meta_" + (m.group(1) or m.group(2))
+    safe = _re.sub(r"\$\$\$([A-Za-z_][A-Za-z0-9_]*)|\$([A-Za-z_][A-Za-z0-9_]*)", _sub, pattern)
+    tree = None
+    # expressions first ($F($$$ARGS)); statements second (try/except blocks)
+    for mode in ("eval", "exec"):
+        try:
+            parsed = _ast.parse(safe.strip(), mode=mode)
+            tree = parsed.body[0] if mode == "exec" else parsed.body
+            break
+        except SyntaxError:
+            continue
+    if tree is None:
+        return None
+    return (tree, [])
+
+
+def _ast_matches(template, node, binds: dict) -> bool:
+    """Structural match of template against node; metavariables bind."""
+    import ast as _ast
+    META = "__codo_meta_"
+    # metavariable: matches anything, records binding
+    if isinstance(template, _ast.Name) and template.id.startswith(META):
+        raw = template.id[len(META):]
+        key = raw[3:] if raw.startswith("rest_") else raw
+        if raw.startswith("rest_"):
+            binds.setdefault(key, []).append(node)
+            return True
+        prev = binds.get(key)
+        if prev is not None and not isinstance(prev, _ast.AST):
+            return False  # multi-bind conflict
+        binds[key] = node
+        return True
+    if type(template) is not type(node):
+        return False
+    for field in template._fields:
+        tv = getattr(template, field)
+        nv = getattr(node, field)
+        if isinstance(tv, _ast.AST):
+            if not isinstance(nv, _ast.AST):
+                return False
+            if not _ast_matches(tv, nv, binds):
+                return False
+        elif isinstance(tv, list):
+            if not isinstance(nv, list):
+                return False
+            ti = ni = 0
+            while ti < len(tv):
+                t_item = tv[ti]
+                if isinstance(t_item, _ast.Name) and t_item.id.startswith("__codo_meta_rest_"):
+                    rest_key = t_item.id[len("__codo_meta_rest_"):]
+                    binds[rest_key] = nv[ni:]
+                    ti += 1
+                    ni = len(nv)  # $$$ consumes the remainder
+                    break
+                if ni >= len(nv):
+                    return False
+                if isinstance(t_item, _ast.AST):
+                    if not isinstance(nv[ni], _ast.AST):
+                        return False
+                    if not _ast_matches(t_item, nv[ni], binds):
+                        return False
+                elif tv[ti] != nv[ni]:
+                    return False
+                ti += 1
+                ni += 1
+            else:
+                if ni != len(nv):
+                    return False
+        elif tv != nv:
+            return False
+    return True
+
+
+def render_pattern_search(files: List[str], root: str, pattern: str,
+                          limit: int = 30) -> str:
+    """--pattern: structural search. Finds every code site whose AST matches
+    the pattern shape, with captured metavariables shown per hit."""
+    import ast as _ast
+    compiled = _pattern_to_ast(pattern)
+    if compiled is None:
+        return "# pattern search\n\nunparseable pattern: %r\n" % pattern
+    template, _metas = compiled
+
+    hits = []
+    t0 = time.time()
+    for f in files:
+        ext = os.path.splitext(f)[1].lower()
+        if ext != ".py":
+            continue  # v1: Python ASTs (stdlib); other langs via regex fallback
+        try:
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                src = fh.read()
+            tree = _ast.parse(src)
+        except (SyntaxError, OSError):
+            continue
+        for node in _ast.walk(tree):
+            binds: dict = {}
+            if _ast_matches(template, node, binds):
+                line = getattr(node, "lineno", 0)
+                snippet = src.splitlines()[line - 1].strip()[:120] if line else ""
+                caps = {}
+                for k, v in binds.items():
+                    if v is None:
+                        continue
+                    try:
+                        caps[k] = (_ast.unparse(v[0])[:60]
+                                   if isinstance(v, list) and v
+                                   else _ast.unparse(v)[:60])
+                    except Exception:
+                        caps[k] = "..."
+                hits.append({"file": os.path.relpath(f, root), "line": line,
+                             "snippet": snippet, "captures": caps})
+                if len(hits) >= limit:
+                    break
+        if len(hits) >= limit:
+            break
+    dt = time.time() - t0
+
+    buf = io.StringIO()
+    buf.write("# pattern search — %r (%d match(es), %.2fs, zero LLM)\n\n"
+              % (pattern, len(hits), dt))
+    if not hits:
+        buf.write("No structural matches.\n")
+        return buf.getvalue()
+    for h in hits:
+        buf.write("%s:%d  %s\n" % (h["file"], h["line"], h["snippet"]))
+        for k, v in h["captures"].items():
+            buf.write("    $%s = %s\n" % (k, v))
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
 # Incremental / indexed mode (hash-based cache, no daemon)
 # --------------------------------------------------------------------------- #
 
@@ -6984,6 +7130,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--health", action="store_true", help="code health screen: 0-10 per file, deterministic detectors, zero LLM")
     p.add_argument("--risk", metavar="REVSPEC", nargs="?", const="HEAD~1..HEAD", default=None,
                    help="change-risk report for a commit/range (default HEAD~1..HEAD)")
+    p.add_argument("--pattern", metavar="PATTERN", help="structural AST search: $VAR captures, $$$REST captures lists (Python)")
     p.add_argument("--hybrid-search", metavar="QUERY", help="hybrid search: BM25 lexical + structural signals scored together")
     p.add_argument("--seen", action="store_true", help="session memory: report already-read files/symbols to avoid re-reading")
     p.add_argument("--usages", metavar="SYMBOL", help="find where a symbol is used (not just defined)")
@@ -7509,7 +7656,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # --cross / --search / --usages / --grep / --read / --explain / --similar / --deadcode / --get-symbol
     if args.cross or args.search or args.embed_search or args.context_card or args.answer \
-       or args.why or args.health or args.risk is not None or args.usages or args.grep or args.read \
+       or args.why or args.health or args.risk is not None or args.pattern or args.usages or args.grep or args.read \
        or args.explain or args.similar or args.deadcode or args.get_symbol or args.precision:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
@@ -7584,6 +7731,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.risk is not None:
             print(render_change_risk(files, root, args.risk))
+            return 0
+
+        if args.pattern:
+            print(render_pattern_search(files, root, args.pattern))
             return 0
 
         if args.usages:

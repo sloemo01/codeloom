@@ -1157,6 +1157,34 @@ class TestCodeLoom(unittest.TestCase):
                     pass
             shutil.rmtree(tmp, onerror=_force_remove)
 
+    def test_pattern_search_finds_structural_matches(self):
+        # ast-grep-style structural search: $F($$$A) matches any call and
+        # binds the function + args; exact-shape patterns miss non-matches
+        tmp = tempfile.mkdtemp()
+        try:
+            f = os.path.join(tmp, "app.py")
+            with open(f, "w") as fh:
+                fh.write("import os\n"
+                         "result = eval(user_input)\n"
+                         "safe = len(items)\n"
+                         "other = os.getcwd()\n")
+            files = [f]
+            # any call shape
+            out = codeloom.render_pattern_search(files, tmp, "$F($$$ARGS)")
+            self.assertIn("eval", out)
+            self.assertIn("len", out)
+            self.assertIn("$F =", out)          # captures bound
+            # exact call: only eval( matches
+            out2 = codeloom.render_pattern_search(files, tmp, "eval($X)")
+            self.assertIn("eval", out2)
+            self.assertNotIn("len(", out2.split("$F")[0] if "$F" in out2 else out2)
+            self.assertIn("$X =", out2)
+            # no match case
+            out3 = codeloom.render_pattern_search(files, tmp, "nonexistent_fn($Q)")
+            self.assertIn("No structural matches", out3)
+        finally:
+            shutil.rmtree(tmp)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
