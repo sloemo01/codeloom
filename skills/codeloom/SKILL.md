@@ -184,6 +184,76 @@ python3 codeloom.py --index-status /path/to/repo
 `--focus` accepts a file path, package dir, or dotted module name
 (`browser_use/agent`, `browser_use/agent/service.py`, `agent.service`).
 
+## Use cases (what each command is FOR — pick by the agent's goal)
+
+This is the decision guide: given what you're trying to do, which flag serves it.
+
+### Understand a codebase (onboarding, unfamiliar repo)
+- `codeloom` — the 30-second map: tree + one-liners + entry points. **Start here**
+  on any repo you've never seen.
+- `codeloom --graph` — import dependency graph: "what touches what."
+- `codeloom --calls` / `--cross` — execution flow: "what calls what, across files."
+- `codeloom --framework` — what web framework, its routes, models, config, conventions.
+- `codeloom --architecture` / `--heatmap` — big-picture pattern and dependency smells.
+- `codeloom --explain-topic X` / `--loom X` / `--ask X` — understand one domain end-to-end.
+
+### Find code (retrieval)
+- `codeloom --search X` — "where is symbol X defined?"
+- `codeloom --usages X` — "where is X called/used?"
+- `codeloom --grep "text"` — "where does this exact code/string appear?" (ranked, snippet)
+- `codeloom --files "engine"` / `--files "*.py"` — "find the file by name/glob"
+- `codeloom --read X` — "show me X's exact source, token-efficiently"
+- `codeloom --get-symbol X` — "smallest snippet for X + its token cost" (summary-first)
+- `codeloom --snippet P S E` — "extract bytes S–E from file P"
+
+### Understand one symbol
+- `codeloom --explain X` — plain-English role of X (AST + call graph, no LLM)
+- `codeloom --similar X` — refactoring candidates with the same shape
+- `codeloom --precision X` — call edges with confidence + class relationships
+- `codeloom --deadcode` — "what's defined but never called?"
+
+### Plan a change (before editing — the safety layer)
+- `codeloom --task "desc"` — rank files relevant to the task
+- `codeloom --impact X` — blast radius: "what breaks if I change X?"
+- `codeloom --plan "task"` — prioritized reading order for the task
+- `codeloom --pack "task"` / `--ask "task"` — the complete one-shot task brief
+  (relevant files + embedded code + impact + files-to-touch)
+- `codeloom --check-edit X` / `--check-delete X` — GO/CHECK/STOP safety verdict
+- `codeloom --refactor X` — refactor engine: files, deps, risk, safe order
+- `codeloom --rename OLD NEW` — what a rename touches (blast radius for renames)
+
+### Web / backend architecture
+- `codeloom --routes` — "what HTTP endpoints exist, METHOD path → handler"
+- `codeloom --channels` — "what pub-sub/event channels, EMITS → LISTENS_ON"
+- `codeloom --cross-repo A B` — one graph across services (frontend + backend + SDK)
+- `codeloom --context-diff BASE HEAD` — branch-to-branch architecture diff
+
+### Session / persistence / compaction
+- `codeloom --write MAP.md` — commit the map as a reviewable artifact
+- `codeloom --remember "note" --section X` — persist a conclusion (survives compaction)
+- `codeloom --seen` — "what have I already explored?" (avoid re-reading)
+- `codeloom --resume` — restore the structural map after a compaction
+- `codeloom --session` / `--session-report` — log & summarize what was done
+- `codeloom --incremental` — "what changed since my last run?"
+
+### Scale / freshness / speed
+- `codeloom --index` — build a persistent graph once, then query in ms
+- `codeloom --index --engine c` / `--watch-core` / `--serve` — C accelerator,
+  native watcher, sub-ms resident server (huge monorepos)
+- `codeloom --index-status` — is the index fresh?
+- `codeloom --watch` — daemon-less incremental refresh
+
+### Maintenance / trust
+- `codeloom --install-agents` — write AGENTS.md + CI action
+- `codeloom --install-agent AGENT` — print MCP config for 17 agents
+- `codeloom --detect-agent` — which agent is already configured
+- `codeloom --install-grammars --yes` / `--auto-grammars` — tree-sitter AST depth
+- `codeloom --trace CMD --force` — capture runtime call edges static misses
+- `codeloom --verify FILE` — confirm a download is the official checksum
+- `codeloom --export FILE` — write a shareable graph snapshot teammates can clone
+- `codeloom --json` — machine-readable output for tooling
+- `codeloom --docs readme|arch` — generate a README or ARCHITECTURE doc
+
 ## Procedure
 
 ### 0. Compaction-survival habit (do this in EVERY session)
@@ -238,7 +308,7 @@ to disk**. Make this a default habit, not an optional step:
 ```bash
 python3 tests.py
 ```
-Expect `OK` (currently 11 tests). Add tests for any new feature.
+Expect `OK` (currently 57 tests). Add tests for any new feature.
 
 ### 4. Re-record the demo GIF
 1. Edit `demo.tape` to showcase the features you want (map, graph+focus, calls, diff).
@@ -268,7 +338,7 @@ Expect `OK` (currently 11 tests). Add tests for any new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (45 tests).
+- `python3 tests.py` → `OK` (57 tests).
 - `codeloom --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codeloom --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codeloom --task "text" <root>` returns a ranked module list.
