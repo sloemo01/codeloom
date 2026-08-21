@@ -36,7 +36,7 @@
 </p>
 
 <p align="center">
-  <b>17 agents</b> · <b>53 tree-sitter languages</b> · <b>100+ via regex fallback</b> · <b>74 MCP tools</b> · <b>91s Linux kernel</b>
+  <b>17 agents</b> · <b>50 tree-sitter languages</b> (46 fixture-proven) · <b>100+ regex fallback</b> · <b>77 MCP tools</b> · <b>91s Linux kernel</b>
 </p>
 
 ---
@@ -838,7 +838,7 @@ single zero-dependency file.
 | **Change-risk score (`--risk`)** | **yes** | no | no | no |
 | **Code health screen (`--health`, 0.2s)** | **yes** | partial | no | partial |
 | Offline | **yes** | yes | yes | yes |
-| Tree-sitter grammars | **53 compiled / 46 fixture-proven** | varies | 20 | ~158 claimed |
+| Tree-sitter grammars | **51 dispatched / 46 fixture-proven** | varies | 20 | ~158 claimed |
 | **MCP tools** | **77** (+1 NL router) | 91 actions (6 routers) | ~10 | varies |
 | Zero-dependency single file | **yes** | no | no | no |
 
