@@ -87,21 +87,26 @@ def diff_digest(files) -> str:
 
 
 def touched_health(files, cap: int = 9000) -> str:
-    """Run --health over just the touched files."""
-    paths = [f for f, _, _ in files]
-    if not paths:
+    """--health over the repo, filtered down to the touched files."""
+    touched = {f for f, _, _ in files}
+    if not touched:
         return "No code files to screen."
-    out = run_codeloom(
-        "python3 codeloom.py . --health " + " ".join(f"'{p}'" for p in paths[:20]),
-        cap=cap)
-    # keep headline + worst-file lines only
-    keep: list = []
-    for i, line in enumerate(out.splitlines()):
-        keep.append(line)
-        if line.startswith("## Worst files") or line.startswith("## Top"):
-            keep.extend(out.splitlines()[i + 1:i + 9])
-            break
-    return "\n".join(keep) or out
+    out = run_codeloom("python3 codeloom.py --health .", cap=cap)
+    if not out or out == "(no output)":
+        return "(no output)"
+    lines = out.splitlines()
+    keep: list = [l for l in lines[:2] if l.startswith("#")]  # headline
+    # per-file finding lines look like "  path — N findings" / worst-file rows
+    for line in lines:
+        for p in list(touched)[:20]:
+            base = os.path.basename(p)
+            if base in line and ("finding" in line or "/10" in line):
+                keep.append(line)
+                break
+    if len(keep) <= 1:
+        return ("✅ No structural health findings in the "
+                f"{len(touched)} touched file(s).")
+    return "\n".join(keep)
 
 
 NEW_SYMBOL_RE = re.compile(r"^\+\s*(?:async\s+)?def\s+([A-Za-z_]\w*)"
