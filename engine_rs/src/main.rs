@@ -51,6 +51,28 @@ fn lang_for(path: &str) -> Option<(tree_sitter::Language, &'static [&'static str
         Some((tree_sitter_bash::LANGUAGE.into(), &["function_definition"]))
     } else if lower.ends_with(".lua") {
         Some((tree_sitter_lua::LANGUAGE.into(), &["function_declaration"]))
+    } else if lower.ends_with(".dart") {
+        Some((tree_sitter_dart::LANGUAGE.into(), &["function_declaration", "class_declaration", "method_signature"]))
+    } else if lower.ends_with(".hs") || lower.ends_with(".lhs") {
+        Some((tree_sitter_haskell::LANGUAGE.into(), &["function", "class_declaration", "type_signature"]))
+    } else if lower.ends_with(".html") || lower.ends_with(".htm") {
+        Some((tree_sitter_html::LANGUAGE.into(), &["element", "script_element", "style_element"]))
+    } else if lower.ends_with(".css") || lower.ends_with(".scss") || lower.ends_with(".less") {
+        Some((tree_sitter_css::LANGUAGE.into(), &["rule_set", "class_selector", "id_selector"]))
+    } else if lower.ends_with(".json") {
+        Some((tree_sitter_json::LANGUAGE.into(), &["object", "pair"]))
+    } else if lower.ends_with(".yaml") || lower.ends_with(".yml") {
+        Some((tree_sitter_yaml::LANGUAGE.into(), &["block_mapping", "block_sequence"]))
+    } else if lower.ends_with(".graphql") || lower.ends_with(".gql") {
+        Some((tree_sitter_graphql::LANGUAGE.into(), &["object_type_definition", "field_definition"]))
+    } else if lower.ends_with(".swift") {
+        Some((tree_sitter_swift::LANGUAGE.into(), &["function_declaration", "class_declaration", "struct_declaration", "enum_declaration"]))
+    } else if lower.ends_with(".d") {
+        Some((tree_sitter_d::LANGUAGE.into(), &["function_declaration", "class_declaration"]))
+    } else if lower.ends_with(".ml") || lower.ends_with(".mli") {
+        Some((tree_sitter_ocaml::LANGUAGE_OCAML.into(), &["value_definition", "module_definition", "type_definition"]))
+    } else if lower.ends_with(".sol") {
+        Some((tree_sitter_solidity::LANGUAGE.into(), &["contract_declaration", "function_definition"]))
     } else {
         None
     }

@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.65.0"
+VERSION = "0.66.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -522,6 +522,7 @@ def _neural_embedding(texts: List[str]) -> Optional[List[List[float]]]:
     import shutil as _sh
     import subprocess as _sp
     import os as _os
+    import json as _json
     binp = _os.environ.get("CODELOOM_GGML_BIN") or _sh.which("llama-embedding") or _sh.which("main")
     model = _os.environ.get("CODELOOM_GGML_MODEL")
     if not binp or not model:
@@ -529,12 +530,20 @@ def _neural_embedding(texts: List[str]) -> Optional[List[List[float]]]:
     try:
         vecs = []
         for t in texts:
-            r = _sp.run([binp, "-m", model, "-p", t, "--embedding"], capture_output=True, text=True, timeout=30)
+            # modern llama-embedding: --embd-output-format array --pooling mean
+            r = _sp.run(
+                [binp, "-m", model, "-p", t, "--embd-output-format", "json", "--pooling", "mean"],
+                capture_output=True, text=True, timeout=60,
+            )
             if r.returncode != 0:
                 return None
-            # parse the trailing embedding vector
-            line = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
-            nums = [float(x) for x in line.replace("[", "").replace("]", "").split() if _is_float(x)]
+            out = r.stdout
+            # parse: look for a JSON array of floats in the output
+            import re as _re
+            m = _re.search(r"\[[\s\-\d.,eE+]+\]", out)
+            if not m:
+                return None
+            nums = [float(x) for x in m.group(0).replace("[", "").replace("]", "").split(",") if x.strip()]
             if not nums:
                 return None
             vecs.append(nums)
