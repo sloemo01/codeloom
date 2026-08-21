@@ -26,18 +26,19 @@ import sys
 MARKER = "<!-- codeloom-pr-bot:v1 -->"
 
 
-def sh(cmd: str, timeout: int = 120) -> str:
+def sh(cmd: list, timeout: int = 120) -> str:
+    """Run an argv-style command (no shell) — safe against path injection."""
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+        r = subprocess.run(cmd, capture_output=True, text=True,
                            timeout=timeout)
         return (r.stdout or "")
     except subprocess.TimeoutExpired:
         return ""
 
 
-def run_codeloom(cmd: str, cap: int = 16000) -> str:
-    """Run a codeloom CLI command; return stdout truncated, never fatal."""
-    out = sh(cmd, timeout=180).strip()
+def run_codeloom(args: list, cap: int = 16000) -> str:
+    """Run codeloom with argv args (no shell); return stdout truncated."""
+    out = sh([sys.executable, "codeloom.py"] + args, timeout=180).strip()
     if not out:
         return "(no output)"
     out = out.replace(MARKER, "")
@@ -56,7 +57,8 @@ def section(title: str, body: str) -> str:
 
 def changed_files(revspec: str):
     """[(path, adds, dels)] for code files in the range."""
-    raw = sh(f"git diff --numstat '{revspec}'")
+    base, _, head = revspec.partition("..")
+    raw = sh(["git", "diff", "--numstat", base or "HEAD~1", head or "HEAD"])
     files = []
     for line in raw.splitlines():
         parts = line.split("\t")
@@ -87,22 +89,24 @@ def diff_digest(files) -> str:
 
 
 def touched_health(files, cap: int = 9000) -> str:
-    """--health over the repo, filtered down to the touched files."""
+    """--health over the repo, filtered down to the touched files.
+
+    Matches ANY line that names a touched file (covers both summary rows
+    like 'path — N findings' and finding-detail rows like
+    '[dead_symbol] path:12'), so nothing is dropped by format drift."""
     touched = {f for f, _, _ in files}
+    basenames = {os.path.basename(f): f for f in touched}
     if not touched:
         return "No code files to screen."
-    out = run_codeloom("python3 codeloom.py --health .", cap=cap)
+    out = run_codeloom(["--health", "."], cap=cap)
     if not out or out == "(no output)":
         return "(no output)"
     lines = out.splitlines()
-    keep: list = [l for l in lines[:2] if l.startswith("#")]  # headline
-    # per-file finding lines look like "  path — N findings" / worst-file rows
+    keep = [l for l in lines[:2] if l.startswith("#")]  # headline
     for line in lines:
-        for p in list(touched)[:20]:
-            base = os.path.basename(p)
-            if base in line and ("finding" in line or "/10" in line):
+        if any(base in line for base in basenames):
+            if line not in keep:
                 keep.append(line)
-                break
     if len(keep) <= 1:
         return ("✅ No structural health findings in the "
                 f"{len(touched)} touched file(s).")
@@ -117,10 +121,15 @@ NEW_SYMBOL_RE = re.compile(r"^\+\s*(?:async\s+)?def\s+([A-Za-z_]\w*)"
 
 
 def new_symbols(revspec: str, files) -> str:
-    """Symbols introduced by this PR, with caller counts via --usages."""
+    """Symbols introduced by this PR, with caller counts via --usages.
+
+    Caller counts parse the codeloom output structurally (count of
+    non-header lines) instead of grepping for keywords."""
+    base, _, head = revspec.partition("..")
+    lo, hi = base or "HEAD~1", head or "HEAD"
     names = []
     for path, _, _ in files[:30]:
-        patch = sh(f"git diff '{revspec}' -- '{path}'")
+        patch = sh(["git", "diff", lo, hi, "--", path])
         for m in NEW_SYMBOL_RE.finditer(patch):
             n = next(g for g in m.groups() if g)
             if n not in names and not n.startswith("_"):
@@ -130,9 +139,12 @@ def new_symbols(revspec: str, files) -> str:
     rows = ["| symbol | callers found |", "|---|---|"]
     orphans = 0
     for n in names[:12]:
-        u = sh(f"python3 codeloom.py --usages '{n}' . | grep -c 'call\\|use' || true")
-        cnt = u.strip() or "0"
-        if cnt in ("0", ""):
+        u = sh([sys.executable, "codeloom.py", "--usages", n, "."])
+        # count result lines that are neither headers nor the summary line
+        cnt = sum(1 for l in u.splitlines()
+                  if l.strip() and not l.startswith("#")
+                  and "definition(s)" not in l and "usage" not in l.lower())
+        if cnt <= 0:
             orphans += 1
             rows.append(f"| `{n}` | ⚠️ none — dead on arrival? |")
         else:
@@ -154,8 +166,10 @@ SECURITY_PATTERNS = [
 def security_sweep(revspec: str, files) -> str:
     findings = []
     self_path = "scripts/pr_bot.py"
+    base, _, head = revspec.partition("..")
+    lo, hi = base or "HEAD~1", head or "HEAD"
     for path, _, _ in files[:40]:
-        patch = sh(f"git diff '{revspec}' -- '{path}'")
+        patch = sh(["git", "diff", lo, hi, "--", path])
         for pat, label in SECURITY_PATTERNS:
             hits = re.findall(r"^\+.*$", patch, re.M)  # added lines only
             for line in hits:
@@ -211,8 +225,6 @@ def checklist(files, sec_findings_clean: bool, risk_body: str) -> str:
         items.append("Risk band is high/critical — request a second reviewer.")
     if not sec_findings_clean:
         items.append("Security sweep flagged lines above — verify each one.")
-    if any("`" in l and "none — dead on arrival" in l for l in []):
-        pass
     items.append("Docs/README mention the changed behavior if user-facing?")
     return "\n".join(f"- [ ] {i}" for i in items)
 
@@ -229,7 +241,9 @@ def main() -> int:
     buf.write("> Deterministic analysis of this PR — zero LLM, zero network. "
               "Regenerated on every push.\n")
 
-    risk_body = run_codeloom(f"python3 codeloom.py --risk '{revspec}' .")
+    base, _, head = revspec.partition("..")
+    lo, hi = base or "HEAD~1", head or "HEAD"
+    risk_body = run_codeloom(["--risk", f"{lo}..{hi}", "."])
     buf.write(section("Risk verdict", risk_body))
 
     if files:
@@ -245,8 +259,7 @@ def main() -> int:
     buf.write(section("Review checklist", checklist(files, clean_sec, risk_body)))
 
     task = pr_title.strip() or "review this pull request"
-    safe_task = task.replace("'", "").replace("$", "")
-    brief = run_codeloom(f"python3 codeloom.py --pack '{safe_task}' .", cap=14000)
+    brief = run_codeloom(["--pack", task, "."], cap=14000)
     if brief and brief != "(no output)":
         buf.write(section("Reviewer's starting context", brief))
 
