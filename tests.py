@@ -1148,7 +1148,14 @@ class TestCodeLoom(unittest.TestCase):
             self.assertIn("change risk", out)
             self.assertIn("/100", out)
         finally:
-            shutil.rmtree(tmp)
+            # git marks .git objects read-only; plain rmtree fails on Windows.
+            def _force_remove(func, path, _exc):
+                try:
+                    os.chmod(path, 0o700)
+                    func(path)
+                except OSError:
+                    pass
+            shutil.rmtree(tmp, onerror=_force_remove)
 
 
 if __name__ == "__main__":
