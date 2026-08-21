@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.58.0"
+VERSION = "0.59.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -5875,6 +5875,211 @@ def render_checkpoint_restore(root: str) -> str:
     except OSError as e:
         return f"Checkpoint read failed: {e}\n"
 
+# --------------------------------------------------------------------------- #
+# Working-memory journal: a declarative event log (decision/action/hypothesis/
+# checkpoint/seen) + a layered summary builder. This is the "the agent does not
+# forget what it did" layer — build_layered_summary turns the JSONL journal into
+# a compact working-state packet that --resume --full and codeloom_get_working_
+# state return after a compaction. Stdlib-only, human-readable, per-repo.
+# --------------------------------------------------------------------------- #
+WM_DIR = ".codeloom"
+
+def _wm_dir(root: str) -> str:
+    d = os.path.join(root, WM_DIR, "session")
+    if not os.path.isdir(d):
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError:
+            pass
+    return d
+
+def _wm_gitignore(root: str) -> None:
+    base = os.path.join(root, WM_DIR)
+    gi = os.path.join(base, ".gitignore")
+    try:
+        if not os.path.isfile(gi):
+            with open(gi, "w", encoding="utf-8") as fh:
+                fh.write("session/\n")
+    except OSError:
+        pass
+
+def _wm_journal(root: str) -> str:
+    return os.path.join(_wm_dir(root), "current.jsonl")
+
+def _wm_now() -> str:
+    import datetime
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+def _wm_session_id() -> str:
+    import datetime
+    return datetime.datetime.now().strftime("%Y-%m-%d-%H%M")
+
+def journal_append(root: str, type_: str, title: str, body: str = "",
+                    status: str = "", reason: str = "", related=None) -> str:
+    """Append a structured event to the working-memory journal."""
+    _wm_dir(root)
+    _wm_gitignore(root)
+    import json as _json
+    ev: dict = {"ts": _wm_now(), "type": type_, "title": title, "body": body,
+                "session_id": _wm_session_id()}
+    if status:
+        ev["status"] = status
+    if reason:
+        ev["reason"] = reason
+    if related:
+        ev["related_items"] = list(related)
+    try:
+        with open(_wm_journal(root), "a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(ev, ensure_ascii=False) + "\n")
+    except OSError as e:
+        return f"journal write failed: {e}"
+    return ""
+
+def journal_read(root: str) -> List[dict]:
+    import json as _json
+    path = _wm_journal(root)
+    if not os.path.isfile(path):
+        return []
+    out = []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    try:
+                        out.append(_json.loads(line))
+                    except _json.JSONDecodeError:
+                        continue
+    except OSError:
+        pass
+    return out
+
+def journal_mark_seen(root: str, items: List[str]) -> str:
+    """Mark files/symbols as already deeply understood (hot set)."""
+    import json as _json
+    d = _wm_dir(root)
+    _wm_gitignore(root)
+    sp = os.path.join(d, "seen.json")
+    seen = set()
+    if os.path.isfile(sp):
+        try:
+            with open(sp, "r", encoding="utf-8") as fh:
+                seen = set(_json.load(fh))
+        except Exception:
+            seen = set()
+    before = len(seen)
+    for it in items:
+        seen.add(it.strip())
+    try:
+        with open(sp, "w", encoding="utf-8") as fh:
+            _json.dump(sorted(seen), fh)
+    except OSError:
+        pass
+    journal_append(root, "seen", f"marked {len(items)} item(s) as understood", related=list(items))
+    added = len(seen) - before
+    return f"marked {added} new item(s) as seen (hot set {len(seen)})"
+
+def get_hot_set(root: str) -> List[str]:
+    import json as _json
+    sp = os.path.join(_wm_dir(root), "seen.json")
+    if not os.path.isfile(sp):
+        return []
+    try:
+        with open(sp, "r", encoding="utf-8") as fh:
+            return sorted(_json.load(fh))
+    except Exception:
+        return []
+
+def build_layered_summary(root: str, include_structural: bool = False) -> str:
+    """Build the working-state packet: goal, status, key decisions, actions,
+    open items, hot set. Regenerates summary.md. This is what an agent treats
+    as the single source of truth after a compaction."""
+    events = journal_read(root)
+    hot = set(get_hot_set(root))
+    if not events and not hot:
+        return "# Working State\n\nNo active session journal yet. Start one with `--decide`/`--hypothesis`/`--checkpoint`.\n"
+    goal = None
+    decisions = []
+    actions = []
+    open_items = []
+    last_cp = None
+    for e in events:
+        t = e.get("type")
+        if t == "goal" and not goal:
+            goal = e.get("title") or e.get("body")
+        elif t == "decision":
+            decisions.append(f"- [{e.get('status','accepted')}] {e.get('title')}"
+                             + (f" (reason: {e.get('reason','')})" if e.get("reason") else ""))
+        elif t == "action":
+            actions.append(f"- {e.get('title') or e.get('body')}")
+            for r in (e.get("related_items") or e.get("related") or []):
+                hot.add(r)
+        elif t in ("hypothesis", "open"):
+            open_items.append(f"- {e.get('title')} [{e.get('status','open')}]")
+        elif t == "checkpoint":
+            last_cp = e
+    lines = [f"# Working State — Session {events[-1].get('session_id','unknown') if events else 'new'}",
+             "", "## Goal", goal or "(not explicitly set)", "",
+             "## Status",
+             (last_cp.get("body") if last_cp and last_cp.get("body") else "In progress"), ""]
+    if decisions:
+        lines += ["## Key Decisions"] + decisions[-10:] + [""]
+    if actions:
+        lines += ["## Actions Taken (most recent)"] + actions[-12:] + [""]
+    if open_items:
+        lines += ["## Open Items / Hypotheses"] + open_items[-8:] + [""]
+    if hot:
+        lines += ["## Hot Set (already deeply understood)"] + [f"- {x}" for x in sorted(hot)] + [""]
+    if include_structural:
+        lines += ["## Structural Focus", "(the codeloom map for hot files is injected by --resume --full)", ""]
+    summary = "\n".join(lines)
+    try:
+        with open(os.path.join(_wm_dir(root), "summary.md"), "w", encoding="utf-8") as fh:
+            fh.write(summary)
+    except OSError:
+        pass
+    return summary
+
+def render_working_state(root: str, full: bool = False) -> str:
+    """--resume --full path: layered packet + (optionally) structural focus."""
+    summary = build_layered_summary(root, include_structural=full)
+    if full:
+        # append a short structural focus of the hot set if any files are mapped
+        summary += "\n## Structural Focus\n(re-run `codeloom --resume` or `codeloom --focus <hot-file>` for the code map.)\n"
+    return summary
+
+def wm_decide(root: str, title: str, reason: str = "", status: str = "accepted") -> str:
+    """Record a decision (or rejection) into the journal + persistent decisions.md."""
+    _wm_dir(root); _wm_gitignore(root)
+    journal_append(root, "decision", title, reason=reason, status=status)
+    # mirror into persistent memory decisions file
+    md = os.path.join(_memory_dir(root), "DECISIONS.md")
+    try:
+        with open(md, "a", encoding="utf-8") as fh:
+            fh.write(f"- [{status}] {title}" + (f" — {reason}" if reason else "") + "\n")
+    except OSError:
+        pass
+    return f"recorded decision [{status}]: {title}"
+
+def wm_hypothesis(root: str, title: str, status: str = "open") -> str:
+    journal_append(root, "hypothesis", title, status=status)
+    return f"recorded hypothesis [{status}]: {title}"
+
+def list_open_items(root: str) -> str:
+    opens = [e for e in journal_read(root) if e.get("type") in ("hypothesis", "open")]
+    if not opens:
+        return "No open items or hypotheses.\n"
+    return "# Open items / hypotheses\n" + "\n".join(
+        f"- {e.get('title')} [{e.get('status','open')}]" for e in opens) + "\n"
+
+def list_decisions(root: str) -> str:
+    decs = [e for e in journal_read(root) if e.get("type") == "decision"]
+    if not decs:
+        return "No decisions recorded.\n"
+    return "# Recorded decisions\n" + "\n".join(
+        f"- [{e.get('status','accepted')}] {e.get('title')}" + (f" — {e.get('reason','')}" if e.get("reason") else "")
+        for e in decs) + "\n"
+
 def tree_to_json(node: Node) -> dict:
     return {
         "name": node.name,
@@ -5918,6 +6123,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--loom", metavar="TEXT", help="intent engine: layered context for a task (overview->files->symbols->code->git->memory)")
     p.add_argument("--remember", metavar="NOTE", help="append a note to repository memory (default DECISIONS); use --section ARCHITECTURE|DECISIONS|PATTERNS|CONVENTIONS")
     p.add_argument("--section", metavar="NAME", default="DECISIONS", help="memory section for --remember")
+    p.add_argument("--decide", metavar="TITLE", help="record a decision (use --reason; --status accepted/rejected)")
+    p.add_argument("--reject", metavar="TITLE", help="record a rejected decision (with --reason)")
+    p.add_argument("--hypothesis", metavar="TITLE", help="record an open hypothesis")
+    p.add_argument("--reason", metavar="TEXT", default="", help="reason for --decide/--reject")
+    p.add_argument("--status", metavar="STATUS", default="accepted", help="status for --decide (accepted/rejected/open)")
+    p.add_argument("--list-decisions", action="store_true", help="list recorded decisions")
+    p.add_argument("--list-open", action="store_true", help="list open items/hypotheses")
+    p.add_argument("--mark-seen", nargs="+", metavar="ITEM", help="mark files/symbols as already understood (hot set)")
+    p.add_argument("--working-state", action="store_true", help="emit the layered working-state packet (goal, decisions, actions, open items, hot set)")
     p.add_argument("--adr", metavar="TITLE", help="write an Architectural Decision Record (use --context and --decision)")
     p.add_argument("--context", metavar="TEXT", help="context for --adr")
     p.add_argument("--decision", metavar="TEXT", help="decision for --adr")
@@ -6479,7 +6693,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
     # --impact / --task / --plan / --pack: task-aware intelligence
-    if args.impact or args.task or args.plan or args.pack or args.check_edit or args.check_delete or args.resume or args.loom or args.remember or args.checkpoint is not None or args.checkpoint_restore or args.adr or args.adr_list:
+    if args.impact or args.task or args.plan or args.pack or args.check_edit or args.check_delete or args.resume or args.loom or args.remember or args.checkpoint is not None or args.checkpoint_restore or args.adr or args.adr_list or args.decide or args.reject or args.hypothesis or args.list_decisions or args.list_open or args.mark_seen or args.working_state:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
@@ -6548,6 +6762,34 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.remember:
             print(memory_remember(root, args.section, args.remember))
+            return 0
+
+        if args.decide:
+            print(wm_decide(root, args.decide, args.reason, args.status))
+            return 0
+
+        if args.reject:
+            print(wm_decide(root, args.reject, args.reason, "rejected"))
+            return 0
+
+        if args.hypothesis:
+            print(wm_hypothesis(root, args.hypothesis, "open"))
+            return 0
+
+        if args.list_decisions:
+            print(list_decisions(root))
+            return 0
+
+        if args.list_open:
+            print(list_open_items(root))
+            return 0
+
+        if args.mark_seen:
+            print(journal_mark_seen(root, args.mark_seen))
+            return 0
+
+        if args.working_state:
+            print(render_working_state(root, full=True))
             return 0
 
         if args.adr_list:

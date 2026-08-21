@@ -236,6 +236,12 @@ This is the decision guide: given what you're trying to do, which flag serves it
 - `codeloom --remember "note" --section X` — persist a conclusion (survives compaction)
 - `codeloom --adr "title" --context "..." --decision "..."` — write a structured Architectural Decision Record (the human "why")
 - `codeloom --adr-list` — list saved ADRs
+| `--decide "title" --reason "..."` | record a decision (accepted/rejected) — survives compaction |
+| `--reject "title" --reason "..."` | record a rejected decision |
+| `--hypothesis "title"` | record an open hypothesis |
+| `--mark-seen f sym` | mark files/symbols as deeply understood (hot set) |
+| `--working-state` | layered working-state packet: goal, decisions, actions, open items, hot set |
+| `--list-decisions` / `--list-open` | list recorded decisions / open items |
 - `codeloom --seen` — "what have I already explored?" (avoid re-reading)
 - `codeloom --resume` — restore the structural map after a compaction
 - `codeloom --session` / `--session-report` — log & summarize what was done
@@ -262,34 +268,46 @@ This is the decision guide: given what you're trying to do, which flag serves it
 ## Procedure
 
 ### 0. Compaction-survival habit (do this in EVERY session)
-An agent's repo knowledge survives a context compaction **only if it was saved
-to disk**. Make this a default habit, not an optional step:
+An agent's repo knowledge and its **work-in-progress understanding** survive a
+context compaction **only if they were saved to disk**. Make this a default
+habit, not an optional step. The two memory layers:
+
+- **Session journal** (`--decide`/`--reject`/`--hypothesis`/`--mark-seen`/
+  `--working-state`) — narrative of what the agent did/decided this session.
+- **Persistent memory** (`--remember`/`--adr`) — long-term decisions/patterns.
+
 1. **On first contact with a repo:** run `codeloom` to build the map, then
    `codeloom --write MAP.md` so the structural overview is a committed file.
-2. **Before you reach any important conclusion or decision,** persist it:
-   `codeloom --remember "Engine is the core; touch it last" --section notes`.
-   This is what survives a wipe — the conclusions you reached.
-3. **As you read files,** let `codeloom --seen` track them, so after compaction
-   you know what's already been explored and don't re-read it.
-4. **If a compaction happens (or you detect a fresh/empty context):** run
-   `codeloom --resume` to re-inject the structural map in one shot, then
-   `codeloom --ask "<current task>"` to rebuild the task brief + blast radius +
-   files-to-touch. You resume mid-work, not from zero.
-5. **Before a compaction or at the end of a work chunk, snapshot in-progress
-   work:** `codeloom --checkpoint "<what you're doing / decided>"` writes the
-   uncommitted git diff + status note to `.codeloom-checkpoint.md`. After a
-   wipe, `codeloom --checkpoint-restore` brings the in-progress work back.
-6. **Record architectural decisions as structured ADRs:** when you make a
-   design choice, `codeloom --adr "<title>" --context "..." --decision "..."`.
-   This captures the human "why" that a raw code graph can't, and it survives
-   compaction + cross-session work. List with `codeloom --adr-list`.
-7. **Every invocation should log itself:** `codeloom --session` (or rely on the
-   MCP server's resident session log) so `--session-report` can later summarize
-   what was done and tokens spent.
+2. **Record decisions explicitly:** `codeloom --decide "<title>" --reason "..."`
+   when you choose an approach; `codeloom --reject "<title>" --reason "..."`
+   when you abandon one. This prevents re-trying failed ideas after a wipe.
+3. **Record hypotheses** that are still open: `codeloom --hypothesis "<guess>"`.
+4. **As you read/understand files, mark them** as deeply understood:
+   `codeloom --mark-seen file.py symbol::name` (adds them to the hot set).
+5. **Before a compaction or at the end of a work chunk, snapshot progress:**
+   `codeloom --checkpoint "<what you're doing / decided>"` writes the uncommitted
+   diff + status note. Restore with `--checkpoint-restore`.
+6. **Record architectural decisions as structured ADRs:** `codeloom --adr "<title>"
+   --context "..." --decision "..."` captures the human "why".
+7. **Every invocation should log itself:** `codeloom --session` (or the MCP
+   server's resident session log) so `--session-report` can summarize what was done.
 
-> Rule of thumb: if a fact about the codebase or the task matters, write it to
-> disk with `--remember` the moment you learn it. Do not rely on context memory
-> to carry it — context gets compacted, files do not.
+**After a compaction or an "I forgot the earlier context" signal, your FIRST
+action is:**
+
+```bash
+codeloom --working-state .     # layered packet: goal, decisions, actions, open items, hot set
+codeloom --resume .             # structural map (tree + entry points + call graph)
+codeloom --checkpoint-restore .  # in-progress work (uncommitted diff + note)
+codeloom --list-open .          # open items/hypotheses
+```
+
+Treat the `--working-state` packet as the single source of truth for what you
+decided and where you left off.
+
+> Rule of thumb: if a fact about the codebase, a decision, or the task matters,
+> write it to disk the moment you learn it. Do not rely on context memory to
+> carry it — context gets compacted, files do not.
 
 ### 1. Map a repo for an agent
 1. Run `codeloom <root>` (or `--graph`, `--calls`, `--diff` as needed).

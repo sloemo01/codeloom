@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.58.0"
+SERVER_VERSION = "0.59.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -1030,6 +1030,85 @@ TOOLS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "codeloom_get_working_state",
+        "description": (
+            "Return the layered working-state packet: goal, status, key decisions, "
+            "actions taken, open items/hypotheses, and hot set (already-understood "
+            "files). Call this FIRST after any context compaction or 'I forgot' "
+            "signal and treat the result as the source of truth. This is how the "
+            "agent does not forget what it did."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+            },
+        },
+    },
+    {
+        "name": "codeloom_record_decision",
+        "description": (
+            "Record an accepted or rejected decision with a reason into the session "
+            "journal (and persistent memory). Prevents re-trying failed ideas after "
+            "a compaction. Use status 'accepted' when you choose an approach, "
+            "'rejected' when you abandon one."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "title": {"type": "string", "description": "The decision, e.g. 'Use Redis for rate limiting'"},
+                "reason": {"type": "string", "description": "Why you chose/rejected it"},
+                "status": {"type": "string", "enum": ["accepted", "rejected"], "default": "accepted"},
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "codeloom_record_hypothesis",
+        "description": (
+            "Record an open hypothesis about the codebase so it survives compaction "
+            "and can be verified later. Shows up in the working-state packet's open "
+            "items."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "title": {"type": "string", "description": "The hypothesis, e.g. 'connection pool not shared correctly'"},
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "codeloom_mark_seen",
+        "description": (
+            "Mark files or symbols as already deeply understood so they appear in the "
+            "hot set of future working-state packets. Use after reading a file/symbol "
+            "so a post-compaction resume highlights it and you don't re-read it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "items": {"type": "array", "items": {"type": "string"}, "description": "File paths or symbol names"},
+            },
+            "required": ["items"],
+        },
+    },
+    {
+        "name": "codeloom_list_open_items",
+        "description": (
+            "List the open items/hypotheses recorded in the current session."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+            },
+        },
+    },
 ]
 
 
@@ -1265,6 +1344,19 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
         return {"content": [{"type": "text", "text": codeloom.render_precision(files, root, m.group(1) if m else "")}]}
 
     # 7. Memory / persistence / compaction — the "never forgets" layer
+    # Highest priority: working-state / compaction survival
+    if any(k in q for k in ["working state", "what did i do", "where was i",
+                            "current state", "remind me", "what is my status",
+                            "after compaction", "recover context", "what did i decide",
+                            "record decision", "what is still open", "hot set"]):
+        if any(k in q for k in ["record decision", "decided ", "reject "]):
+            import re as _re
+            title = _re.sub(r"(record decision|decided|reject|to use|because.*)", "", q).strip()
+            status = "rejected" if ("reject" in q or "rejected" in q) else "accepted"
+            return {"content": [{"type": "text", "text": codeloom.wm_decide(root, title or q, "", status)}]}
+        if any(k in q for k in ["open", "hypothes"]):
+            return {"content": [{"type": "text", "text": codeloom.list_open_items(root)}]}
+        return {"content": [{"type": "text", "text": codeloom.render_working_state(root, full=True)}]}
     if any(k in q for k in ["remember", "save this", "note this", "record that", "write down"]):
         import re as _re
         note = q.replace("remember", "").replace("save this", "").replace("note this", "").replace("record that", "").replace("write down", "").strip()
@@ -1438,6 +1530,30 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
 
     if name == "codeloom_checkpoint_restore":
         text = codeloom.render_checkpoint_restore(root)
+
+    if name == "codeloom_get_working_state":
+        text = codeloom.render_working_state(root, full=True)
+
+    if name == "codeloom_record_decision":
+        title = args.get("title")
+        if not title:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'title' argument"}]}
+        text = codeloom.wm_decide(root, title, args.get("reason", ""), args.get("status", "accepted"))
+
+    if name == "codeloom_record_hypothesis":
+        title = args.get("title")
+        if not title:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'title' argument"}]}
+        text = codeloom.wm_hypothesis(root, title, "open")
+
+    if name == "codeloom_mark_seen":
+        items = args.get("items") or []
+        if not items:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'items' argument"}]}
+        text = codeloom.journal_mark_seen(root, items)
+
+    if name == "codeloom_list_open_items":
+        text = codeloom.list_open_items(root)
 
     if name == "codeloom_loom":
         task = args.get("task")

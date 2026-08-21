@@ -813,6 +813,26 @@ class TestCodeLoom(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
+    def test_working_memory_journal(self):
+        # decide/reject/hypothesis/mark_seen build a layered working-state packet
+        tmp = tempfile.mkdtemp()
+        try:
+            codeloom.wm_decide(tmp, "Use Redis", "multi-instance", "accepted")
+            codeloom.wm_decide(tmp, "In-memory bucket", "too complex", "rejected")
+            codeloom.wm_hypothesis(tmp, "pool not shared")
+            codeloom.journal_mark_seen(tmp, ["engine.py", "login.py"])
+            state = codeloom.render_working_state(tmp, full=True)
+            self.assertIn("Use Redis", state)
+            self.assertIn("In-memory bucket", state)
+            self.assertIn("pool not shared", state)
+            self.assertIn("engine.py", state)
+            decs = codeloom.list_decisions(tmp)
+            self.assertIn("Use Redis", decs)
+            opens = codeloom.list_open_items(tmp)
+            self.assertIn("pool not shared", opens)
+        finally:
+            shutil.rmtree(tmp)
+
     def test_install_grammars_prints(self):
         # without --yes, install_grammars prints the command (doesn't install)
         out = codeloom.install_grammars(do_install=False)
