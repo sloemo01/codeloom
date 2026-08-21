@@ -33,7 +33,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.69.0"
+SERVER_VERSION = "0.70.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -340,6 +340,23 @@ TOOLS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
+            },
+        },
+    },
+    {
+        "name": "codeloom_risk",
+        "description": (
+            "Pre-merge change-risk report for a commit or range (clean-room, "
+            "zero LLM): scores diff size, file spread, health findings in "
+            "touched files, high-fan-in symbols touched, and recent fix "
+            "history of touched files. Returns 0-100 score + band + drivers."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "revspec": {"type": "string", "description": "Commit or range, e.g. HEAD~1..HEAD, main..feature"},
                 "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
         },
@@ -1937,6 +1954,9 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             text = codeloom.render_health(files, root, index=idx, calls=kg)
         except Exception:
             text = codeloom.render_health(files, root)
+    elif name == "codeloom_risk":
+        revspec = args.get("revspec") or "HEAD~1..HEAD"
+        text = codeloom.render_change_risk(files, root, revspec)
     elif name == "codeloom_usages":
         symbol = args.get("symbol")
         if not symbol:

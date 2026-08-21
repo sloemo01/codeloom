@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.69.0"
+VERSION = "0.70.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -3807,6 +3807,146 @@ def render_health(files: List[str], root: str, index: Optional[dict] = None,
     return out
 
 # --------------------------------------------------------------------------- #
+# Change risk (clean-room implementation on codeloom primitives + stdlib git).
+# Scores a revspec's diff for review priority from signals the literature ties
+# to defects: diff size, spread across files, churned health-findings, fan-in
+# of touched symbols, and the file's own recent history. Output is a 0-100
+# score + band + per-file drivers. Zero LLM, sub-second, no network.
+# --------------------------------------------------------------------------- #
+
+def _git_out(root: str, argv: List[str]) -> Optional[str]:
+    try:
+        import subprocess as _sp
+        r = _sp.run(["git"] + argv, cwd=root, capture_output=True,
+                    text=True, timeout=30)
+        return r.stdout if r.returncode == 0 else None
+    except Exception:
+        return None
+
+RISK_WEIGHTS = {
+    "added_lines": 0.06,      # per added line (diminishing below)
+    "deleted_lines": 0.08,    # deletions correlate with fixes/refactors
+    "file_spread": 2.2,       # per additional file touched beyond the first
+    "health_hit": 3.0,        # per active health finding in a touched file
+    "hot_symbol": 4.0,        # touching a symbol with fan-in >= 5
+    "recent_fix_file": 5.0,   # file had fix-typed commits in last 90 days
+}
+
+def compute_change_risk(root: str, index: dict, calls: dict,
+                        revspec: str = "HEAD~1..HEAD") -> dict:
+    """Risk assessment for a commit/range. Returns {score, band, drivers[],
+    files[]} — deterministic given the same repo state and range."""
+    import re as _re
+    # --- diff shape -------------------------------------------------------
+    numstat = _git_out(root, ["diff", "--numstat", revspec])
+    if numstat is None:
+        return {"error": "not a git repo or unknown revspec '%s'" % revspec}
+    files_touched = []
+    added = deleted = 0
+    for ln in numstat.splitlines():
+        parts = ln.split("\t")
+        if len(parts) >= 3:
+            try:
+                a, d = int(parts[0]), int(parts[1])
+            except ValueError:
+                continue  # binary rows show '-'
+            added += a
+            deleted += d
+            files_touched.append(parts[2])
+    if not files_touched:
+        return {"score": 0.0, "band": "none",
+                "summary": "no textual changes in '%s'" % revspec,
+                "drivers": [], "files": []}
+
+    score = 0.0
+    drivers = []
+    def add(pts, why):
+        nonlocal score
+        if pts <= 0:
+            return
+        score += pts
+        drivers.append({"points": round(pts, 1), "why": why})
+
+    add(min(added * RISK_WEIGHTS["added_lines"], 18.0),
+        "%d added lines" % added)
+    add(min(deleted * RISK_WEIGHTS["deleted_lines"], 15.0),
+        "%d deleted lines" % deleted)
+    add(max(0, len(files_touched) - 1) * RISK_WEIGHTS["file_spread"],
+        "touches %d files" % len(files_touched))
+
+    # --- health findings inside touched files ------------------------------
+    health = compute_health(files_touched, root, index, calls)
+    hf = sum(len(v["findings"]) for k, v in health["files"].items())
+    add(min(hf * RISK_WEIGHTS["health_hit"], 20.0),
+        "%d open health findings in touched files" % hf)
+
+    # --- hot symbols: did the diff touch high-fan-in definitions? ----------
+    fan_in = {}
+    for _m, funcs in calls.items():
+        for _fn, outs in funcs.items():
+            for o in outs:
+                fan_in[o] = fan_in.get(o, 0) + 1
+    patch = _git_out(root, ["diff", "-U0", revspec]) or ""
+    hot_hits = []
+    for name, deg in sorted(fan_in.items(), key=lambda kv: -kv[1]):
+        if deg < 5:
+            break
+        if _re.search(r"\b%s\b" % _re.escape(name), patch):
+            hot_hits.append((name, deg))
+            if len(hot_hits) >= 5:
+                break
+    for name, deg in hot_hits:
+        add(RISK_WEIGHTS["hot_symbol"], "touches '%s' (%d callers depend on it)" % (name, deg))
+
+    # --- recent fix-history of touched files --------------------------------
+    fix_count = 0
+    for f in files_touched[:20]:
+        log = _git_out(root, ["log", "--oneline", "--since=90 days ago", "--", f])
+        if log and _re.search(r"\b(fix|bug|regression|hotfix|patch)\b",
+                              log.lower()):
+            fix_count += 1
+    if fix_count:
+        add(fix_count * RISK_WEIGHTS["recent_fix_file"],
+            "%d touched file(s) had recent fix commits" % fix_count)
+
+    score = round(min(100.0, score), 1)
+    band = ("low" if score < 25 else "medium" if score < 50
+            else "high" if score < 75 else "critical")
+    return {
+        "score": score, "band": band, "drivers": drivers,
+        "revspec": revspec,
+        "files": [{"path": f, "health_findings":
+                   len(health["files"].get(f, {}).get("findings", []))}
+                  for f in files_touched],
+    }
+
+def render_change_risk(files: List[str], root: str, revspec: str = "HEAD~1..HEAD") -> str:
+    """--risk: pre-merge change-risk report for a commit or range."""
+    t0 = time.time()
+    index = build_byte_index(files, root)
+    calls = build_call_graph_multi(files, root)
+    r = compute_change_risk(root, index, calls, revspec)
+    dt = time.time() - t0
+    if "error" in r:
+        return "# change risk\n\n%s\n" % r["error"]
+    buf = io.StringIO()
+    buf.write("# change risk — %s\n" % r.get("revspec", revspec))
+    buf.write("score %.0f/100 [%s] (%.2fs, zero LLM)\n\n" % (r["score"], r["band"], dt))
+    buf.write("## Drivers\n")
+    if not r["drivers"]:
+        buf.write("  none — minimal diff\n")
+    for d in r["drivers"]:
+        buf.write("  +%.0f  %s\n" % (d["points"], d["why"]))
+    buf.write("\n## Touched files\n")
+    for f in r["files"]:
+        n = f["health_findings"]
+        buf.write("  %s%s\n" % (f["path"], "  (%d health finding%s)" % (n, "s" if n != 1 else "") if n else ""))
+    buf.write("\nBand meaning: low<25 medium<50 high<75 critical>=75 "
+              "(heuristic percentile-style scale; NOT defect-validated against "
+              "a labeled corpus).\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
 # Incremental / indexed mode (hash-based cache, no daemon)
 # --------------------------------------------------------------------------- #
 
@@ -6842,6 +6982,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--answer", metavar="QUESTION", help="one-call cited answer with honest confidence")
     p.add_argument("--why", metavar="QUERY", help="decision lookup with evidence stamps ([exact]/[fuzzy]/[unverified])")
     p.add_argument("--health", action="store_true", help="code health screen: 0-10 per file, deterministic detectors, zero LLM")
+    p.add_argument("--risk", metavar="REVSPEC", nargs="?", const="HEAD~1..HEAD", default=None,
+                   help="change-risk report for a commit/range (default HEAD~1..HEAD)")
     p.add_argument("--hybrid-search", metavar="QUERY", help="hybrid search: BM25 lexical + structural signals scored together")
     p.add_argument("--seen", action="store_true", help="session memory: report already-read files/symbols to avoid re-reading")
     p.add_argument("--usages", metavar="SYMBOL", help="find where a symbol is used (not just defined)")
@@ -7089,23 +7231,25 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.watch:
         # incremental daemon-less refresh: only changed files re-indexed.
-        # Engine auto-selection: native C watcher (kqueue/inotify, ~0.3s) >
-        # Rust polling watcher (~1.2s worst case) > pure-Python one-shot.
+        # Engine auto-selection: native C watcher (kqueue/inotify) >
+        # Rust polling watcher > pure-Python one-shot. With --watch-merge
+        # semantics folded in via --watch-live, output feeds the index.
         core = _find_core()
         rs = _find_core_engine("rust")
-        if core:
-            print("watch: native C engine (kqueue/inotify)")
+        if core or rs:
+            # one command = watcher piped straight into the index merger:
+            #   <watcher> | codeloom --watch-merge ROOT
+            watcher_cmd = [core, "--watch", root] if core else [rs, "watch", root]
+            engine_name = "native C (kqueue/inotify)" if core else "Rust polling"
+            print("watch-live: %s engine feeding --watch-merge" % engine_name)
             import subprocess as _sp
             try:
-                _sp.run([core, "--watch", root])
-            except KeyboardInterrupt:
-                pass
-            return 0
-        if rs:
-            print("watch: Rust polling engine (std-only; ~1.2s worst-case latency)")
-            import subprocess as _sp
-            try:
-                _sp.run([rs, "watch", root])
+                w = _sp.Popen(watcher_cmd, stdout=_sp.PIPE, text=True)
+                m = _sp.Popen([sys.executable, os.path.abspath(__file__),
+                               "--watch-merge", root], stdin=w.stdout)
+                w.stdout.close()
+                m.wait()
+                w.wait()
             except KeyboardInterrupt:
                 pass
             return 0
@@ -7365,7 +7509,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # --cross / --search / --usages / --grep / --read / --explain / --similar / --deadcode / --get-symbol
     if args.cross or args.search or args.embed_search or args.context_card or args.answer \
-       or args.why or args.health or args.usages or args.grep or args.read \
+       or args.why or args.health or args.risk is not None or args.usages or args.grep or args.read \
        or args.explain or args.similar or args.deadcode or args.get_symbol or args.precision:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
@@ -7436,6 +7580,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.health:
             print(render_health(files, root))
+            return 0
+
+        if args.risk is not None:
+            print(render_change_risk(files, root, args.risk))
             return 0
 
         if args.usages:

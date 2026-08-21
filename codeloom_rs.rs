@@ -587,7 +587,7 @@ fn file_to_json(path: &str) -> String {
 fn cmd_watch(root: &str) -> i32 {
     let mut applied = snapshot(root); // last state we emitted
     loop {
-        thread::sleep(Duration::from_millis(400));
+        thread::sleep(Duration::from_millis(150));
         let now = snapshot(root);
 
         let mut changed: Vec<String> = Vec::new();
@@ -609,7 +609,7 @@ fn cmd_watch(root: &str) -> i32 {
         }
 
         // debounce: let edit bursts settle, then re-diff against `applied`
-        thread::sleep(Duration::from_millis(800));
+        thread::sleep(Duration::from_millis(350));
         let settled = snapshot(root);
         changed.clear();
         for (p, v) in &settled {

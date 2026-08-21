@@ -1113,6 +1113,43 @@ class TestCodeLoom(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
+    def test_change_risk_scores_and_bands(self):
+        # clean-room change-risk: bigger diff + spread + hot file => higher
+        # band than a trivial commit; deterministic on same inputs
+        tmp = tempfile.mkdtemp()
+        try:
+            def git(*a):
+                return subprocess.run(["git"] + list(a), cwd=tmp,
+                                      capture_output=True, text=True)
+            git("init", "-q")
+            git("config", "user.email", "t@t")
+            git("config", "user.name", "t")
+            with open(os.path.join(tmp, "base.py"), "w") as f:
+                f.write("def core():\n    return 1\n\n\ndef user():\n    return core()\n")
+            git("add", "-A")
+            git("commit", "-q", "-m", "init")
+            # risky commit: big diff across two files, one named like a fix target
+            with open(os.path.join(tmp, "base.py"), "w") as f:
+                f.write("def core():\n    return 2\n\n\ndef user():\n    return core() + 1\n" + "x = %d\n" * 40 % tuple(range(40)))
+            with open(os.path.join(tmp, "extra.py"), "w") as f:
+                f.write("def helper():\n    return 3\n")
+            git("add", "-A")
+            git("commit", "-q", "-m", "big refactor after bug report")
+            files = [os.path.join(tmp, "base.py"), os.path.join(tmp, "extra.py")]
+            index = codeloom.build_byte_index(files, tmp)
+            calls = codeloom.build_call_graph_multi(files, tmp)
+            r = codeloom.compute_change_risk(tmp, index, calls, "HEAD~1..HEAD")
+            self.assertNotIn("error", r)
+            self.assertGreater(r["score"], 0)
+            self.assertIn(r["band"], ("low", "medium", "high", "critical"))
+            self.assertTrue(r["drivers"])          # at least diff-size driver
+            self.assertTrue(any("added lines" in d["why"] for d in r["drivers"]))
+            out = codeloom.render_change_risk(files, tmp, "HEAD~1..HEAD")
+            self.assertIn("change risk", out)
+            self.assertIn("/100", out)
+        finally:
+            shutil.rmtree(tmp)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
