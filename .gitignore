@@ -12,4 +12,5 @@ build/
 .codeloom-embeds.json
 .codeloom-checkpoint.md
 codeloom_core
+codeloom_core_rs
 codeloom-graph.html

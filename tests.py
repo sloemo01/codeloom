@@ -868,6 +868,13 @@ class TestCodeLoom(unittest.TestCase):
         self.assertGreater(codeloom._subword_similarity("getengine", "engine"), 0.5)
         self.assertLess(codeloom._subword_similarity("engine", "banana"), 0.4)
 
+    def test_rust_engine_finder(self):
+        # --engine rust resolves to the compiled Rust core (or None if absent)
+        core = codeloom._find_core_engine("rust")
+        if core:  # only assert when rustc produced it
+            import os
+            self.assertTrue(os.path.isfile(core))
+
     def test_install_grammars_prints(self):
         # without --yes, install_grammars prints the command (doesn't install)
         out = codeloom.install_grammars(do_install=False)

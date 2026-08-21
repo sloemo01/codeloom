@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.61.0"
+VERSION = "0.62.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -3926,6 +3926,34 @@ def render_precision(files: List[str], root: str, symbol: str) -> str:
 # speed. Pure-Python remains the zero-dependency default.
 _CORE_NAME = "codeloom_core"
 
+def _find_core_engine(engine: str = "c") -> Optional[str]:
+    """Locate the compiled accelerator binary (C or Rust) next to codeloom.py.
+    engine='c' -> codeloom_core; engine='rust' -> codeloom_core_rs.
+    Auto-builds the Rust core from committed source if missing (rustc present)."""
+    name = "codeloom_core" if engine == "c" else "codeloom_core_rs"
+    here = os.path.dirname(os.path.abspath(__file__))
+    cands = [os.path.join(here, name), os.path.join(here, name + ".exe")]
+    for c in cands:
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    import shutil
+    on_path = shutil.which(name)
+    if on_path:
+        return on_path
+    # Rust core not built — auto-compile from committed source (no download)
+    if engine == "rust":
+        src = os.path.join(here, "codeloom_core_rs.rs")
+        if os.path.isfile(src) and shutil.which("rustc"):
+            import subprocess as _sp
+            out = os.path.join(here, name)
+            try:
+                r = _sp.run(["rustc", "-O", "-o", out, src], capture_output=True, text=True, timeout=180)
+                if r.returncode == 0 and os.path.isfile(out):
+                    return out
+            except Exception:
+                pass
+    return None
+
 def _find_core() -> Optional[str]:
     """Locate the compiled codeloom_core binary next to codeloom.py or on PATH.
     If it's not built, auto-build it from the committed codeloom_core.c source
@@ -3953,11 +3981,11 @@ def _find_core() -> Optional[str]:
             pass
     return None
 
-def _c_walk(root: str) -> List[str]:
-    """List code files via the C core's fast walker (--list ROOT). Falls back
+def _c_walk(root: str, engine: str = "c") -> List[str]:
+    """List code files via the accelerator's fast walker (--list ROOT). Falls back
     to Python _walk on any error. Much faster than Python os.walk + gitignore
-    matching on huge repos."""
-    core = _find_core()
+    matching on huge repos. engine='c' -> C core; 'rust' -> Rust core."""
+    core = _find_core_engine(engine)
     if not core:
         return []
     import subprocess
@@ -3968,13 +3996,14 @@ def _c_walk(root: str) -> List[str]:
     out = [l for l in r.stdout.splitlines() if l.strip()]
     return [os.path.join(root, l.lstrip("./")) if not os.path.isabs(l) else l for l in out]
 
-def _c_scan(files: List[str]) -> List[dict]:
-    """Run the C core over files. Returns per-file dicts
+def _c_scan(files: List[str], engine: str = "c") -> List[dict]:
+    """Run the accelerator core over files. Returns per-file dicts
     {file, symbols:[{name,kind}], imports:[...], calls:[...]}. Empty on error.
-    Shards the file list across parallel C-core processes (the C core is
+    Shards the file list across parallel core processes (each core is
     single-threaded; on a 64k-file kernel repo this turns ~80s of scanning
-    into ~15-20s across cores). Each shard uses stdin mode (no argv limits)."""
-    core = _find_core()
+    into ~15-20s across cores). Each shard uses stdin mode (no argv limits).
+    engine='c' -> C core; 'rust' -> Rust core (codeloom_core_rs)."""
+    core = _find_core_engine(engine)
     if not core:
         return []
     import subprocess, json as _json
@@ -4067,6 +4096,11 @@ def _c_kg(files: List[str], root: str, all_defined: set, scan: Optional[List[dic
         # call edges: keep only targets defined in the repo
         c_edges = {}
         for c in fr.get("calls", []):
+            # calls may be structured {"caller":..,"targets":[..]} (C core) or
+            # flat strings (Rust core). Handle both — flat strings contribute no
+            # resolved call edge (no caller known) but never crash the graph.
+            if isinstance(c, str):
+                continue
             caller = c.get("caller", "")
             if not caller:
                 continue
@@ -4279,9 +4313,10 @@ def refresh_index_incremental(root: str, max_files: int) -> str:
 def render_index(files: List[str], root: str, max_files: int, parallel: bool = False, engine: str = "py") -> str:
     """Build and save the persistent index + knowledge graph. Returns a summary.
     engine='c' uses the optional compiled C core for the symbol scan (much
-    faster on 100k-file repos). Pure-Python ('py') is the default."""
-    if engine == "c" and _find_core():
-        scan = _c_scan(files)  # scan each file ONCE, reuse for symbols + kg
+    faster on 100k-file repos). engine='rust' uses the multi-threaded Rust core
+    (codeloom_core_rs). Pure-Python ('py') is the default."""
+    if engine in ("c", "rust"):
+        scan = _c_scan(files, engine=engine)  # scan each file ONCE, reuse for symbols + kg
         index = _c_symbol_index(files, root, scan=scan)
         all_defined = set(index.keys())
         kg = _c_kg(files, root, all_defined, scan=scan)
@@ -6362,7 +6397,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--auto-grammars", action="store_true", help="scan the repo and install grammars for its languages (beats the manual per-language step)")
     p.add_argument("--yes", action="store_true", help="with --install-grammars, actually run pip install")
     p.add_argument("--index", action="store_true", help="build + save a persistent byte-offset index (scale)")
-    p.add_argument("--engine", choices=["py", "c"], default="py", help="scanning engine: py (pure-Python, default) or c (compiled codeloom_core, faster — build with cc -O3 -o codeloom_core codeloom_core.c)")
+    p.add_argument("--engine", choices=["py", "c", "rust"], default="py", help="scanning engine: py (pure-Python, default), c (compiled codeloom_core), or rust (compiled codeloom_core_rs, multi-threaded)")
     p.add_argument("--watch", action="store_true", help="incremental daemon-less refresh: re-index only changed files, keep lookups near-resident")
     p.add_argument("--watch-core", metavar="ROOT", help="native C file watcher (kqueue/inotify): print changed code files live")
     p.add_argument("--serve", metavar="ROOT", help="C-resident index server: answer symbol lookups sub-ms (no Python per query)")
@@ -6571,8 +6606,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
-        if args.engine == "c" and _find_core():
-            files = _c_walk(root)  # C walker — much faster on huge repos
+        if args.engine in ("c", "rust"):
+            core_finder = _find_core_engine(args.engine)
+            if core_finder:
+                files = _c_walk(root, engine=args.engine)  # fast walker
             if not files:
                 _walk(root, rules, args.max_files, files)
             # integrated: ensure AST grammars for the repo's languages (default-on)

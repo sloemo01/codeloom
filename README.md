@@ -535,6 +535,8 @@ instead of re-parsing everything:
 
 ```bash
 codeloom --index .            # build + save the knowledge graph (symbols + call/import edges)
+codeloom --index --engine c .   # use the compiled C accelerator (auto-builds, ~91s kernel)
+codeloom --index --engine rust . # use the multi-threaded Rust accelerator (auto-builds)
 codeloom --get-symbol Agent . # loads from the index in ~0.1s
 codeloom --deadcode .         # loads call edges from the graph — no re-parse
 codeloom --index-status .     # is the index fresh?
@@ -716,16 +718,16 @@ shell — `codeloom .`, `codeloom --ask "task" .`, `codeloom --export map.json .
 No daemon, no background process, no network. It reads your files, computes the
 structure, prints it, and exits.
 
-**C (integrated accelerator).** For huge monorepos, `codeloom_core.c` is a
-compile-once accelerator that **auto-builds on first use** — `_find_core()`
-compiles it from the committed source (`cc -O3 -o codeloom_core
-codeloom_core.c`) the first time you use `--engine c`, no manual step, no
-download. It does a faster multi-language file-walk + symbol + call + import
-scan (sharded across cores), a **native recursive file watcher**
-(`--watch-core`, kqueue/inotify), and a **C-resident index server** (`--serve`)
-that answers symbol lookups sub-ms with zero Python per query. The default
-pure-Python path stays zero-dependency; the C core is strictly optional and
-compiles from the auditable committed source.
+**C / Rust (integrated accelerators).** For huge monorepos, `codeloom_core.c`
+or `codeloom_core_rs.rs` is a compile-once accelerator that **auto-builds on
+first use** — from the committed source (`cc -O3` for C, `rustc -O` for Rust),
+no manual step, no download. The C core does a faster multi-language file-walk
++ symbol + call + import scan; the **Rust core** (`--engine rust`) does the same
+**multi-threaded** across cores. Both support a **native recursive file
+watcher** and a **resident index server** (`--serve`) that answers symbol
+lookups sub-ms with zero Python per query. The default pure-Python path stays
+zero-dependency; the accelerators are strictly optional and compile from the
+auditable committed source.
 
 No indexing daemon, no background process, no network. It reads your files,
 computes the structure, prints it, and exits.
