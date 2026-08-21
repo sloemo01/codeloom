@@ -186,6 +186,28 @@ python3 codeloom.py --index-status /path/to/repo
 
 ## Procedure
 
+### 0. Compaction-survival habit (do this in EVERY session)
+An agent's repo knowledge survives a context compaction **only if it was saved
+to disk**. Make this a default habit, not an optional step:
+1. **On first contact with a repo:** run `codeloom` to build the map, then
+   `codeloom --write MAP.md` so the structural overview is a committed file.
+2. **Before you reach any important conclusion or decision,** persist it:
+   `codeloom --remember "Engine is the core; touch it last" --section notes`.
+   This is what survives a wipe — the conclusions you reached.
+3. **As you read files,** let `codeloom --seen` track them, so after compaction
+   you know what's already been explored and don't re-read it.
+4. **If a compaction happens (or you detect a fresh/empty context):** run
+   `codeloom --resume` to re-inject the structural map in one shot, then
+   `codeloom --ask "<current task>"` to rebuild the task brief + blast radius +
+   files-to-touch. You resume mid-work, not from zero.
+5. **Every invocation should log itself:** `codeloom --session` (or rely on the
+   MCP server's resident session log) so `--session-report` can later summarize
+   what was done and tokens spent.
+
+> Rule of thumb: if a fact about the codebase or the task matters, write it to
+> disk with `--remember` the moment you learn it. Do not rely on context memory
+> to carry it — context gets compacted, files do not.
+
 ### 1. Map a repo for an agent
 1. Run `codeloom <root>` (or `--graph`, `--calls`, `--diff` as needed).
 2. Confirm output shows the tree/outlines/graph and a file count.
