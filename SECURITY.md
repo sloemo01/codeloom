@@ -55,6 +55,13 @@ the trust surface. Know what each one does:
 - **`--export FILE`** — writes a **local** graph snapshot (symbols + edges +
   routes + channels) to the file you name. Same pattern as `--write MAP.md`;
   stays on your machine, never leaves it.
+- **`--remember` / `--adr` / `--checkpoint` / `--seen` / `--session`** — the
+  persistence layer. These write **local files inside the repo**:
+  `.codeloom-memory/` (notes + ADRs), `.codeloom-checkpoint.md` (in-progress
+  work), `.codeloom-session.jsonl` (a log of invocations). All stay on your
+  machine, never leave it. They're plain text/markdown/JSONL you can read and
+  delete at any time. The session log is a log, not a source of truth — it's
+  meant to be summarized (`--session-report`) and can be rotated/pruned.
 
 ## The trust model
 

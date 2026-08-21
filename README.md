@@ -909,6 +909,9 @@ the fastest way to answer "what is this project, actually?"
 - [x] Repo-aware AST depth (`--auto-grammars`: installs grammars for your repo's languages)
 - [x] `--files` find-by-name/glob + `--grep` searches docs (self-maintaining)
 - [x] MCP config for 17 coding agents (`--install-agent` + `--detect-agent`)
+- [x] Compaction-survival: `--resume` + `--remember` + `--seen` + `--checkpoint` + `--adr` (the agent's work survives a wipe)
+- [x] `codeloom_ask` complete router — 1 tool, full 61-tool coverage, ~50 tokens (token efficiency + precision)
+- [x] Integrated C engine (auto-builds on first use) + LSP auto-detect/start
 
 ## Benchmarks
 

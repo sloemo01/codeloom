@@ -60,7 +60,7 @@ codeloom --get-symbol verify --full .
 # full source + what it calls + what calls it
 ```
 
-## MCP setup (Claude Code / Cursor / Codex)
+## MCP setup (17 agents)
 
 ```json
 {
@@ -71,11 +71,42 @@ codeloom --get-symbol verify --full .
 }
 ```
 
-Then the agent can call `codeloom_ask` with plain English:
+`codeloom --install-agent AGENT` prints the exact config for any of 17 agents
+(Claude Code, Codex, Cursor, Gemini CLI, OpenCode, Cline, OpenHands, Devin,
+Hermes Agent, Aider, Roo Code, Windsurf, Amazon Q, JetBrains, Junie, Kimi CLI,
+Qwen Code). `codeloom --detect-agent` finds which one is already configured.
+
+Then the agent can call `codeloom_ask` with plain English — it routes
+deterministically to the right primitive across the entire tool surface:
 - "what matters for fixing the login bug"
 - "what breaks if I change auth.py"
 - "where is the Agent class"
 - "what calls what across files"
+- "what http routes exist"
+- "remember that Engine is the core"
+- "checkpoint I'm fixing retry logic"
+- "resume my context after a compaction"
+
+## Survive a context wipe (the "never forgets" workflow)
+
+When your agent's context gets compacted, codeloom's files let it resume
+mid-work instead of re-exploring from zero:
+
+```bash
+# before a wipe — save what matters
+codeloom --remember "Engine is the core; touch it last" --section DECISIONS .
+codeloom --adr "Use Postgres" --context "Need ACID" --decision "Adopt PG16" .
+codeloom --checkpoint "fixing retry logic in engine.py" .
+
+# after a wipe — restore everything in one shot
+codeloom --resume .          # the structural map
+codeloom --seen .            # what you already explored
+codeloom --checkpoint-restore .  # your in-progress work
+codeloom --session-report .  # what you did + tokens spent
+```
+
+The map, your conclusions, your decisions, and your in-progress work all live
+in files inside the repo — so a wiped agent picks up exactly where it left off.
 
 ## Framework-aware
 

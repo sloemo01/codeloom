@@ -320,7 +320,7 @@ to disk**. Make this a default habit, not an optional step:
 ```bash
 python3 tests.py
 ```
-Expect `OK` (currently 57 tests). Add tests for any new feature.
+Expect `OK` (currently 59 tests). Add tests for any new feature.
 
 ### 4. Re-record the demo GIF
 1. Edit `demo.tape` to showcase the features you want (map, graph+focus, calls, diff).
@@ -350,7 +350,7 @@ Expect `OK` (currently 57 tests). Add tests for any new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (57 tests).
+- `python3 tests.py` → `OK` (59 tests).
 - `codeloom --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codeloom --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codeloom --task "text" <root>` returns a ranked module list.

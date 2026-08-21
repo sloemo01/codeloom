@@ -188,6 +188,21 @@ architecture-level change.)
 Export compact, reusable project summaries for agents. (`--resume` + `--pack`
 are exactly this; `--pack` exports a task brief, `--resume` exports the map.)
 
+### 28. Compaction Survival ✅
+The agent's work survives a context wipe. (`--resume` restores the map,
+`--remember` persists conclusions, `--seen` tracks explored files,
+`--checkpoint` snapshots in-progress work, `--adr` records decisions — all as
+files in the repo, so a wiped agent resumes mid-work, not from zero.)
+
+### 29. Single-Entry-Point Router ✅
+`codeloom_ask` routes deterministically across the entire tool surface — the
+agent's effective surface is **1 tool** (~50 tokens) instead of 61 schemas
+(~3,000 tokens). Token efficiency + precision + full coverage.
+
+### 30. Integrated C Engine + LSP ✅
+`codeloom_core.c` auto-builds on first use (no manual step, no download); LSP
+auto-detects + auto-starts an installed server for real cross-file resolution.
+
 ---
 
 ## Priority order (what to build first)

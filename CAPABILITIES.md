@@ -77,6 +77,19 @@ Everything codeloom can do, in one place. Zero-dependency, single file, no daemo
 | `codeloom --install-agent claude` | Print MCP config for 17 agents (claude/cursor/codex/gemini/opencode/cline/openhands/devin/hermes/aider/roo/windsurf/amazon-q/jetbrains/junie/kimi/qwen) |
 | `codeloom --detect-agent` | Detect which coding agent's config dir is present |
 
+## Persistence & compaction (the "never forgets" layer)
+
+| Command | What it does |
+|---|---|
+| `codeloom --resume` | Restore the structural map after a compaction (one shot) |
+| `codeloom --remember "note" --section X` | Persist a conclusion (survives a wipe) |
+| `codeloom --seen` | What's already explored/read (avoid re-reading) |
+| `codeloom --checkpoint "note"` | Snapshot in-progress work (git diff + status note) |
+| `codeloom --checkpoint-restore` | Read the last checkpoint back to resume work |
+| `codeloom --adr "title" --context "..." --decision "..."` | Write a structured Architectural Decision Record |
+| `codeloom --adr-list` | List saved ADRs |
+| `codeloom --session` / `--session-report` | Log & summarize what was done |
+
 ## MCP server (61 tools)
 
 `codeloom-mcp.py` is a zero-dependency MCP server (stdlib JSON-RPC over stdio).
@@ -86,7 +99,11 @@ Tools: `codeloom_map`, `codeloom_graph`, `codeloom_focus`, `codeloom_calls`,
 `codeloom_grep`, `codeloom_read`, `codeloom_explain`, `codeloom_similar`,
 `codeloom_deadcode`, `codeloom_get_symbol`, `codeloom_snippet`,
 `codeloom_incremental`, `codeloom_verify`, `codeloom_trace`,
-`codeloom_ask` (single natural-language entry point), `codeloom_framework`.
+`codeloom_ask` (single natural-language entry point that routes across the
+entire tool surface — task, symbol, call-graph, routes, channels, framework,
+rename, refactor, similar, deadcode, precision, memory, checkpoint, adr,
+resume, seen, session, export, cross-repo, context-diff, files, langs — so the
+agent's effective surface is **1 tool**, not 61), `codeloom_framework`.
 
 ## Language support
 
