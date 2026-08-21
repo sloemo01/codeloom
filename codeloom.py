@@ -509,6 +509,8 @@ def render_embed_search(files: List[str], root: str, query: str, limit: int = 15
     buf.write(f"{len(scored)} semantically-similar symbol(s) ({kind} embedding):\n\n")
     for r in scored[:limit]:
         buf.write(f"  {r['name']}  [{r['module']}:{r['line']}]  (sim {r['score']})\n")
+    if use_neural and len(names) > 400:
+        buf.write("\n# neural pass capped to first 400 symbols (speed); use --search for exhaustive matching\n")
     buf.write("\n# Catches typos, camelCase splits, and cross-language names that exact match misses.\n")
     return buf.getvalue()
 
@@ -550,13 +552,6 @@ def _neural_embedding(texts: List[str]) -> Optional[List[List[float]]]:
         return vecs
     except Exception:
         return None
-
-def _is_float(s: str) -> bool:
-    try:
-        float(s)
-        return True
-    except ValueError:
-        return False
 
 def _cosine_sim(a, b):
     """Cosine similarity between two vectors (stdlib, no numpy needed)."""

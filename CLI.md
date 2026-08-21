@@ -99,6 +99,7 @@ codeloom [OPTIONS] [ROOT]
 | `--churn` | Git intelligence: most-edited files (instability signal) |
 | `--hybrid-search "q"` | Hybrid search (BM25 + structure + git scored) |
 | `--seen` / `--dedup` | Session memory: already-read files/symbols |
+| `--mark-seen ITEM [ITEM...]` | Mark files/symbols as deeply understood (adds them to the hot set) |
 | `--cross-repo A B ...` | One graph across multiple repos |
 | `--architecture` | Detect architectural pattern |
 | `--heatmap` | Dependency heatmap (god classes, circular imports, unused) |
@@ -124,3 +125,5 @@ codeloom [OPTIONS] [ROOT]
 | `codeloom --langs` | List supported languages/extensions (130+ regex + tree-sitter set) |
 | `codeloom --build-core` | Build the optional C accelerator (cc -O3 codeloom_core.c) if absent |
 | `codeloom --precision X` | Graph precision: call edges with confidence + class relationships |
+
+Note: `--seen` is the legacy listing view — it lists the hot set of files/symbols you've marked as deeply understood; use `--mark-seen ITEMS` to add entries to it.

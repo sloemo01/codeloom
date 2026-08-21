@@ -913,6 +913,26 @@ class TestCodeLoom(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
+    def test_versions_in_sync(self):
+        # Version-drift guard: VERSION in codeloom.py, SERVER_VERSION in
+        # codeloom-mcp.py, and pyproject.toml must all agree.
+        import re
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "codeloom-mcp.py")) as f:
+            mcp_m = re.search(r'SERVER_VERSION = "([^"]+)"', f.read())
+            if mcp_m is None:
+                self.fail("codeloom-mcp.py missing SERVER_VERSION")
+            mcp_version = mcp_m.group(1)
+        with open(os.path.join(here, "pyproject.toml")) as f:
+            m = re.search(r'^version = "([^"]+)"', f.read(), re.MULTILINE)
+            if m is None:
+                self.fail("pyproject.toml missing 'version' key")
+            pyproject_version = m.group(1)
+        self.assertEqual(codeloom.VERSION, mcp_version,
+                         "codeloom.VERSION != codeloom-mcp.py SERVER_VERSION")
+        self.assertEqual(codeloom.VERSION, pyproject_version,
+                         "codeloom.VERSION != pyproject.toml version")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

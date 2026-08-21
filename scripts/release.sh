@@ -6,6 +6,9 @@ set -euo pipefail
 VERSION=$(grep -m1 'VERSION = ' codeloom.py | sed -E 's/.*"([^"]+)".*/\1/')
 TAG="v$VERSION"
 
+# inject the language count into docs/index.html (placeholder -> real number)
+sed -i.bak "s/<!--LANG_COUNT-->/${LANG_COUNT:-30}/" docs/index.html && rm -f docs/index.html.bak
+
 echo "Releasing $TAG"
 
 # ensure clean tree
