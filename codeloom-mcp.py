@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.53.0"
+SERVER_VERSION = "0.54.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -952,6 +952,35 @@ TOOLS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "codeloom_checkpoint",
+        "description": (
+            "Snapshot in-progress work (uncommitted git diff + a status note) to "
+            "a file so it survives a context compaction. Call this before a "
+            "compaction or at the end of a work chunk. Restore later with "
+            "codeloom_checkpoint_restore."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "note": {"type": "string", "description": "Status note: what you were doing / decided"},
+            },
+        },
+    },
+    {
+        "name": "codeloom_checkpoint_restore",
+        "description": (
+            "Read the last checkpoint back so the agent can resume in-progress "
+            "work (uncommitted diff + status note) after a compaction."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+            },
+        },
+    },
 ]
 
 
@@ -1256,6 +1285,13 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     if name == "codeloom_resume":
         f = _collect_files(root, max_files)
         text = codeloom.render_resume(f, root, max_files)
+
+    if name == "codeloom_checkpoint":
+        note = args.get("note")
+        text = codeloom.render_checkpoint(root, note)
+
+    if name == "codeloom_checkpoint_restore":
+        text = codeloom.render_checkpoint_restore(root)
 
     if name == "codeloom_loom":
         task = args.get("task")

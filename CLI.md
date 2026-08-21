@@ -52,7 +52,9 @@ codeloom [OPTIONS] [ROOT]
 | `--impact X` | Blast radius of changing X |
 | `--plan "text"` | Prioritized reading plan |
 | `--pack "text"` | Single-shot context file |
-| `--resume` | Restore structural context after a compaction (compact snapshot) |
+| `--resume` | restore structural context after a compaction (compact snapshot) |
+| `--checkpoint "note"` | snapshot in-progress work (git diff + status note) to survive compaction |
+| `--checkpoint-restore` | read the last checkpoint back to resume in-progress work |
 
 ## Understanding
 

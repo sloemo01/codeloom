@@ -771,6 +771,21 @@ class TestCodeLoom(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
+    def test_checkpoint_writes_and_restores(self):
+        # --checkpoint writes a file; --checkpoint-restore reads it back
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, "a.py"), "w") as f:
+                f.write("def helper(): pass\n")
+            out = codeloom.render_checkpoint(tmp, "working on helper")
+            self.assertIn("Status note", out)
+            self.assertIn("working on helper", out)
+            self.assertTrue(os.path.isfile(codeloom._checkpoint_path(tmp)))
+            restored = codeloom.render_checkpoint_restore(tmp)
+            self.assertIn("working on helper", restored)
+        finally:
+            shutil.rmtree(tmp)
+
     def test_install_grammars_prints(self):
         # without --yes, install_grammars prints the command (doesn't install)
         out = codeloom.install_grammars(do_install=False)

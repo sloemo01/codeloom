@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.53.0"
+VERSION = "0.54.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -5628,6 +5628,75 @@ def render_resume(files: List[str], root: str, max_files: int) -> str:
               "# model of the repo in one shot. Re-run `codeloom --resume` any time.\n")
     return buf.getvalue()
 
+# --------------------------------------------------------------------------- #
+# --checkpoint: snapshot in-progress work (uncommitted diff + status note) so
+# it survives a context compaction. Writes .codeloom-checkpoint.md next to the
+# repo. This is the "never forgets" layer on top of --resume/--remember/--seen.
+# --------------------------------------------------------------------------- #
+CHECKPOINT_FILE = ".codeloom-checkpoint.md"
+
+def _checkpoint_path(root: str) -> str:
+    return os.path.join(root, CHECKPOINT_FILE)
+
+def render_checkpoint(root: str, note: Optional[str] = None) -> str:
+    """Write a checkpoint of in-progress work: the git diff (uncommitted
+    changes) + a status note. Returns the checkpoint text. Survives compaction
+    because it's a file on disk."""
+    import subprocess
+    buf = io.StringIO()
+    buf.write("# codeloom --checkpoint (in-progress work snapshot)\n")
+    buf.write(f"# repo: {os.path.abspath(root)}\n")
+    buf.write(f"# saved: {__import__('time').strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+    # git diff (uncommitted changes) — the actual in-progress work
+    if os.path.isdir(os.path.join(root, ".git")):
+        try:
+            r = subprocess.run(["git", "-C", root, "diff", "--stat"],
+                               capture_output=True, text=True, timeout=20)
+            stat = r.stdout.strip()
+            if stat:
+                buf.write("## Uncommitted changes (git diff --stat)\n")
+                buf.write(stat + "\n\n")
+            r2 = subprocess.run(["git", "-C", root, "diff"],
+                                capture_output=True, text=True, timeout=30)
+            diff = r2.stdout.strip()
+            if diff:
+                buf.write("## Diff (uncommitted)\n")
+                # cap the diff so the checkpoint stays compact
+                buf.write(diff[:4000] + ("\n... (truncated)\n" if len(diff) > 4000 else "\n"))
+                buf.write("\n")
+        except Exception:
+            pass
+    else:
+        buf.write("## Not a git repo — no diff captured.\n\n")
+    # status note (what the agent was doing / decided)
+    if note:
+        buf.write("## Status note\n")
+        buf.write(note.strip() + "\n\n")
+    # what's been explored (from --seen) so the agent knows what it already read
+    seen = render_seen(root)
+    if "No session" not in seen and "nothing" not in seen.lower():
+        buf.write("## Already explored\n")
+        buf.write(seen)
+    # write it to disk
+    try:
+        with open(_checkpoint_path(root), "w", encoding="utf-8") as f:
+            f.write(buf.getvalue())
+    except OSError as e:
+        return f"Checkpoint write failed: {e}\n"
+    return buf.getvalue()
+
+def render_checkpoint_restore(root: str) -> str:
+    """--checkpoint-restore: read the last checkpoint back so the agent can
+    resume in-progress work after a compaction."""
+    path = _checkpoint_path(root)
+    if not os.path.isfile(path):
+        return "No checkpoint found. Run `codeloom --checkpoint \"<status note>\"` to save one.\n"
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError as e:
+        return f"Checkpoint read failed: {e}\n"
+
 def tree_to_json(node: Node) -> dict:
     return {
         "name": node.name,
@@ -5666,6 +5735,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--plan", metavar="TEXT", help="emit a prioritized reading plan for a task")
     p.add_argument("--pack", metavar="TEXT", help="emit a single-shot context file for a task (reading order + impact + symbols)")
     p.add_argument("--resume", action="store_true", help="emit a compact structural snapshot to restore context after compaction")
+    p.add_argument("--checkpoint", metavar="NOTE", nargs="?", const="", help="snapshot in-progress work (git diff + status note) to survive compaction")
+    p.add_argument("--checkpoint-restore", action="store_true", help="read the last checkpoint back to resume in-progress work")
     p.add_argument("--loom", metavar="TEXT", help="intent engine: layered context for a task (overview->files->symbols->code->git->memory)")
     p.add_argument("--remember", metavar="NOTE", help="append a note to repository memory (default DECISIONS); use --section ARCHITECTURE|DECISIONS|PATTERNS|CONVENTIONS")
     p.add_argument("--section", metavar="NAME", default="DECISIONS", help="memory section for --remember")
@@ -6216,7 +6287,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
     # --impact / --task / --plan / --pack: task-aware intelligence
-    if args.impact or args.task or args.plan or args.pack or args.check_edit or args.check_delete or args.resume or args.loom or args.remember:
+    if args.impact or args.task or args.plan or args.pack or args.check_edit or args.check_delete or args.resume or args.loom or args.remember or args.checkpoint is not None or args.checkpoint_restore:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
@@ -6269,6 +6340,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.resume:
             print(render_resume(files, root, args.max_files))
+            return 0
+
+        if args.checkpoint_restore:
+            print(render_checkpoint_restore(root))
+            return 0
+
+        if args.checkpoint is not None:
+            print(render_checkpoint(root, args.checkpoint or None))
             return 0
 
         if args.loom:

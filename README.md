@@ -36,7 +36,7 @@
 </p>
 
 <p align="center">
-  <b>17 agents</b> · <b>130+ languages</b> · <b>57 MCP tools</b> · <b>91s Linux kernel</b>
+  <b>17 agents</b> · <b>130+ languages</b> · <b>59 MCP tools</b> · <b>91s Linux kernel</b>
 </p>
 
 ---
@@ -150,6 +150,8 @@ That's it. Under a second, zero setup, works offline. Cross-platform — macOS, 
 | `codeloom --plan "X"` | "Read these files, in this order, to do task X" |
 | `codeloom --pack "X"` | "Give me the whole context for task X, in one file" |
 | `codeloom --resume` | "Restore my structural map after a compaction" (compact snapshot) |
+| `codeloom --checkpoint "note"` | Snapshot in-progress work (git diff + status note) to survive compaction |
+| `codeloom --checkpoint-restore` | Read the last checkpoint back to resume in-progress work |
 | `codeloom --loom "task"` | Intent engine: layered context for a task (overview→files→code→git→memory) |
 | `codeloom --remember "note" --section X` | Append to persistent repository memory |
 | `codeloom --churn` | Git intelligence: most-edited files (instability signal) |
@@ -611,7 +613,7 @@ and Qwen Code (or auto-detect with `--detect-agent`):
 }
 ```
 
-Exposes **57 tools**: `codeloom_map`, `codeloom_graph`, `codeloom_focus`,
+Exposes **59 tools**: `codeloom_map`, `codeloom_graph`, `codeloom_focus`,
 `codeloom_calls`, `codeloom_diff`, `codeloom_impact`, `codeloom_task`,
 `codeloom_plan`, `codeloom_pack`, `codeloom_cross`, `codeloom_search`,
 `codeloom_usages`, `codeloom_grep`, `codeloom_read`, `codeloom_explain`,
@@ -802,7 +804,7 @@ single zero-dependency file.
 | Sub-ms resident lookups | **yes — `--serve`** | yes | yes | yes |
 | **Runtime call edges (`--trace`)** | **yes** | no | no | no |
 | Offline | **yes** | yes | yes | yes |
-| **MCP tools** | **57** | 91 actions (6 routers) | ~10 | varies |
+| **MCP tools** | **59** | 91 actions (6 routers) | ~10 | varies |
 | Zero-dependency single file | **yes** | no | no | no |
 
 The heavyweight tools are great at retrieval — but they're *search engines*,
@@ -815,7 +817,7 @@ structural context, in one file, in under a second, always fresh.
 exposes **6 MCP tools** (`set_tool_tier`, `announce_model`, `jcodemunch_guide`,
 `order`, `menu`, `route`) that route to **91 internal actions** (`index_repo`,
 `search_symbols`, `get_symbol_source`, etc.) — and its own users report it as
-"30 tools" over the 50-tool limit (#297). codeloom has **57 MCP tools** and,
+"30 tools" over the 50-tool limit (#297). codeloom has **59 MCP tools** and,
 critically, **1 natural-language entry point** (`codeloom_ask`) that routes
 deterministically — so the agent's effective surface is **1 tool**, not
 6-over-91 or 30. That's the routing complexity that causes jcodemunch's 30%
@@ -828,7 +830,7 @@ codeloom's design answers them:
 
 | User pain (jcodemunch issue) | codeloom |
 |---|---|
-| **Too many tools** (#297: 109 tools across jMunch, over the 50 limit) | **57 tools + 1 entry point** (`codeloom_ask`) |
+| **Too many tools** (#297: 109 tools across jMunch, over the 50 limit) | **59 tools + 1 entry point** (`codeloom_ask`) |
 | **Token overhead on grep tasks** (#142: 1.31x more tokens, 2.43x cache reads) | **summary-first `--get-symbol` + `--pack`** (token-minimal by design) |
 | **Framework-aware intelligence** (#201: Laravel/Next.js conventions) | **`--framework`** (detects framework + routes/models/config/conventions) |
 | **Install friction** (#308, #273: PyPI unavailable, hook support) | **one file, copy it** + `pip install codeloom` |

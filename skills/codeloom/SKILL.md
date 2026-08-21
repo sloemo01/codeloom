@@ -137,6 +137,8 @@ python3 codeloom.py --index-status /path/to/repo
 | `--plan "X"` | prioritized reading plan for a task |
 | `--pack "X"` | single-shot context file (reading order + impact + symbols) |
 | `--resume` | restore structural context after a compaction (compact snapshot) |
+| `--checkpoint "note"` | snapshot in-progress work (git diff + status note) to survive compaction |
+| `--checkpoint-restore` | read the last checkpoint back to resume in-progress work |
 | `--cross` | cross-file call graph (AST-resolved) |
 | `--search X` | search the symbol index (definitions + snippet) |
 | `--usages X` | find where a symbol is used (call sites + snippet) |
@@ -270,7 +272,11 @@ to disk**. Make this a default habit, not an optional step:
    `codeloom --resume` to re-inject the structural map in one shot, then
    `codeloom --ask "<current task>"` to rebuild the task brief + blast radius +
    files-to-touch. You resume mid-work, not from zero.
-5. **Every invocation should log itself:** `codeloom --session` (or rely on the
+5. **Before a compaction or at the end of a work chunk, snapshot in-progress
+   work:** `codeloom --checkpoint "<what you're doing / decided>"` writes the
+   uncommitted git diff + status note to `.codeloom-checkpoint.md`. After a
+   wipe, `codeloom --checkpoint-restore` brings the in-progress work back.
+6. **Every invocation should log itself:** `codeloom --session` (or rely on the
    MCP server's resident session log) so `--session-report` can later summarize
    what was done and tokens spent.
 

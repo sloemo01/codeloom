@@ -10,5 +10,6 @@ build/
 # codeloom runtime artifacts (generated, never committed)
 .codeloom-index.*
 .codeloom-embeds.json
+.codeloom-checkpoint.md
 codeloom_core
 codeloom-graph.html
