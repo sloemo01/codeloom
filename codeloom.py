@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.64.0"
+VERSION = "0.65.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -467,32 +467,87 @@ def _subword_similarity(a: str, b: str) -> float:
     return sum(x*y for x, y in zip(va, vb))
 
 def render_embed_search(files: List[str], root: str, query: str, limit: int = 15) -> str:
-    """--embed-search: fuzzy semantic symbol search via subword-hash embeddings.
-    Finds symbols whose identifier is semantically/cosmetically similar to the
-    query even when the strings don't exactly match (typos, case splits,
-    cross-language naming). Zero-dependency — always works."""
+    """--embed-search: semantic symbol search. Uses a local ggml neural
+    embedding when available (CODELOOM_GGML_BIN + CODELOOM_GGML_MODEL), else the
+    zero-dependency subword-hash embedding. Both catch typos, case splits, and
+    cross-language names that exact match misses."""
     index = build_byte_index(files, root)
+    names = list(index.keys())
+    # try neural first; if it fails, fall back to subword hash
+    use_neural = False
+    neural_vecs = None
+    q_emb = None
+    try:
+        q_emb_list = _neural_embedding([query])
+        if q_emb_list:
+            neural_vecs = _neural_embedding(names[:400])  # cap for speed
+            if neural_vecs:
+                use_neural = True
+                q_emb = q_emb_list[0]
+    except Exception:
+        pass
+
     scored = []
-    for name, locs in index.items():
-        sim = _subword_similarity(query, name)
-        # also match against the module name for relevance
+    for i, (name, locs) in enumerate(index.items()):
+        if use_neural and neural_vecs is not None and q_emb is not None and i < len(neural_vecs):
+            score = _cosine_sim(q_emb, neural_vecs[i])
+        else:
+            score = _subword_similarity(query, name)
         mod = locs[0].get("module", "") if locs else ""
         mod_sim = _subword_similarity(query, mod)
-        score = max(sim, mod_sim * 0.7)
-        if score >= 0.35:  # semantic-ish threshold
+        score = max(score, mod_sim * 0.7)
+        if score >= 0.35:
             scored.append({"name": name, "module": mod, "score": round(score, 3),
                            "line": locs[0].get("line", 0) if locs else 0})
     scored.sort(key=lambda x: -x["score"])
     buf = io.StringIO()
-    buf.write(f"# embed search: {query}  (subword-hash semantic similarity)\n")
+    kind = "neural (ggml)" if use_neural else "zero-dep subword-hash"
+    buf.write(f"# embed search: {query}  (semantic similarity, {kind})\n")
     if not scored:
         buf.write("  No semantically-similar symbols found. Try --search for exact matches.\n")
         return buf.getvalue()
-    buf.write(f"{len(scored)} semantically-similar symbol(s) (zero-dep subword embedding):\n\n")
+    buf.write(f"{len(scored)} semantically-similar symbol(s) ({kind} embedding):\n\n")
     for r in scored[:limit]:
         buf.write(f"  {r['name']}  [{r['module']}:{r['line']}]  (sim {r['score']})\n")
     buf.write("\n# Catches typos, camelCase splits, and cross-language names that exact match misses.\n")
     return buf.getvalue()
+
+# --- Optional neural embedding via local ggml binary (progressive) --------
+# Honest infra: if a ggml-embedding binary + a gguf model are available on the
+# machine (CODELOOM_GGML_BIN / CODELOOM_GGML_MODEL or on PATH), shell out to it
+# for REAL neural embeddings. Otherwise fall back to the zero-dep subword hash.
+# This wires the neural path without shipping a model (which would break the
+# zero-dep single file). The model download is a user choice, not a rewrite.
+def _neural_embedding(texts: List[str]) -> Optional[List[List[float]]]:
+    import shutil as _sh
+    import subprocess as _sp
+    import os as _os
+    binp = _os.environ.get("CODELOOM_GGML_BIN") or _sh.which("llama-embedding") or _sh.which("main")
+    model = _os.environ.get("CODELOOM_GGML_MODEL")
+    if not binp or not model:
+        return None
+    try:
+        vecs = []
+        for t in texts:
+            r = _sp.run([binp, "-m", model, "-p", t, "--embedding"], capture_output=True, text=True, timeout=30)
+            if r.returncode != 0:
+                return None
+            # parse the trailing embedding vector
+            line = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
+            nums = [float(x) for x in line.replace("[", "").replace("]", "").split() if _is_float(x)]
+            if not nums:
+                return None
+            vecs.append(nums)
+        return vecs
+    except Exception:
+        return None
+
+def _is_float(s: str) -> bool:
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
 
 def _cosine_sim(a, b):
     """Cosine similarity between two vectors (stdlib, no numpy needed)."""

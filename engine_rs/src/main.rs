@@ -37,6 +37,20 @@ fn lang_for(path: &str) -> Option<(tree_sitter::Language, &'static [&'static str
         Some((tree_sitter_cpp::LANGUAGE.into(), &["function_definition", "class_specifier"]))
     } else if lower.ends_with(".java") {
         Some((tree_sitter_java::LANGUAGE.into(), &["method_declaration", "class_declaration", "interface_declaration", "constructor_declaration"]))
+    } else if lower.ends_with(".rb") {
+        Some((tree_sitter_ruby::LANGUAGE.into(), &["method", "class", "module"]))
+    } else if lower.ends_with(".php") {
+        Some((tree_sitter_php::LANGUAGE_PHP.into(), &["function_definition", "class_declaration"]))
+    } else if lower.ends_with(".cs") {
+        Some((tree_sitter_c_sharp::LANGUAGE.into(), &["method_declaration", "class_declaration", "interface_declaration", "constructor_declaration"]))
+    } else if lower.ends_with(".scala") || lower.ends_with(".sc") {
+        Some((tree_sitter_scala::LANGUAGE.into(), &["function_definition", "class_definition", "object_definition", "trait_definition"]))
+    } else if lower.ends_with(".ex") || lower.ends_with(".exs") {
+        Some((tree_sitter_elixir::LANGUAGE.into(), &["call"]))
+    } else if lower.ends_with(".sh") || lower.ends_with(".bash") || lower.ends_with(".zsh") {
+        Some((tree_sitter_bash::LANGUAGE.into(), &["function_definition"]))
+    } else if lower.ends_with(".lua") {
+        Some((tree_sitter_lua::LANGUAGE.into(), &["function_declaration"]))
     } else {
         None
     }
