@@ -104,6 +104,14 @@ fn lang_for(path: &str) -> Option<(tree_sitter::Language, &'static [&'static str
         Some((tree_sitter_pascal::LANGUAGE.into(), &["procedure_declaration", "function_declaration"]))
     } else if lower.ends_with(".fs") || lower.ends_with(".fsx") {
         Some((tree_sitter_fsharp::LANGUAGE_FSHARP.into(), &["function_or_value_defn", "value_declaration"]))
+    } else if lower.ends_with(".clj") || lower.ends_with(".cljs") || lower.ends_with(".edn") {
+        Some((tree_sitter_clojure::LANGUAGE.into(), &["list_lit"]))
+    } else if lower.ends_with(".lean") {
+        Some((tree_sitter_lean4::language(), &["def", "theorem", "structure", "class"]))
+    } else if lower.ends_with("justfile") || lower.ends_with(".just") {
+        Some((tree_sitter_just::LANGUAGE.into(), &["recipe", "assignment"]))
+    } else if lower.ends_with(".rbs") {
+        Some((tree_sitter_rbs::LANGUAGE.into(), &["class_declaration", "module_declaration", "method_type"]))
     } else {
         None
     }

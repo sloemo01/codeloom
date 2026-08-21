@@ -632,9 +632,19 @@ static void watch_dir(const char *root) {
     fflush(stdout);
     struct kevent out;
     for (;;) {
-        struct timespec ts = {1, 0};
+        struct timespec ts = {0, 250000000}; /* 250ms */
         int n = kevent(kq, NULL, 0, &out, 1, &ts);
-        if (n > 0) {
+        if (n > 0 && out.udata == NULL) {
+            /* identify which watched fd fired by matching udata-free events:
+               we registered without udata, so resolve via g_fds index */
+            for (int i = 0; i < g_nfds; i++) {
+                if ((uintptr_t)g_fds[i] == out.ident) {
+                    /* find path by fd is not tracked; emit marker + let the
+                       merger re-scan that dir cheaply. Emitting 'changed'
+                       keeps the pipe contract; the Python side re-walks. */
+                    break;
+                }
+            }
             printf("changed\n");
             fflush(stdout);
         }

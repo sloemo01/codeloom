@@ -36,7 +36,7 @@
 </p>
 
 <p align="center">
-  <b>17 agents</b> · <b>43 tree-sitter languages</b> · <b>100+ via regex fallback</b> · <b>74 MCP tools</b> · <b>91s Linux kernel</b>
+  <b>17 agents</b> · <b>48 tree-sitter languages</b> · <b>100+ via regex fallback</b> · <b>74 MCP tools</b> · <b>91s Linux kernel</b>
 </p>
 
 ---
