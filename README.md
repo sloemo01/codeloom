@@ -729,6 +729,13 @@ lookups sub-ms with zero Python per query. The default pure-Python path stays
 zero-dependency; the accelerators are strictly optional and compile from the
 auditable committed source.
 
+**`codeloom_rs` — full standalone Rust CLI.** A genuine single-file Rust
+rewrite of the core read intelligence (`rustc -O -o codeloom_rs codeloom_rs.rs`):
+`map`, `search`, `usages`, `read`, `calls`, `imports`, `files`, `json`. It walks
+a repo, extracts multi-language symbols (Python/JS/TS/Go/Rust/C++/Java/Ruby/PHP),
+builds a cross-file call graph, and answers the hot queries an agent actually
+makes — all in Rust, no Python involved.
+
 No indexing daemon, no background process, no network. It reads your files,
 computes the structure, prints it, and exits.
 
