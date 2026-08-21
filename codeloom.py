@@ -4182,6 +4182,209 @@ def _c_kg(files: List[str], root: str, all_defined: set, scan: Optional[List[dic
         "imports": {m: sorted(d) for m, d in graph.items()},
     }
 
+def _now_iso() -> str:
+    import datetime
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+def _git_commit(root: str) -> Optional[str]:
+    """HEAD commit for the freshness envelope, or None outside a repo."""
+    if not os.path.isdir(os.path.join(root, ".git")):
+        return None
+    try:
+        import subprocess as _sp
+        r = _sp.run(["git", "rev-parse", "HEAD"], cwd=root,
+                    capture_output=True, text=True, timeout=5)
+        out = (r.stdout or "").strip()
+        return out or None
+    except Exception:
+        return None
+
+def meta_envelope(root: str) -> dict:
+    """Freshness envelope attached to every MCP response (repowise parity):
+    how old is the index, which commit it was built at, and does live state
+    diverge (stale_warning). Agents read this before trusting any result."""
+    pidx = load_persistent_index(root)
+    if not pidx:
+        return {"indexed": False, "index_age_days": None,
+                "indexed_commit": None, "stale_warning": True}
+    age_days = None
+    ts = pidx.get("built_at")
+    if ts:
+        try:
+            import datetime
+            built = datetime.datetime.fromisoformat(ts)
+            if built.tzinfo is None:
+                built = built.replace(tzinfo=datetime.timezone.utc)
+            now = datetime.datetime.now(datetime.timezone.utc)
+            age_days = round((now - built).total_seconds() / 86400, 2)
+        except ValueError:
+            pass
+    commit = pidx.get("commit")
+    if commit is None and os.path.isdir(os.path.join(root, ".git")):
+        commit = _git_commit(root)
+    try:
+        stale = not index_is_fresh(root, pidx, sample=50)
+    except Exception:
+        stale = True
+    return {"indexed": True, "index_age_days": age_days,
+            "indexed_commit": commit, "stale_warning": stale}
+
+# --------------------------------------------- task-shaped tools (repowise parity)
+def render_context_card(files: List[str], root: str, targets: List[str]) -> str:
+    """Batch triage card: pass N symbol names in ONE call, get per-target
+    definition, same-module signatures, callers count, governing ADR titles.
+    Collapses the search->read->impact chain into a single round-trip."""
+    index = build_byte_index(files, root)
+    cg = build_call_graph_multi(files, root)
+    # callers count per symbol name across all modules
+    callers = {}
+    for _mod, funcs in cg.items():
+        for _fn, outs in funcs.items():
+            for o in outs:
+                callers[o] = callers.get(o, 0) + 1
+    adr_dir = os.path.join(root, ".codeloom-memory", "adr")
+    adrs = []
+    if os.path.isdir(adr_dir):
+        for fn in sorted(os.listdir(adr_dir)):
+            if not fn.endswith(".md"):
+                continue
+            try:
+                with open(os.path.join(adr_dir, fn), encoding="utf-8", errors="replace") as f:
+                    body = f.read()
+                title = next((l for l in body.splitlines() if l.startswith("# ")), "")
+                adrs.append((title or fn, body))
+            except OSError:
+                continue
+
+    buf = io.StringIO()
+    buf.write("# context card (%d target%s)\n" % (len(targets), "s" if len(targets) != 1 else ""))
+    shown = 0
+    for t in targets:
+        if shown >= 40:
+            buf.write("## ... (truncated at 40 targets)\n")
+            break
+        locs = index.get(t)
+        buf.write("\n## %s\n" % t)
+        if not locs:
+            buf.write("  not found\n")
+            continue
+        loc = locs[0]
+        mod = loc.get("module", "?")
+        kind = loc.get("kind", "?")
+        line = loc.get("line", 0)
+        buf.write("  defined: %s:%s [%s]\n" % (mod, line, kind))
+        sigs = [l.get("sig", "") for l in locs[:3] if l.get("sig")]
+        for s in sigs:
+            buf.write("  sig: %s\n" % s)
+        n = callers.get(t, 0)
+        buf.write("  callers: %d\n" % n)
+        hits = [title for title, body in adrs if t in body]
+        for h in hits[:3]:
+            buf.write("  adr: %s\n" % h)
+        shown += 1
+    out = buf.getvalue()
+    lines = out.splitlines()
+    if len(lines) > 120:
+        out = "\n".join(lines[:120]) + "\n(truncated to 120 lines)\n"
+    return out
+
+def render_answer(files: List[str], root: str, question: str) -> str:
+    """One-call cited answer (repowise get_answer parity): hybrid search ->
+    top hit with honest confidence + summary-first source + callers/callees.
+    Confidence thresholds calibrated on the zero-dep scoring scale
+    (~0.7-1.9 observed; exact class match ~1.8, weak partial ~0.7)."""
+    results = hybrid_search(files, root, question, limit=3)
+    if not results:
+        return "confidence: low\n\nNo matching symbols."
+    top = results[0]
+    score = float(top.get("score", 0) or 0)
+    conf = "high" if score >= 1.5 else ("medium" if score >= 0.9 else "low")
+    buf = io.StringIO()
+    buf.write("confidence: %s\n\n" % conf)
+    buf.write("# answer: %s\n" % question)
+    buf.write("\n## best match\n")
+    buf.write("source: %s:%s [%s] (score %.2f)\n" % (
+        top.get("module", "?"), top.get("line", 0), top.get("kind", "?"), score))
+    snip = (top.get("snippet") or "").strip()
+    if snip:
+        buf.write("%s\n" % snip)
+    # alternatives considered
+    for alt in results[1:2]:
+        buf.write("also: %s:%s [%s] (score %.2f)\n" % (
+            alt.get("module", "?"), alt.get("line", 0), alt.get("kind", "?"),
+            float(alt.get("score", 0) or 0)))
+    # callers/callees from the call graph
+    try:
+        cg = build_call_graph_multi(files, root)
+        mod = top.get("module")
+        name = top.get("name")
+        callees = set()
+        callers = set()
+        for m, funcs in cg.items():
+            for fn, outs in funcs.items():
+                if m == mod and fn == name:
+                    callees |= set(outs)
+                if name in outs:
+                    callers.add("%s.%s" % (m, fn) if m != mod else fn)
+        if callees:
+            buf.write("callees: %s\n" % ", ".join(sorted(callees)[:6]))
+        if callers:
+            buf.write("callers: %s\n" % ", ".join(sorted(callers)[:6]))
+    except Exception:
+        pass
+    return buf.getvalue()
+
+def render_why(files: List[str], root: str, query: str) -> str:
+    """Decision lookup with evidence stamps (repowise get_why parity): every
+    matching memory/ADR line is stamped [exact]/[fuzzy]/[unverified] so the
+    agent knows how much to trust it. Falls back to nothing found."""
+    q = query.strip()
+    ql = q.lower()
+    memdir = os.path.join(root, ".codeloom-memory")
+    files_to_scan = []
+    if os.path.isdir(memdir):
+        for fn in sorted(os.listdir(memdir)):
+            p = os.path.join(memdir, fn)
+            if os.path.isfile(p) and fn.endswith(".md"):
+                files_to_scan.append(p)
+        adrd = os.path.join(memdir, "adr")
+        if os.path.isdir(adrd):
+            for fn in sorted(os.listdir(adrd)):
+                p = os.path.join(adrd, fn)
+                if os.path.isfile(p) and fn.endswith(".md"):
+                    files_to_scan.append(p)
+    buf = io.StringIO()
+    buf.write("# why: %s\n" % q)
+    found = False
+    terms = [w for w in ql.split() if len(w) >= 4]
+    for path in files_to_scan:
+        rel = os.path.relpath(path, root)
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except OSError:
+            continue
+        for raw in content.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            ll = line.lower()
+            hit_kw = bool(terms) and all(w in ll for w in terms)
+            hit_sub = ql in ll
+            if not hit_kw and not hit_sub:
+                continue
+            found = True
+            if hit_sub:
+                stamp = "[exact]"
+            elif _subword_similarity(q, line) >= 0.55:
+                stamp = "[fuzzy]"
+            else:
+                stamp = "[unverified]"
+            buf.write("  %s %s: %s\n" % (stamp, rel, line[:160]))
+    if not found:
+        buf.write("No recorded decisions/memory match.\n")
+    return buf.getvalue()
+
 def save_persistent_index(root: str, index: dict, files: List[str], kg: Optional[dict] = None,
                           skip_json: bool = False) -> None:
     """Save the persistent index with per-file (mtime, size) for incremental
@@ -4194,6 +4397,8 @@ def save_persistent_index(root: str, index: dict, files: List[str], kg: Optional
     data = {
         "version": INDEX_VERSION,
         "root": root,
+        "built_at": _now_iso(),
+        "commit": _git_commit(root),
         "files": {f: (os.path.getmtime(f), os.path.getsize(f))
                   for f in files if os.path.isfile(f)},
         "symbols": index,
@@ -6435,6 +6640,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--cross-repo", nargs="+", metavar="PATH", help="build a combined knowledge graph across multiple repo roots")
     p.add_argument("--search", metavar="SYMBOL", help="search the symbol index (definitions + snippet)")
     p.add_argument("--embed-search", metavar="QUERY", help="fuzzy semantic symbol search (subword-hash embedding, zero-dep)")
+    p.add_argument("--context-card", nargs="+", metavar="TARGET", help="batch triage card for multiple symbols in ONE call")
+    p.add_argument("--answer", metavar="QUESTION", help="one-call cited answer with honest confidence")
+    p.add_argument("--why", metavar="QUERY", help="decision lookup with evidence stamps ([exact]/[fuzzy]/[unverified])")
     p.add_argument("--hybrid-search", metavar="QUERY", help="hybrid search: BM25 lexical + structural signals scored together")
     p.add_argument("--seen", action="store_true", help="session memory: report already-read files/symbols to avoid re-reading")
     p.add_argument("--usages", metavar="SYMBOL", help="find where a symbol is used (not just defined)")
@@ -6870,7 +7078,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     # --cross / --search / --usages / --grep / --read / --explain / --similar / --deadcode / --get-symbol
-    if args.cross or args.search or args.embed_search or args.usages or args.grep or args.read \
+    if args.cross or args.search or args.embed_search or args.context_card or args.answer \
+       or args.why or args.usages or args.grep or args.read \
        or args.explain or args.similar or args.deadcode or args.get_symbol or args.precision:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
@@ -6925,6 +7134,18 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.embed_search:
             print(render_embed_search(files, root, args.embed_search))
+            return 0
+
+        if args.context_card:
+            print(render_context_card(files, root, args.context_card))
+            return 0
+
+        if args.answer:
+            print(render_answer(files, root, args.answer))
+            return 0
+
+        if args.why:
+            print(render_why(files, root, args.why))
             return 0
 
         if args.usages:

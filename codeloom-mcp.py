@@ -274,6 +274,59 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "codeloom_context",
+        "description": (
+            "Batch triage card for MULTIPLE symbols in ONE call (repowise "
+            "get_context parity): per-target definition, same-module signatures, "
+            "callers count, and governing ADR titles. Collapses the "
+            "search->read->impact chain into a single round-trip."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "targets": {"type": "array", "items": {"type": "string"},
+                            "description": "Symbol names to triage together"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
+            },
+            "required": ["targets"],
+        },
+    },
+    {
+        "name": "codeloom_answer",
+        "description": (
+            "One-call cited answer to a natural-language code question (repowise "
+            "get_answer parity): hybrid search -> best match with honest "
+            "confidence (high/medium/low), source location, snippet, and "
+            "callers/callees. Collapses search+read+reason into one round-trip."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "question": {"type": "string", "description": "Natural-language question, e.g. 'where is retry logic'"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
+            },
+            "required": ["question"],
+        },
+    },
+    {
+        "name": "codeloom_why",
+        "description": (
+            "Decision lookup with evidence stamps (repowise get_why parity): "
+            "searches recorded memory/ADRs and stamps every matching line "
+            "[exact]/[fuzzy]/[unverified] so the agent knows how much to trust it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "query": {"type": "string", "description": "Decision topic, e.g. 'rate limiting approach'"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "codeloom_usages",
         "description": (
             "Find where a symbol is USED (not just defined) across the codebase. "
@@ -1476,6 +1529,14 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
     if any(k in q for k in ["what languages", "supported languages", "langs"]):
         return {"content": [{"type": "text", "text": codeloom.render_langs()}]}
 
+    # 7b. Task-shaped fallbacks (added AFTER all specific routes so they
+    # never steal an existing match): why -> decision lookup; question words
+    # or bare topic -> one-call cited answer.
+    if any(k in q for k in ["why ", "why is", "reason for"]):
+        return {"content": [{"type": "text", "text": codeloom.render_why(files, root, q)}]}
+    if any(w in q for w in ["who ", "what ", "how ", "where "]) or len(q.split()) <= 4:
+        return {"content": [{"type": "text", "text": codeloom.render_answer(files, root, q)}]}
+
     # 4. Default — map + task relevance (never an error, always useful)
     map_text = codeloom.render_text(codeloom.build_map(root, True, max_files))
     task_text = codeloom.render_task(files, root, q, top=3)
@@ -1772,6 +1833,23 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'query' argument"}]}
         f = _collect_files(root, max_files)
         text = codeloom.render_embed_search(f, root, query)
+    elif name == "codeloom_context":
+        targets = args.get("targets")
+        if not isinstance(targets, list) or not all(isinstance(t, str) for t in targets):
+            return {"isError": True, "content": [{"type": "text", "text": "'targets' must be an array of strings"}]}
+        f = _collect_files(root, max_files)
+        text = codeloom.render_context_card(f, root, targets)
+    elif name == "codeloom_answer":
+        question = args.get("question")
+        if not question:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'question' argument"}]}
+        f = _collect_files(root, max_files)
+        text = codeloom.render_answer(f, root, question)
+    elif name == "codeloom_why":
+        q = args.get("query")
+        if not q:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'query' argument"}]}
+        text = codeloom.render_why(files, root, q)
     elif name == "codeloom_usages":
         symbol = args.get("symbol")
         if not symbol:
@@ -1901,6 +1979,14 @@ def serve() -> int:
             name = params.get("name", "")
             args = params.get("arguments") or {}
             result = call_tool(name, args)
+            # freshness envelope on every successful response (repowise parity):
+            # agents always know index age + commit + staleness before trusting.
+            if isinstance(result, dict) and not result.get("isError"):
+                try:
+                    root = str(args.get("root") or ".")
+                    result["_meta"] = codeloom.meta_envelope(root)
+                except Exception:
+                    pass
             _send({"jsonrpc": "2.0", "id": msg_id, "result": result})
         elif method == "ping":
             _send({"jsonrpc": "2.0", "id": msg_id, "result": {}})

@@ -933,6 +933,109 @@ class TestCodeLoom(unittest.TestCase):
         self.assertEqual(codeloom.VERSION, pyproject_version,
                          "codeloom.VERSION != pyproject.toml version")
 
+    def test_meta_envelope_reports_freshness(self):
+        # freshness envelope: fresh right after build, stale after file drift
+        import time
+        tmp = tempfile.mkdtemp()
+        try:
+            a = os.path.join(tmp, "a.py")
+            with open(a, "w") as f:
+                f.write("def x():\n    pass\n")
+            files = [a]
+            idx = codeloom.build_symbol_index(files, tmp)
+            codeloom.save_persistent_index(tmp, idx, files)
+            meta = codeloom.meta_envelope(tmp)
+            self.assertTrue(meta["indexed"])
+            self.assertFalse(meta["stale_warning"])
+            self.assertIsNotNone(meta["index_age_days"])
+            # drift: append to the tracked file -> index goes stale
+            time.sleep(0.02)
+            with open(a, "a") as f:
+                f.write("# drift\n")
+            meta2 = codeloom.meta_envelope(tmp)
+            self.assertTrue(meta2["stale_warning"])
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_mcp_responses_carry_meta_envelope(self):
+        # every successful tools/call response carries _meta (repowise parity)
+        import json
+        here = os.path.dirname(os.path.abspath(__file__))
+        mcp = os.path.join(here, "codeloom-mcp.py")
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, "m.py"), "w") as f:
+                f.write("class Q:\n    pass\n")
+            reqs = [
+                {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                 "params": {"name": "codeloom_map", "arguments": {"root": tmp}}},
+            ]
+            payload = "\n".join(json.dumps(r) for r in reqs) + "\n"
+            r = subprocess.run([sys.executable, mcp], input=payload,
+                               capture_output=True, text=True, timeout=120)
+            got = [json.loads(l) for l in r.stdout.splitlines() if l.strip()]
+            resp = next(x for x in got if x.get("id") == 2)
+            self.assertIn("_meta", resp["result"])
+            self.assertIn("stale_warning", resp["result"]["_meta"])
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_context_card_batches_targets(self):
+        # one call, multiple targets: definitions + callers + ADR titles
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, "svc.py"), "w") as f:
+                f.write("import helpers\n"
+                        "class Svc:\n"
+                        "    def run(self):\n"
+                        "        return helpers.h()\n")
+            with open(os.path.join(tmp, "helpers.py"), "w") as f:
+                f.write("def h():\n    return 1\n")
+            files = [os.path.join(tmp, "svc.py"), os.path.join(tmp, "helpers.py")]
+            out = codeloom.render_context_card(files, tmp, ["Svc", "h"])
+            self.assertIn("Svc", out)
+            self.assertIn("h", out)
+            self.assertIn("callers", out.lower())
+            self.assertIn("##", out)
+            # unknown target degrades gracefully
+            out2 = codeloom.render_context_card(files, tmp, ["nope_xyz"])
+            self.assertIn("not found", out2)
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_answer_includes_confidence_and_citation(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, "engine.py"), "w") as f:
+                f.write("class Engine:\n"
+                        "    def run(self):\n"
+                        "        return retry(1)\n")
+            files = [os.path.join(tmp, "engine.py")]
+            out = codeloom.render_answer(files, tmp, "engine")
+            self.assertIn("confidence:", out)
+            self.assertIn("source:", out)
+            # gibberish -> low confidence, no crash
+            out2 = codeloom.render_answer(files, tmp, "zzzqqqxyzzy")
+            self.assertIn("confidence: low", out2)
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_why_stamps_evidence_confidence(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            memdir = os.path.join(tmp, ".codeloom-memory")
+            os.makedirs(memdir)
+            with open(os.path.join(memdir, "DECISIONS.md"), "w") as f:
+                f.write("# Decisions\n- Use Redis pool shared per-process\n")
+            files = [os.path.join(tmp, "a.py")]
+            out = codeloom.render_why(files, tmp, "Redis pool shared per-process")
+            self.assertIn("[exact]", out)
+            out2 = codeloom.render_why(files, tmp, "unrelated gibberish topic")
+            self.assertIn("No recorded decisions/memory match.", out2)
+        finally:
+            shutil.rmtree(tmp)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
