@@ -36,7 +36,7 @@
 </p>
 
 <p align="center">
-  <b>17 agents</b> · <b>48 tree-sitter languages</b> · <b>100+ via regex fallback</b> · <b>74 MCP tools</b> · <b>91s Linux kernel</b>
+  <b>17 agents</b> · <b>53 tree-sitter languages</b> · <b>100+ via regex fallback</b> · <b>74 MCP tools</b> · <b>91s Linux kernel</b>
 </p>
 
 ---
@@ -834,8 +834,12 @@ single zero-dependency file.
 | Native file watcher | **yes — `--watch-core`** | no | yes | — |
 | Sub-ms resident lookups | **yes — `--serve`** | yes | yes | yes |
 | **Runtime call edges (`--trace`)** | **yes** | no | no | no |
+| **Structural pattern search (`--pattern`)** | **yes** | no | no | no |
+| **Change-risk score (`--risk`)** | **yes** | no | no | no |
+| **Code health screen (`--health`, 0.2s)** | **yes** | partial | no | partial |
 | Offline | **yes** | yes | yes | yes |
-| **MCP tools** | **71** | 91 actions (6 routers) | ~10 | varies |
+| Tree-sitter grammars | **53 compiled / 46 fixture-proven** | varies | 20 | ~158 claimed |
+| **MCP tools** | **77** (+1 NL router) | 91 actions (6 routers) | ~10 | varies |
 | Zero-dependency single file | **yes** | no | no | no |
 
 The heavyweight tools are great at retrieval — but they're *search engines*,
@@ -848,7 +852,7 @@ structural context, in one file, in under a second, always fresh.
 exposes **6 MCP tools** (`set_tool_tier`, `announce_model`, `jcodemunch_guide`,
 `order`, `menu`, `route`) that route to **91 internal actions** (`index_repo`,
 `search_symbols`, `get_symbol_source`, etc.) — and its own users report it as
-"30 tools" over the 50-tool limit (#297). codeloom has **74 MCP tools** and,
+"30 tools" over the 50-tool limit (#297). codeloom has **77 MCP tools** and,
 critically, **1 natural-language entry point** (`codeloom_ask`) that routes
 deterministically — so the agent's effective surface is **1 tool**, not
 6-over-91 or 30. That's the routing complexity that causes jcodemunch's 30%
@@ -861,7 +865,7 @@ codeloom's design answers them:
 
 | User pain (jcodemunch issue) | codeloom |
 |---|---|
-| **Too many tools** (#297: 109 tools across jMunch, over the 50 limit) | **74 tools + 1 entry point** (`codeloom_ask`) |
+| **Too many tools** (#297: 109 tools across jMunch, over the 50 limit) | **77 tools + 1 entry point** (`codeloom_ask`) |
 | **Token overhead on grep tasks** (#142: 1.31x more tokens, 2.43x cache reads) | **summary-first `--get-symbol` + `--pack`** (token-minimal by design) |
 | **Framework-aware intelligence** (#201: Laravel/Next.js conventions) | **`--framework`** (detects framework + routes/models/config/conventions) |
 | **Install friction** (#308, #273: PyPI unavailable, hook support) | **one file, copy it** + `pip install codeloom` |

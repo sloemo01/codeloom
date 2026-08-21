@@ -112,6 +112,16 @@ fn lang_for(path: &str) -> Option<(tree_sitter::Language, &'static [&'static str
         Some((tree_sitter_just::LANGUAGE.into(), &["recipe", "assignment"]))
     } else if lower.ends_with(".rbs") {
         Some((tree_sitter_rbs::LANGUAGE.into(), &["class_declaration", "module_declaration", "method_type"]))
+    } else if lower.ends_with(".gleam") {
+        Some((tree_sitter_gleam::LANGUAGE.into(), &["function", "type_definition", "constant"]))
+    } else if lower.ends_with(".nim") {
+        Some((tree_sitter_nim::LANGUAGE.into(), &["proc_definition", "func_definition", "type_section"]))
+    } else if lower.ends_with(".cr") {
+        Some((tree_sitter_crystal::LANGUAGE.into(), &["method_def", "class_def", "module_def"]))
+    } else if lower.ends_with(".groovy") || lower.ends_with(".gradle") {
+        Some((tree_sitter_groovy::LANGUAGE.into(), &["function_definition", "class_declaration"]))
+    } else if lower.ends_with(".rkt") {
+        Some((tree_sitter_racket::LANGUAGE.into(), &["definition"]))
     } else {
         None
     }
