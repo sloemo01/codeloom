@@ -493,11 +493,15 @@ fn cmd_json(repo: &Repo, query: &str) {
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("codeloom_rs <map|search|usages|read|calls|imports|files|json|cross> <root> [roots...] [query]");
+        eprintln!("codeloom_rs <map|search|usages|read|calls|imports|files|json|cross|watch> <root> [roots...] [query]");
         process::exit(1);
     }
     let cmd = args[1].as_str();
     let root = if args.len() > 2 { args[2].as_str() } else { "." };
+    // watch is long-running and needs no repo analysis — early exit before analyze()
+    if cmd == "watch" {
+        process::exit(cmd_watch(root));
+    }
     let repo = analyze(root);
 
     match cmd {
@@ -514,6 +518,123 @@ fn main() {
             eprintln!("codeloom_rs: usage: codeloom_rs <cmd> <root> [query]");
             process::exit(2);
         }
+    }
+}
+
+// --------------------------------------------------------- watch ----
+// Debounced incremental watcher. Cost scales with the CHANGE, not the repo:
+// polls mtimes every 400ms (std-only, portable), debounces bursts with an
+// 800ms settle window, then re-extracts ONLY changed files — one JSON line
+// each, same contract as the batch scanner. Silent when nothing changed.
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::thread;
+
+/// path -> (mtime secs since UNIX_EPOCH, file len). Size is tracked because a
+/// quick append may not move mtime at second granularity — but always moves len.
+fn snapshot(root: &str) -> HashMap<String, (u64, u64)> {
+    let mut files = Vec::new();
+    walk_files(Path::new(root), &mut files, 0);
+    let mut map = HashMap::new();
+    for f in files {
+        if let Ok(md) = fs::metadata(&f) {
+            let mtime = md
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            map.insert(f, (mtime, md.len()));
+        }
+    }
+    map
+}
+
+/// One JSON line for one file — same contract as the batch scanner output.
+fn file_to_json(path: &str) -> String {
+    let (symbols, imports, calls) = extract(path);
+    let mut line = String::from("{\"file\":");
+    line.push_str(&jesc(path));
+    line.push_str(",\"symbols\":[");
+    for (i, (n, k, l)) in symbols.iter().enumerate() {
+        if i > 0 {
+            line.push(',');
+        }
+        line.push_str(&format!(
+            "{{\"name\":{},\"kind\":{},\"line\":{}}}",
+            jesc(n),
+            jesc(k),
+            l
+        ));
+    }
+    line.push_str("],\"imports\":[");
+    for (i, imp) in imports.iter().enumerate() {
+        if i > 0 {
+            line.push(',');
+        }
+        line.push_str(&jesc(imp));
+    }
+    line.push_str("],\"calls\":[");
+    for (i, c) in calls.iter().enumerate() {
+        if i > 0 {
+            line.push(',');
+        }
+        line.push_str(&jesc(c));
+    }
+    line.push_str("]}");
+    line
+}
+
+fn cmd_watch(root: &str) -> i32 {
+    let mut applied = snapshot(root); // last state we emitted
+    loop {
+        thread::sleep(Duration::from_millis(400));
+        let now = snapshot(root);
+
+        let mut changed: Vec<String> = Vec::new();
+        for (p, v) in &now {
+            match applied.get(p) {
+                Some(old) if old == v => {}          // unchanged
+                _ => changed.push(p.clone()),         // new or modified
+            }
+        }
+        let mut removed: Vec<String> = Vec::new();
+        for p in applied.keys() {
+            if !now.contains_key(p) {
+                removed.push(p.clone());
+            }
+        }
+
+        if changed.is_empty() && removed.is_empty() {
+            continue; // silent on quiet windows
+        }
+
+        // debounce: let edit bursts settle, then re-diff against `applied`
+        thread::sleep(Duration::from_millis(800));
+        let settled = snapshot(root);
+        changed.clear();
+        for (p, v) in &settled {
+            match applied.get(p) {
+                Some(old) if old == v => {}
+                _ => changed.push(p.clone()),
+            }
+        }
+        removed.clear();
+        for p in applied.keys() {
+            if !settled.contains_key(p) {
+                removed.push(p.clone());
+            }
+        }
+
+        for p in &changed {
+            println!("{}", file_to_json(p));
+        }
+        for p in &removed {
+            println!("{{\"file\":{},\"removed\":true}}", jesc(p));
+        }
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+
+        applied = settled;
     }
 }
 
