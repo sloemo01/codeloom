@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.68.0"
+VERSION = "0.69.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -3646,6 +3646,8 @@ HEALTH_WEIGHTS = {
     "dead_symbol": 0.6,        # defined, never called
     "god_imports": 0.5,        # >20 imports in one module
     "dup_name": 0.4,           # same symbol name defined in many modules
+    "hotspot": 0.9,            # high fan-in: many callers depend on this file
+    "large_file": 0.7,         # >600 lines in one module
 }
 
 def compute_health(files: List[str], root: str, index: dict, calls: dict,
@@ -3727,6 +3729,32 @@ def compute_health(files: List[str], root: str, index: dict, calls: dict,
                 hit(f, "dead_symbol", "'%s' never called (%s:%d)" % (
                     name, mod, loc.get("line", 0)),
                     HEALTH_WEIGHTS["dead_symbol"])
+
+    # --- file-level risk signals (heuristic defect correlates, honestly
+    # labeled: these mirror what the defect-prediction literature uses —
+    # size and fan-in/centrality — but are NOT validated against a labeled
+    # corpus the way repowise's scores are).
+    fan_in: dict = {}
+    for m, funcs in calls.items():
+        for fn, outs in funcs.items():
+            for o in outs:
+                fan_in[o] = fan_in.get(o, 0) + 1
+    for f in files:
+        try:
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                nlines = sum(1 for _ in fh)
+        except OSError:
+            continue
+        if nlines > 600:
+            hit(f, "large_file", "%d lines in one module" % nlines,
+                HEALTH_WEIGHTS["large_file"])
+        # hotspot: module whose symbols carry high fan-in (many dependents)
+        mod_syms = [name for name, locs in index.items() for l in locs
+                    if l.get("path") == f]
+        deg = sum(1 for s in mod_syms if fan_in.get(s, 0) >= 5)
+        if deg >= 3:
+            hit(f, "hotspot", "%d heavily-depended-on symbols (change with care)" % deg,
+                HEALTH_WEIGHTS["hotspot"])
 
     for f in per_file:
         per_file[f]["score"] = round(max(0.0, min(10.0, per_file[f]["score"])), 1)
@@ -6732,6 +6760,30 @@ def tree_to_json(node: Node) -> dict:
 # CLI
 # --------------------------------------------------------------------------- #
 
+def _core_unavailable_help(engine: str = "c") -> str:
+    """Actionable message for 'accelerator unavailable' — names the actual
+    blocker (no compiler vs build failure) per-OS instead of a bare 'run
+    --build-core' that fails identically. The pure-Python engine always
+    works, so this is an optimization hint, never a dead end."""
+    import shutil
+    if engine == "rust":
+        src, compiler, install = "codeloom_core_rs.rs", "rustc", "rustup (https://rustup.rs)"
+    else:
+        src, compiler, install = "codeloom_core.c", "cc", (
+            "Xcode Command Line Tools: xcode-select --install" if sys.platform == "darwin"
+            else "build-essential: sudo apt install build-essential" if sys.platform.startswith("linux")
+            else "MSVC Build Tools or LLVM clang")
+    if not shutil.which(compiler):
+        return ("{0} core unavailable: '{1}' not found on PATH.\n"
+                "  Install {2}, then rerun — or just continue: the pure-Python\n"
+                "  engine needs nothing and everything still works.\n"
+                "  Source is committed at {3} (auditable, no downloads).").format(
+                    engine, compiler, install, src)
+    return ("{0} core build failed even though '{1}' exists.\n"
+            "  Try manually: see scripts/release.sh notes or open an issue with\n"
+            "  your compiler version. Everything still works via pure-Python.").format(engine, compiler)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(prog="codeloom", description=__doc__)
     p.add_argument("root", nargs="?", default=".", help="repo path (default: cwd)")
@@ -6813,6 +6865,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--index", action="store_true", help="build + save a persistent byte-offset index (scale)")
     p.add_argument("--engine", choices=["py", "c", "rust"], default="py", help="scanning engine: py (pure-Python, default), c (compiled codeloom_core), or rust (compiled codeloom_core_rs, multi-threaded)")
     p.add_argument("--watch", action="store_true", help="incremental daemon-less refresh: re-index only changed files, keep lookups near-resident")
+    p.add_argument("--watch-merge", action="store_true", dest="watch_merge", help="read watcher JSON lines from stdin, apply changed files to the persistent index live")
     p.add_argument("--watch-core", metavar="ROOT", help="native C file watcher (kqueue/inotify): print changed code files live")
     p.add_argument("--serve", metavar="ROOT", help="C-resident index server: answer symbol lookups sub-ms (no Python per query)")
     p.add_argument("--index-status", action="store_true", help="show persistent index status/freshness")
@@ -7059,11 +7112,77 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(refresh_index_incremental(root, args.max_files))
         return 0
 
+    if getattr(args, "watch_merge", False):
+        # Consume codeloom_rs watch / codeloom --watch-core JSON lines from
+        # stdin and apply them to the persistent index incrementally — this
+        # is the missing wire that makes the watcher feed the index live
+        # (codegraph-style freshness, still daemon-less: run it as a sidecar,
+        #   codeloom_rs watch ROOT | codeloom --watch-merge ROOT
+        # ). Each line is one changed file; removed files drop from the index.
+        pidx = load_persistent_index(root) or {"files": {}, "symbols": {}}
+        n_applied = 0
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            f = rec.get("file")
+            if not f:
+                continue
+            if rec.get("removed"):
+                pidx["files"].pop(f, None)
+                for name in [k for k, locs in pidx["symbols"].items()
+                             if any(l.get("path") == f for l in locs)]:
+                    pidx["symbols"][name] = [l for l in pidx["symbols"][name]
+                                             if l.get("path") != f]
+                    if not pidx["symbols"][name]:
+                        del pidx["symbols"][name]
+            else:
+                mod = module_name_of(f, root)
+                file_syms: dict = {}
+                ext = os.path.splitext(f)[1].lower()
+                if ext == ".py":
+                    try:
+                        _index_python_bytes(f, mod, file_syms)
+                    except Exception:
+                        pass
+                elif ext in CALL_LANG_RULES:
+                    _index_other_bytes(f, mod, ext, file_syms)
+                # replace this file's contributions in the flat index
+                for name in [k for k, locs in pidx["symbols"].items()
+                             if any(l.get("path") == f for l in locs)]:
+                    pidx["symbols"][name] = [l for l in pidx["symbols"][name]
+                                             if l.get("path") != f]
+                    if not pidx["symbols"][name]:
+                        del pidx["symbols"][name]
+                for name, locs in file_syms.items():
+                    for l in locs:
+                        l.pop("source", None)
+                        l["sig"] = ""
+                    pidx["symbols"].setdefault(name, []).extend(locs)
+                try:
+                    pidx["files"][f] = (os.path.getmtime(f), os.path.getsize(f))
+                except OSError:
+                    pass
+            n_applied += 1
+            if n_applied % 20 == 0:
+                save_persistent_index(root, pidx["symbols"],
+                                      list(pidx["files"].keys()), skip_json=False)
+        if n_applied:
+            save_persistent_index(root, pidx["symbols"], list(pidx["files"].keys()))
+            print("watch-merge: applied %d change(s) to %s" % (n_applied, root))
+        else:
+            print("watch-merge: no changes received")
+        return 0
+
     if args.watch_core:
         # native C file watcher (kqueue on macOS / inotify on Linux)
         core = _find_core()
         if not core:
-            print("C core not built. Run: codeloom --build-core")
+            print(_core_unavailable_help("c"))
             return 1
         import subprocess as _sp
         wroot = args.watch_core if args.watch_core != "." else root
@@ -7077,7 +7196,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # C-resident index server: sub-ms lookups, no Python per query
         core = _find_core()
         if not core:
-            print("C core not built. Run: codeloom --build-core")
+            print(_core_unavailable_help("c"))
             return 1
         import subprocess as _sp
         sroot = args.serve if args.serve != "." else root

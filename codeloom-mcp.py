@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from typing import Any, Dict, List, Optional
 
 # Reuse codeloom's logic directly (same directory).
@@ -32,7 +33,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.68.0"
+SERVER_VERSION = "0.69.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -1273,16 +1274,29 @@ def _collect_files(root: str, max_files: int) -> List[str]:
 # --------------------------------------------------------------------------- #
 
 class _Index:
-    """Per-root in-memory index with incremental refresh."""
+    """Per-root in-memory index with incremental refresh. Bounded: at most
+    MAX_ROOTS roots stay resident (LRU by last access) so a long session
+    across many big repos can't grow memory forever."""
+
+    MAX_ROOTS = 8
 
     def __init__(self):
         self._roots: Dict[str, Dict[str, Any]] = {}
+        self._access: List[str] = []  # LRU order, most recent last
 
     def _get(self, root: str, max_files: int) -> Dict[str, Any]:
         entry = self._roots.get(root)
         if entry is None:
+            if len(self._roots) >= self.MAX_ROOTS:
+                # evict least-recently-used root
+                lru = self._access[0]
+                self._roots.pop(lru, None)
+                self._access = [r for r in self._access[1:] if r != lru]
             entry = {"files": [], "hashes": {}, "symbols": {}, "kg": None}
             self._roots[root] = entry
+        if root in self._access:
+            self._access.remove(root)
+        self._access.append(root)
         return entry
 
     def files(self, root: str, max_files: int) -> List[str]:
@@ -1362,18 +1376,33 @@ class _Index:
 
     def kg(self, root: str, max_files: int) -> dict:
         """Return the knowledge-graph call edges, cached in memory and
-        invalidated when files change. This is the resident-graph win: heavy
-        ops (--cross, --deadcode) hit memory, not disk — daemon-speed without
-        a separate daemon process."""
+        invalidated when files change — including in-place EDITS (content
+        hashes), not just file-set changes. This is the resident-graph win:
+        heavy ops (--cross, --deadcode) hit memory, not disk — daemon-speed
+        without a separate daemon process."""
         entry = self._get(root, max_files)
         files = self.files(root, max_files)
-        # invalidate the cached graph if the file set changed
-        if entry["kg"] is None or entry["kg"].get("_files") != files:
-            calls = codeloom.build_call_graph_multi(files, root)
-            entry["kg"] = {
-                "_files": files,
-                "calls": {m: {c: sorted(s) for c, s in funcs.items()} for m, funcs in calls.items()},
-            }
+        # invalidate on file-set change OR any content change: sample mtimes
+        # of tracked files (cheap) — if the newest mtime moved past what the
+        # cached graph was built at, rebuild.
+        cached = entry.get("kg")
+        if cached is not None and cached.get("_files") == files:
+            newest = 0.0
+            for f in files[:2000]:
+                try:
+                    m = os.stat(f).st_mtime
+                    if m > newest:
+                        newest = m
+                except OSError:
+                    pass
+            if newest <= cached.get("_built_mtime", float("inf")):
+                return entry["kg"]["calls"]
+        calls = codeloom.build_call_graph_multi(files, root)
+        entry["kg"] = {
+            "_files": files,
+            "_built_mtime": time.time(),
+            "calls": {m: {c: sorted(s) for c, s in funcs.items()} for m, funcs in calls.items()},
+        }
         return entry["kg"]["calls"]
 
 
