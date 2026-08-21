@@ -1085,6 +1085,34 @@ class TestCodeLoom(unittest.TestCase):
                 "grammar parity broke for %s — extraction changed; if intended, "
                 "regenerate via engine_rs/gen_fixtures.sh" % lang)
 
+    def test_health_scores_and_detectors(self):
+        # deterministic health screen: dead symbol + long function detected,
+        # score < 10 for the offender, clean file stays at 10
+        tmp = tempfile.mkdtemp()
+        try:
+            dirty = os.path.join(tmp, "dirty.py")
+            with open(dirty, "w") as f:
+                f.write("def orphan():\n    return 1\n\n\n")
+                f.write("def too_many(a, b, c, d, e, f_, g):\n    return a\n")
+            clean = os.path.join(tmp, "clean.py")
+            with open(clean, "w") as f:
+                f.write("def used():\n    return 1\n\n\n"
+                        "def caller():\n    return used()\n")
+            files = [dirty, clean]
+            out = codeloom.render_health(files, tmp)
+            self.assertIn("code health", out)
+            self.assertIn("dead_symbol", out)      # orphan never called
+            self.assertIn("too_many_params", out)  # 7 params
+            self.assertIn("dirty.py", out)         # offender named worst-first
+            res = codeloom.compute_health(files, tmp,
+                                          codeloom.build_byte_index(files, tmp),
+                                          codeloom.build_call_graph_multi(files, tmp))
+            self.assertLess(res["files"][dirty]["score"], 10.0)
+            # clean file produces NO findings (absent from the findings map)
+            self.assertNotIn(clean, res["files"])
+        finally:
+            shutil.rmtree(tmp)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

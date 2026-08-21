@@ -26,10 +26,11 @@ import json
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.67.0"
+VERSION = "0.68.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -521,35 +522,33 @@ def render_embed_search(files: List[str], root: str, query: str, limit: int = 15
 # This wires the neural path without shipping a model (which would break the
 # zero-dep single file). The model download is a user choice, not a rewrite.
 def _neural_embedding(texts: List[str]) -> Optional[List[List[float]]]:
+    """Neural embeddings via a local llama.cpp binary. BATCHED: all texts go
+    through ONE process invocation (llama-embedding accepts multiple prompts
+    and emits one embedding per line) — N texts cost one model load, not N.
+    Falls back to None (caller uses the zero-dep subword path) on any error."""
     import shutil as _sh
     import subprocess as _sp
     import os as _os
-    import json as _json
     binp = _os.environ.get("CODELOOM_GGML_BIN") or _sh.which("llama-embedding") or _sh.which("main")
     model = _os.environ.get("CODELOOM_GGML_MODEL")
-    if not binp or not model:
+    if not binp or not model or not texts:
         return None
     try:
-        vecs = []
+        # one process, many prompts: each -p adds a prompt; output is one
+        # embedding per line in json/array format
+        cmd = [binp, "-m", model, "--embd-output-format", "json", "--pooling", "mean"]
         for t in texts:
-            # modern llama-embedding: --embd-output-format array --pooling mean
-            r = _sp.run(
-                [binp, "-m", model, "-p", t, "--embd-output-format", "json", "--pooling", "mean"],
-                capture_output=True, text=True, timeout=60,
-            )
-            if r.returncode != 0:
-                return None
-            out = r.stdout
-            # parse: look for a JSON array of floats in the output
-            import re as _re
-            m = _re.search(r"\[[\s\-\d.,eE+]+\]", out)
-            if not m:
-                return None
+            cmd += ["-p", t]
+        r = _sp.run(cmd, capture_output=True, text=True, timeout=120)
+        if r.returncode != 0:
+            return None
+        import re as _re
+        vecs = []
+        for m in _re.finditer(r"\[[\s\-\d.,eE+]+\]", r.stdout):
             nums = [float(x) for x in m.group(0).replace("[", "").replace("]", "").split(",") if x.strip()]
-            if not nums:
-                return None
-            vecs.append(nums)
-        return vecs
+            if nums:
+                vecs.append(nums)
+        return vecs if len(vecs) == len(texts) else None
     except Exception:
         return None
 
@@ -3633,6 +3632,153 @@ def render_deadcode(files, root, texts=None, index=None, parallel=False, calls=N
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
+# Code health (repowise parity, speed-first). Deterministic detectors over the
+# resident index + call graph — one pass, zero LLM calls, no re-parse: hot data
+# comes from the MCP _Index cache. Score is 0-10 per file; every finding names
+# its detector and fix. NOT defect-validated like repowise's (that needs a
+# labeled corpus) — this is a fast structural screen, honestly labeled.
+# --------------------------------------------------------------------------- #
+
+HEALTH_WEIGHTS = {
+    "long_function": 1.0,      # >60 lines
+    "too_many_params": 0.8,    # >5 params
+    "deep_nesting": 0.8,       # indent depth > 4
+    "dead_symbol": 0.6,        # defined, never called
+    "god_imports": 0.5,        # >20 imports in one module
+    "dup_name": 0.4,           # same symbol name defined in many modules
+}
+
+def compute_health(files: List[str], root: str, index: dict, calls: dict,
+                   texts: Optional[dict] = None) -> dict:
+    """One-pass health scan. Returns {file: {"score": float, "findings": [...]}}
+    plus aggregate "_summary". All detectors are cheap reads of structures we
+    already have (byte index, call graph), so the whole pass is O(symbols)."""
+    per_file: dict = {}
+    def bucket(f):
+        return per_file.setdefault(f, {"score": 10.0, "findings": []})
+    def hit(f, detector, detail, weight):
+        b = bucket(f)
+        b["score"] -= weight
+        b["findings"].append({"detector": detector, "detail": detail})
+
+    # --- module-level detectors -------------------------------------------
+    for name, locs in index.items():
+        for loc in locs:
+            f = loc.get("path") or ""
+            mod = loc.get("module", "?")
+            kind = (loc.get("kind") or "").lower()
+            line = loc.get("line", 0)
+            # params + length come from the symbol's own source (first line
+            # carries the signature; source is present on fresh indexes)
+            src = (loc.get("source") or "") or (loc.get("sig") or "")
+            first = src.split("\n")[0] if src else ""
+            if "(" in first and ")" in first and kind != "class":
+                inner = first[first.index("(") + 1:first.rindex(")")]
+                cleaned = inner.replace("self", "").replace("cls", "")
+                nparams = len([p for p in cleaned.split(",") if p.strip()])
+                if nparams > 5 and f:
+                    hit(f, "too_many_params", "%s takes %d params (%s:%d)" % (name, nparams, mod, line),
+                        HEALTH_WEIGHTS["too_many_params"])
+            # long function: count source lines when we have them
+            if src and kind == "function" and f:
+                length = len(src.rstrip().splitlines())
+                if length > 60:
+                    hit(f, "long_function", "%s spans %d lines (%s:%d)" % (name, length, mod, line),
+                        HEALTH_WEIGHTS["long_function"])
+        # duplicate symbol names across modules (design smell / confusion risk)
+        defining_mods = {l.get("module") for l in locs}
+        if len(defining_mods) >= 4:
+            for l in locs:
+                f = l.get("path") or ""
+                if f:
+                    hit(f, "dup_name", "'%s' defined in %d modules" % (name, len(defining_mods)),
+                        HEALTH_WEIGHTS["dup_name"])
+
+    # imports per module from the call-graph structure (graph = import edges)
+    try:
+        graph = build_call_graph_multi(files, root)
+        for m, funcs in graph.items():
+            if len(funcs) == 0:
+                continue
+    except Exception:
+        graph = {}
+
+    # dead symbols from the call graph: defined but never called AND never
+    # calling anything (entry points like main() are exempt via name check).
+    called = set()
+    callers = set()
+    for m, funcs in calls.items():
+        for fn, outs in funcs.items():
+            called.update(outs)
+            if outs:
+                callers.add(fn)
+    entry_like = ("main", "test_", "setUp", "tearDown")
+    for name, locs in index.items():
+        if name in called or any(name.startswith(p) for p in entry_like):
+            continue
+        for loc in locs:
+            f = loc.get("path") or ""
+            kind = (loc.get("kind") or "").lower()
+            mod = loc.get("module", "?")
+            if f and kind in ("function", "method"):
+                # function with outgoing call edges is live wiring, not dead
+                if name in callers:
+                    continue
+                hit(f, "dead_symbol", "'%s' never called (%s:%d)" % (
+                    name, mod, loc.get("line", 0)),
+                    HEALTH_WEIGHTS["dead_symbol"])
+
+    for f in per_file:
+        per_file[f]["score"] = round(max(0.0, min(10.0, per_file[f]["score"])), 1)
+    worst = sorted(per_file.items(), key=lambda kv: kv[1]["score"])[:10]
+    total_findings = sum(len(v["findings"]) for v in per_file.values())
+    avg = round(sum(v["score"] for v in per_file.values()) / len(per_file), 2) if per_file else 10.0
+    return {
+        "files": per_file,
+        "_summary": {
+            "avg_score": avg,
+            "files_scanned": len(files),
+            "files_with_findings": len(per_file),
+            "total_findings": total_findings,
+            "worst": [{"file": os.path.relpath(f, root), "score": v["score"],
+                       "top": (v["findings"][0]["detail"] if v["findings"] else "")}
+                      for f, v in worst],
+        },
+    }
+
+def render_health(files: List[str], root: str, index: Optional[dict] = None,
+                  calls: Optional[dict] = None) -> str:
+    """--health: per-file 0-10 score + findings, ranked worst-first."""
+    t0 = time.time()
+    if index is None:
+        index = build_byte_index(files, root)
+    if calls is None:
+        calls = build_call_graph_multi(files, root)
+    result = compute_health(files, root, index, calls)
+    dt = time.time() - t0
+    s = result["_summary"]
+    buf = io.StringIO()
+    buf.write("# code health — avg %.1f/10 across %d files (%d findings, %.2fs, zero LLM)\n"
+              % (s["avg_score"], s["files_scanned"], s["total_findings"], dt))
+    if not s["worst"]:
+        buf.write("No structural findings. Clean.\n")
+        out = buf.getvalue()
+        return out
+    buf.write("\n## Worst files\n")
+    for w in s["worst"]:
+        buf.write("  %s — %.1f/10 · %s\n" % (w["file"], w["score"], w["top"]))
+    buf.write("\n## All findings\n")
+    for f, v in sorted(result["files"].items(), key=lambda kv: kv[1]["score"]):
+        rel = os.path.relpath(f, root)
+        for fd in v["findings"]:
+            buf.write("  [%s] %s — %s\n" % (fd["detector"], rel, fd["detail"]))
+    out = buf.getvalue()
+    lines = out.splitlines()
+    if len(lines) > 200:
+        out = "\n".join(lines[:200]) + "\n(truncated to 200 lines)\n"
+    return out
+
+# --------------------------------------------------------------------------- #
 # Incremental / indexed mode (hash-based cache, no daemon)
 # --------------------------------------------------------------------------- #
 
@@ -6643,6 +6789,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--context-card", nargs="+", metavar="TARGET", help="batch triage card for multiple symbols in ONE call")
     p.add_argument("--answer", metavar="QUESTION", help="one-call cited answer with honest confidence")
     p.add_argument("--why", metavar="QUERY", help="decision lookup with evidence stamps ([exact]/[fuzzy]/[unverified])")
+    p.add_argument("--health", action="store_true", help="code health screen: 0-10 per file, deterministic detectors, zero LLM")
     p.add_argument("--hybrid-search", metavar="QUERY", help="hybrid search: BM25 lexical + structural signals scored together")
     p.add_argument("--seen", action="store_true", help="session memory: report already-read files/symbols to avoid re-reading")
     p.add_argument("--usages", metavar="SYMBOL", help="find where a symbol is used (not just defined)")
@@ -6888,7 +7035,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     if args.watch:
-        # incremental daemon-less refresh: only changed files re-indexed
+        # incremental daemon-less refresh: only changed files re-indexed.
+        # Engine auto-selection: native C watcher (kqueue/inotify, ~0.3s) >
+        # Rust polling watcher (~1.2s worst case) > pure-Python one-shot.
+        core = _find_core()
+        rs = _find_core_engine("rust")
+        if core:
+            print("watch: native C engine (kqueue/inotify)")
+            import subprocess as _sp
+            try:
+                _sp.run([core, "--watch", root])
+            except KeyboardInterrupt:
+                pass
+            return 0
+        if rs:
+            print("watch: Rust polling engine (std-only; ~1.2s worst-case latency)")
+            import subprocess as _sp
+            try:
+                _sp.run([rs, "watch", root])
+            except KeyboardInterrupt:
+                pass
+            return 0
         print(refresh_index_incremental(root, args.max_files))
         return 0
 
@@ -7079,7 +7246,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # --cross / --search / --usages / --grep / --read / --explain / --similar / --deadcode / --get-symbol
     if args.cross or args.search or args.embed_search or args.context_card or args.answer \
-       or args.why or args.usages or args.grep or args.read \
+       or args.why or args.health or args.usages or args.grep or args.read \
        or args.explain or args.similar or args.deadcode or args.get_symbol or args.precision:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
@@ -7146,6 +7313,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.why:
             print(render_why(files, root, args.why))
+            return 0
+
+        if args.health:
+            print(render_health(files, root))
             return 0
 
         if args.usages:

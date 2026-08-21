@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.67.0"
+SERVER_VERSION = "0.68.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -324,6 +324,23 @@ TOOLS: List[Dict[str, Any]] = [
                 "query": {"type": "string", "description": "Decision topic, e.g. 'rate limiting approach'"},
             },
             "required": ["query"],
+        },
+    },
+    {
+        "name": "codeloom_health",
+        "description": (
+            "Code health screen (repowise get_health parity, speed-first): "
+            "deterministic detectors — long functions, too-many-params, dead "
+            "symbols, duplicate names — scored 0-10 per file, worst-first. Zero "
+            "LLM calls, sub-second on typical repos, served from the resident "
+            "in-memory index. A fast structural screen, NOT defect-validated."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
+            },
         },
     },
     {
@@ -1269,14 +1286,46 @@ class _Index:
         return entry
 
     def files(self, root: str, max_files: int) -> List[str]:
-        """Return the file list, re-walking only if the repo changed."""
+        """Return the resident file list. The walk itself is cached and only
+        redone when the repo's top-level mtime signature changes — repeated
+        MCP calls hit memory, not the filesystem (daemon-speed without a
+        daemon). Signature = max mtime + count of root entries, O(1) to check."""
         entry = self._get(root, max_files)
-        # re-walk if the file set may have changed (cheap: compare count + mtimes)
-        current = _collect_files(root, max_files)
-        if len(current) != len(entry["files"]):
-            entry["files"] = current
-            entry["hashes"] = {}
+        sig = self._root_signature(root)
+        if sig != entry.get("_walk_sig"):
+            current = _collect_files(root, max_files)
+            if len(current) != len(entry["files"]) or set(current) != set(entry["files"]):
+                entry["files"] = current
+                entry["hashes"] = {}
+            else:
+                entry["files"] = current
+            entry["_walk_sig"] = sig
         return entry["files"]
+
+    @staticmethod
+    def _root_signature(root: str) -> tuple:
+        """Cheap change detector for the walk: (entry count, newest mtime)
+        of the root dir itself plus one level of subdirs. Catches new/deleted
+        files and dirs without walking the whole tree."""
+        try:
+            st = os.stat(root)
+            sig = [st.st_mtime]
+            try:
+                with os.scandir(root) as it:
+                    n = 0
+                    for e in it:
+                        n += 1
+                        if n > 500:
+                            break
+                        try:
+                            sig.append(e.stat().st_mtime)
+                        except OSError:
+                            pass
+            except OSError:
+                pass
+            return (len(sig), max(sig))
+        except OSError:
+            return (0, 0.0)
 
     def symbols(self, root: str, max_files: int) -> dict:
         """Return the symbol index, re-parsing only changed files."""
@@ -1850,6 +1899,15 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if not q:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'query' argument"}]}
         text = codeloom.render_why(files, root, q)
+    elif name == "codeloom_health":
+        # speed win: serve from the RESIDENT index + graph (no re-parse).
+        # Falls back to a fresh build on the first call for a root.
+        try:
+            idx = _INDEX.symbols(root, max_files)
+            kg = _INDEX.kg(root, max_files)
+            text = codeloom.render_health(files, root, index=idx, calls=kg)
+        except Exception:
+            text = codeloom.render_health(files, root)
     elif name == "codeloom_usages":
         symbol = args.get("symbol")
         if not symbol:
