@@ -66,11 +66,10 @@ jobs:
             }));
             const event = 'COMMENT';
 
-            // commit_id must be a commit ON THE PR — use the checked-out SHA
-            // (actions/checkout on a PR builds the merge ref; github.context.sha
-            // is that merge commit, which createReview rejects with Not Found).
-            const checkedSha = process.env.GITHUB_SHA_OVERRIDE ||
-              require('@actions/github').context.payload.pull_request.head.sha;
+            // commit_id must be a commit ON THE PR — the checked-out ref on
+            // PR events is the merge commit, which createReview rejects with
+            // Not Found. The payload's head.sha is always a PR commit.
+            const checkedSha = context.payload.pull_request.head.sha;
             try {
               await github.rest.pulls.createReview({
                 owner: context.repo.owner,
