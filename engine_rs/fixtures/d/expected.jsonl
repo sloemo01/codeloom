@@ -1,1 +1,1 @@
-{"file":"fixtures/d/sample.d","symbols":[{"name":"class","kind":"class_declaration","line":4},{"name":"prep","kind":"function_declaration","line":3},{"name":"run","kind":"function_declaration","line":2}],"imports":[],"calls":["prep"]}
+{"file":"fixtures/d/sample.d","symbols":[{"name":"Cfg","kind":"class_declaration","line":4},{"name":"prep","kind":"function_declaration","line":3},{"name":"run","kind":"function_declaration","line":2}],"imports":[],"calls":["prep"]}

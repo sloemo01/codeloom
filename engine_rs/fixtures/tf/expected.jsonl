@@ -1,0 +1,1 @@
+{"file":"fixtures/tf/sample.tf","symbols":[{"name":"resource","kind":"block","line":1},{"name":"bucket","kind":"attribute","line":2}],"imports":[],"calls":[]}

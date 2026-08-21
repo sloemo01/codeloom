@@ -1,0 +1,1 @@
+{"file":"fixtures/glsl/sample.glsl","symbols":[{"name":"void","kind":"function_definition","line":1}],"imports":[],"calls":["vec4"]}

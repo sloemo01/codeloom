@@ -1051,7 +1051,7 @@ class TestCodeLoom(unittest.TestCase):
             self.skipTest("engine_rs binary not built (cargo build --release)")
         langs = sorted(d for d in os.listdir(fx)
                        if os.path.isdir(os.path.join(fx, d)))
-        self.assertGreaterEqual(len(langs), 25, "expected >=25 grammar fixtures")
+        self.assertGreaterEqual(len(langs), 35, "expected >=35 grammar fixtures")
         for lang in langs:
             d = os.path.join(fx, lang)
             exp_path = os.path.join(d, "expected.jsonl")

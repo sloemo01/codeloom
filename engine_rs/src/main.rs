@@ -73,6 +73,37 @@ fn lang_for(path: &str) -> Option<(tree_sitter::Language, &'static [&'static str
         Some((tree_sitter_ocaml::LANGUAGE_OCAML.into(), &["value_definition", "module_definition", "type_definition"]))
     } else if lower.ends_with(".sol") {
         Some((tree_sitter_solidity::LANGUAGE.into(), &["contract_declaration", "function_definition"]))
+    } else if lower.ends_with(".r") || lower.ends_with(".rd") {
+        Some((tree_sitter_r::LANGUAGE.into(), &["function_definition"]))
+    } else if lower.ends_with(".jl") {
+        Some((tree_sitter_julia::LANGUAGE.into(), &["function_definition", "short_function_definition", "module_definition", "struct_definition", "macro_definition"]))
+    } else if lower.ends_with(".zig") {
+        Some((tree_sitter_zig::LANGUAGE.into(), &["function_declaration", "variable_declaration"]))
+    } else if lower.ends_with(".erl") || lower.ends_with(".hrl") {
+        Some((tree_sitter_erlang::LANGUAGE.into(), &["function_clause"]))
+    } else if lower.ends_with(".f90") || lower.ends_with(".f95") || lower.ends_with(".for") {
+        Some((tree_sitter_fortran::LANGUAGE.into(), &["function_statement", "subroutine_statement", "program_statement"]))
+    } else if lower.ends_with(".cu") || lower.ends_with(".cuh") {
+        Some((tree_sitter_cuda::LANGUAGE.into(), &["function_definition", "class_specifier"]))
+    } else if lower.ends_with(".m") && !lower.contains("objc") {
+        // .m ambiguity resolved by content elsewhere; treat as ObjC by default
+        Some((tree_sitter_objc::LANGUAGE.into(), &["method_definition", "function_definition", "class_interface"]))
+    } else if lower.ends_with(".lisp") || lower.ends_with(".el") {
+        Some((tree_sitter_commonlisp::LANGUAGE_COMMONLISP.into(), &["function_definition", "macro_definition"]))
+    } else if lower.ends_with(".nix") {
+        Some((tree_sitter_nix::LANGUAGE.into(), &["function_definition", "binding"]))
+    } else if lower.ends_with("makefile") || lower.ends_with(".mk") {
+        Some((tree_sitter_make::LANGUAGE.into(), &["rule", "variable_assignment"]))
+    } else if lower.ends_with(".tf") || lower.ends_with(".hcl") {
+        Some((tree_sitter_hcl::LANGUAGE.into(), &["block", "attribute"]))
+    } else if lower.ends_with(".glsl") || lower.ends_with(".vert") || lower.ends_with(".frag") {
+        Some((tree_sitter_glsl::LANGUAGE_GLSL.into(), &["function_definition", "declaration"]))
+    } else if lower.ends_with(".v") || lower.ends_with(".sv") {
+        Some((tree_sitter_verilog::LANGUAGE.into(), &["module_declaration", "function_declaration", "task_declaration"]))
+    } else if lower.ends_with(".pas") || lower.ends_with(".pp") {
+        Some((tree_sitter_pascal::LANGUAGE.into(), &["procedure_declaration", "function_declaration"]))
+    } else if lower.ends_with(".fs") || lower.ends_with(".fsx") {
+        Some((tree_sitter_fsharp::LANGUAGE_FSHARP.into(), &["function_or_value_defn", "value_declaration"]))
     } else {
         None
     }
@@ -123,13 +154,36 @@ fn node_name(node: &tree_sitter::Node, src: &[u8]) -> String {
             return text.to_string();
         }
     }
-    // fallback: find first child that is an identifier-ish leaf
+    // fallback 1: first child that is an identifier-ish leaf
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.is_named() && child.child_count() == 0 {
             if let Ok(text) = child.utf8_text(src) {
                 let t = text.trim();
-                if !t.is_empty() && t.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                if !t.is_empty()
+                    && t.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    && !matches!(
+                        t,
+                        "function" | "def" | "class" | "struct" | "module" | "let" | "var"
+                            | "const" | "fn" | "pub" | "end" | "sub" | "macro"
+                    )
+                {
+                    return t.to_string();
+                }
+            }
+        }
+    }
+    // fallback 2 (julia/fsharp-style): first NAMED child whose kind is an
+    // identifier — the name node is named but has no children of its own.
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.is_named()
+            && child.kind().contains("identifier")
+            && child.child_count() == 0
+        {
+            if let Ok(text) = child.utf8_text(src) {
+                let t = text.trim();
+                if !t.is_empty() {
                     return t.to_string();
                 }
             }
