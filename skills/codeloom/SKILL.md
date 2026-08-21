@@ -242,6 +242,10 @@ This is the decision guide: given what you're trying to do, which flag serves it
 | `--mark-seen f sym` | mark files/symbols as deeply understood (hot set) |
 | `--working-state` | layered working-state packet: goal, decisions, actions, open items, hot set |
 | `--list-decisions` / `--list-open` | list recorded decisions / open items |
+- `codeloom --lesson "tried X, failed because Y"` — record a trap (never re-explore dead ends)
+- `codeloom --supersede OLD NEW` — mark a decision as superseded
+- `codeloom --query-memory "auth"` — what do we already know about X
+- `codeloom --cognitive-load "topic"` — cognitive-load-aware decomposition
 - `codeloom --seen` — "what have I already explored?" (avoid re-reading)
 - `codeloom --resume` — restore the structural map after a compaction
 - `codeloom --session` / `--session-report` — log & summarize what was done

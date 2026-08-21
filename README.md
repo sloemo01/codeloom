@@ -36,7 +36,7 @@
 </p>
 
 <p align="center">
-  <b>17 agents</b> · <b>130+ languages</b> · <b>62 MCP tools</b> · <b>91s Linux kernel</b>
+  <b>17 agents</b> · <b>130+ languages</b> · <b>70 MCP tools</b> · <b>91s Linux kernel</b>
 </p>
 
 ---
@@ -153,7 +153,15 @@ That's it. Under a second, zero setup, works offline. Cross-platform — macOS, 
 | `codeloom --checkpoint "note"` | Snapshot in-progress work (git diff + status note) to survive compaction |
 | `codeloom --checkpoint-restore` | Read the last checkpoint back to resume in-progress work |
 | `codeloom --loom "task"` | Intent engine: layered context for a task (overview→files→code→git→memory) |
-| `codeloom --remember "note" --section X` | Append to persistent repository memory |
+| `codeloom --decide "title" --reason "..."` | Record a decision (accepted/rejected) |
+| `codeloom --reject "title" --reason "..."` | Record a rejected decision |
+| `codeloom --hypothesis "title"` | Record an open hypothesis |
+| `codeloom --lesson "text"` | Record a lesson/trap: tried and failed because |
+| `codeloom --supersede OLD NEW` | Mark a decision as superseded |
+| `codeloom --query-memory "topic"` | Search long-term memory: what do we already know about X |
+| `codeloom --mark-seen f sym` | Mark files/symbols as deeply understood (hot set) |
+| `codeloom --working-state` | Layered working-state packet: goal, decisions, actions, open items, hot set |
+| `codeloom --cognitive-load "topic"` | Cognitive-load-aware decomposition (intrinsic/extraneous/germane) |
 | `codeloom --adr "title" --context "..." --decision "..."` | Write a structured Architectural Decision Record |
 | `codeloom --adr-list` | List saved Architectural Decision Records |
 | `codeloom --churn` | Git intelligence: most-edited files (instability signal) |
@@ -616,7 +624,7 @@ and Qwen Code (or auto-detect with `--detect-agent`):
 }
 ```
 
-Exposes **62 tools**: `codeloom_map`, `codeloom_graph`, `codeloom_focus`,
+Exposes **70 tools**: `codeloom_map`, `codeloom_graph`, `codeloom_focus`,
 `codeloom_calls`, `codeloom_diff`, `codeloom_impact`, `codeloom_task`,
 `codeloom_plan`, `codeloom_pack`, `codeloom_cross`, `codeloom_search`,
 `codeloom_usages`, `codeloom_grep`, `codeloom_read`, `codeloom_explain`,
@@ -814,7 +822,7 @@ single zero-dependency file.
 | Sub-ms resident lookups | **yes — `--serve`** | yes | yes | yes |
 | **Runtime call edges (`--trace`)** | **yes** | no | no | no |
 | Offline | **yes** | yes | yes | yes |
-| **MCP tools** | **62** | 91 actions (6 routers) | ~10 | varies |
+| **MCP tools** | **70** | 91 actions (6 routers) | ~10 | varies |
 | Zero-dependency single file | **yes** | no | no | no |
 
 The heavyweight tools are great at retrieval — but they're *search engines*,
@@ -827,7 +835,7 @@ structural context, in one file, in under a second, always fresh.
 exposes **6 MCP tools** (`set_tool_tier`, `announce_model`, `jcodemunch_guide`,
 `order`, `menu`, `route`) that route to **91 internal actions** (`index_repo`,
 `search_symbols`, `get_symbol_source`, etc.) — and its own users report it as
-"30 tools" over the 50-tool limit (#297). codeloom has **62 MCP tools** and,
+"30 tools" over the 50-tool limit (#297). codeloom has **70 MCP tools** and,
 critically, **1 natural-language entry point** (`codeloom_ask`) that routes
 deterministically — so the agent's effective surface is **1 tool**, not
 6-over-91 or 30. That's the routing complexity that causes jcodemunch's 30%
@@ -840,7 +848,7 @@ codeloom's design answers them:
 
 | User pain (jcodemunch issue) | codeloom |
 |---|---|
-| **Too many tools** (#297: 109 tools across jMunch, over the 50 limit) | **62 tools + 1 entry point** (`codeloom_ask`) |
+| **Too many tools** (#297: 109 tools across jMunch, over the 50 limit) | **70 tools + 1 entry point** (`codeloom_ask`) |
 | **Token overhead on grep tasks** (#142: 1.31x more tokens, 2.43x cache reads) | **summary-first `--get-symbol` + `--pack`** (token-minimal by design) |
 | **Framework-aware intelligence** (#201: Laravel/Next.js conventions) | **`--framework`** (detects framework + routes/models/config/conventions) |
 | **Install friction** (#308, #273: PyPI unavailable, hook support) | **one file, copy it** + `pip install codeloom` |

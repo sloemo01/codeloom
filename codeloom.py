@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.59.0"
+VERSION = "0.60.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -2823,12 +2823,19 @@ def hybrid_search(files: List[str], root: str, query: str, limit: int = 20) -> L
 
 def render_hybrid_search(files: List[str], root: str, query: str, limit: int = 20) -> str:
     results = hybrid_search(files, root, query, limit)
+    # Session-aware rerank: boost symbols that are in the agent's hot set /
+    # already-deeply-understood, so search serves the current working state
+    hot = set(get_hot_set(root))
+    for r in results:
+        if r["name"] in hot or r["module"] in hot or any(r["name"] in h for h in hot):
+            r["score"] = round(r["score"] * 1.15, 2)
+    results.sort(key=lambda x: -x["score"])
     buf = io.StringIO()
     buf.write(f"# hybrid search: {query}\n")
     if not results:
         buf.write("No symbols found.\n")
         return buf.getvalue()
-    buf.write(f"{len(results)} result(s), scored (lexical + structure + git):\n\n")
+    buf.write(f"{len(results)} result(s), scored (lexical + structure + git + session):\n\n")
     for r in results:
         buf.write(f"  {r['name']}  [{r['kind']}]  {r['module']}:{r['line']}  (score {r['score']})\n")
         if r.get("snippet"):
@@ -4784,6 +4791,65 @@ def render_pack(files: List[str], root: str, task: str, top: int = 8,
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
+# --cognitive-load: cognitive-load-theory-aware task decomposition.
+# Splits a topic into working-memory-sized steps, labels element interactivity,
+# and suggests the minimal high-signal context (hot set + decisions + relevant
+# memory). This is the "managing the agent's cognitive load" primitive — it
+# optimizes for low extraneous load (no noise), sequenced intrinsic load
+# (easy -> hard), and high germane load (mental model = decisions + hot set).
+# --------------------------------------------------------------------------- #
+def render_cognitive_load(files: List[str], root: str, topic: str) -> str:
+    results = edit_relevance(files, root, topic, top=6)
+    buf = io.StringIO()
+    buf.write(f"# codeloom --cognitive-load \"{topic}\"\n")
+    buf.write("# Decomposed for working-memory-sized steps, low extraneous load.\n\n")
+
+    # Intrinsic load: the essential complexity, sequenced easiest->hardest
+    buf.write("## Intrinsic load (the inherent complexity, sequenced)\n")
+    if results:
+        # order: fewer deps first (easiest to hardest by anchor distance)
+        ranked = sorted(results, key=lambda r: r.get("anchor_dist", 99))
+        for i, r in enumerate(ranked, 1):
+            buf.write(f"  {i}. {r['module']}  (anchor distance {r.get('anchor_dist','?')}, "
+                      f"{r.get('overlap',0)} keyword hits)\n")
+    else:
+        buf.write("  No modules matched. Refine the topic.\n")
+    buf.write("\n")
+
+    # Extraneous load: what to AVOID (the noise) — full-file dumps, re-reads
+    hot = set(get_hot_set(root))
+    buf.write("## Extraneous load (skip this noise — it's already handled)\n")
+    if hot:
+        buf.write("  Already-deeply-understood (hot set) — do NOT re-read:\n")
+        for h in list(sorted(hot))[:8]:
+            buf.write(f"    - {h}\n")
+    else:
+        buf.write("  Nothing marked as understood yet. Use `--mark-seen` as you read.\n")
+    buf.write("  Prefer summary-first retrieval; full source is high extraneous load.\n\n")
+
+    # Germane load: build the mental model — decisions + open + lessons
+    buf.write("## Germane load (build the mental model — decisions, lessons, open items)\n")
+    mem = memory_query(root, topic)
+    body = mem.strip()
+    if "No long-term memory" not in body:
+        for line in body.splitlines()[1:]:
+            if line.strip():
+                buf.write(f"  {line.strip()}\n")
+    else:
+        buf.write("  (no recorded memory on this topic yet — record decisions as you go)\n")
+    opens = [e for e in journal_read(root) if e.get("type") in ("hypothesis", "open")]
+    if opens:
+        buf.write("  Open items/hypotheses:\n")
+        for o in opens[:5]:
+            buf.write(f"    - {o.get('title')} [{o.get('status','open')}]\n")
+    buf.write("\n")
+
+    buf.write("## Recommended minimal context (one call)\n")
+    buf.write("  codeloom --pack \"" + topic + "\" .   # full code-embedded brief\n")
+    buf.write("  codeloom --working-state .            # if post-compaction, restore first\n")
+    return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
 # loom_context — the intent engine (the keystone)
 # --------------------------------------------------------------------------- #
 # Instead of exposing 40 tools, expose ONE: loom_context(task). It internally
@@ -4829,6 +4895,67 @@ def memory_remember(root: str, section: str, note: str) -> str:
         return f"remembered: {section} <- {note}"
     except OSError as e:
         return f"memory write failed: {e}"
+
+# --------------------------------------------------------------------------- #
+# Rich long-term memory: lessons/traps, supersession, query-memory.
+# --lesson "we tried X, failed because Y" kills re-exploring dead ends.
+# --supersede OLD NEW marks "decision OLD is replaced by NEW".
+# --query-memory "auth" pulls decisions + lessons + conventions + ADRs.
+# Stored in .codeloom-memory/LESSONS.md / SUPERSEDED.md (git-friendly).
+# --------------------------------------------------------------------------- #
+def memory_lesson(root: str, lesson: str) -> str:
+    """Record a lesson/trap: something tried and why it failed, so a wiped
+    agent never re-explores the same dead end."""
+    d = _memory_dir(root)
+    p = os.path.join(d, "LESSONS.md")
+    try:
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(f"- {lesson}\n")
+        return f"recorded lesson: {lesson}"
+    except OSError as e:
+        return f"lesson write failed: {e}"
+
+def memory_supersede(root: str, old: str, new: str) -> str:
+    """Record that decision/hypothesis `old` is superseded by `new`."""
+    d = _memory_dir(root)
+    p = os.path.join(d, "SUPERSEDED.md")
+    try:
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(f"- {old} → superseded by {new}\n")
+        return f"superseded: {old} -> {new}"
+    except OSError as e:
+        return f"supersede write failed: {e}"
+
+def memory_query(root: str, query: str) -> str:
+    """Search long-term memory (DECISIONS/PATTERNS/CONVENTIONS/LESSONS/SUPERSEDED/
+    ADRs) for items relevant to `query`. Full-text term match over the plain-text
+    memory — the 'what do we already know about X' primitive."""
+    import re as _re
+    q = _re.escape(query.lower())
+    d = _memory_dir(root)
+    buf = io.StringIO()
+    buf.write(f"# codeloom --query-memory \"{query}\"\n")
+    hits = 0
+    files = [n for n in os.listdir(d) if n.endswith(".md")]
+    adr_d = os.path.join(d, "adr")
+    if os.path.isdir(adr_d):
+        files += ["adr/" + n for n in os.listdir(adr_d) if n.endswith(".md")]
+    for rel in sorted(files):
+        p = os.path.join(d, rel)
+        try:
+            with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            if _re.search(q, line.lower()):
+                buf.write(f"  [{rel}] {line.strip()}\n")
+                hits += 1
+    if not hits:
+        buf.write("  No long-term memory matches. Record some with --remember/--lesson/--decide.\n")
+    return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
 # --adr: Architectural Decision Records (structured, cross-session)
@@ -6117,6 +6244,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--task", metavar="TEXT", help="rank modules relevant to a task description")
     p.add_argument("--plan", metavar="TEXT", help="emit a prioritized reading plan for a task")
     p.add_argument("--pack", metavar="TEXT", help="emit a single-shot context file for a task (reading order + impact + symbols)")
+    p.add_argument("--cognitive-load", metavar="TOPIC", help="cognitive-load-aware task decomposition (intrinsic/extraneous/germane load)")
     p.add_argument("--resume", action="store_true", help="emit a compact structural snapshot to restore context after compaction")
     p.add_argument("--checkpoint", metavar="NOTE", nargs="?", const="", help="snapshot in-progress work (git diff + status note) to survive compaction")
     p.add_argument("--checkpoint-restore", action="store_true", help="read the last checkpoint back to resume in-progress work")
@@ -6130,6 +6258,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--status", metavar="STATUS", default="accepted", help="status for --decide (accepted/rejected/open)")
     p.add_argument("--list-decisions", action="store_true", help="list recorded decisions")
     p.add_argument("--list-open", action="store_true", help="list open items/hypotheses")
+    p.add_argument("--lesson", metavar="TEXT", help="record a lesson/trap: something tried and why it failed")
+    p.add_argument("--supersede", nargs=2, metavar=("OLD", "NEW"), help="mark decision OLD as superseded by NEW")
+    p.add_argument("--query-memory", metavar="QUERY", help="search long-term memory for 'what do we already know about X'")
     p.add_argument("--mark-seen", nargs="+", metavar="ITEM", help="mark files/symbols as already understood (hot set)")
     p.add_argument("--working-state", action="store_true", help="emit the layered working-state packet (goal, decisions, actions, open items, hot set)")
     p.add_argument("--adr", metavar="TITLE", help="write an Architectural Decision Record (use --context and --decision)")
@@ -6693,7 +6824,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
     # --impact / --task / --plan / --pack: task-aware intelligence
-    if args.impact or args.task or args.plan or args.pack or args.check_edit or args.check_delete or args.resume or args.loom or args.remember or args.checkpoint is not None or args.checkpoint_restore or args.adr or args.adr_list or args.decide or args.reject or args.hypothesis or args.list_decisions or args.list_open or args.mark_seen or args.working_state:
+    if args.impact or args.task or args.plan or args.pack or args.cognitive_load or args.check_edit or args.check_delete or args.resume or args.loom or args.remember or args.checkpoint is not None or args.checkpoint_restore or args.adr or args.adr_list or args.decide or args.reject or args.hypothesis or args.list_decisions or args.list_open or args.mark_seen or args.working_state or args.lesson or args.supersede or args.query_memory:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
@@ -6744,6 +6875,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(render_pack(files, root, args.pack))
             return 0
 
+        if args.cognitive_load:
+            print(render_cognitive_load(files, root, args.cognitive_load))
+            return 0
+
         if args.resume:
             print(render_resume(files, root, args.max_files))
             return 0
@@ -6782,6 +6917,18 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.list_open:
             print(list_open_items(root))
+            return 0
+
+        if args.lesson:
+            print(memory_lesson(root, args.lesson))
+            return 0
+
+        if args.supersede:
+            print(memory_supersede(root, args.supersede[0], args.supersede[1]))
+            return 0
+
+        if args.query_memory:
+            print(memory_query(root, args.query_memory))
             return 0
 
         if args.mark_seen:

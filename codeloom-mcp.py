@@ -32,7 +32,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.59.0"
+SERVER_VERSION = "0.60.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -1109,6 +1109,56 @@ TOOLS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "codeloom_record_lesson",
+        "description": (
+            "Record a lesson/trap: something tried and why it failed, so a wiped "
+            "agent never re-explores the same dead end. Use when you abandon an "
+            "approach after trying it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "lesson": {"type": "string", "description": "e.g. 'in-memory bucket failed because not multi-instance'"},
+            },
+            "required": ["lesson"],
+        },
+    },
+    {
+        "name": "codeloom_query_memory",
+        "description": (
+            "Search long-term memory (decisions, patterns, lessons, conventions, "
+            "ADRs) for what the agent already knows about a topic. Use for 'what "
+            "do we already know about X' before re-deriving it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "query": {"type": "string", "description": "topic, e.g. 'auth rate limiting'"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "codeloom_cognitive_load",
+        "description": (
+            "Cognitive-load-aware task decomposition: splits a topic into "
+            "working-memory-sized steps (intrinsic load), flags noise to skip "
+            "(extraneous load), and surfaces the mental model to build (germane "
+            "load: decisions, lessons, open items, hot set). Use when starting a "
+            "multi-step task or deciding what minimal context to load."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "topic": {"type": "string", "description": "task/topic to decompose"},
+            },
+            "required": ["topic"],
+        },
+    },
 ]
 
 
@@ -1554,6 +1604,25 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
 
     if name == "codeloom_list_open_items":
         text = codeloom.list_open_items(root)
+
+    if name == "codeloom_record_lesson":
+        lesson = args.get("lesson")
+        if not lesson:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'lesson' argument"}]}
+        text = codeloom.memory_lesson(root, lesson)
+
+    if name == "codeloom_query_memory":
+        q = args.get("query")
+        if not q:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'query' argument"}]}
+        text = codeloom.memory_query(root, q)
+
+    if name == "codeloom_cognitive_load":
+        topic = args.get("topic")
+        if not topic:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'topic' argument"}]}
+        f = _collect_files(root, max_files)
+        text = codeloom.render_cognitive_load(f, root, topic)
 
     if name == "codeloom_loom":
         task = args.get("task")

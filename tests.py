@@ -833,6 +833,34 @@ class TestCodeLoom(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
+    def test_long_term_memory_lesson_and_query(self):
+        # --lesson records a trap; --query-memory finds it across memory files
+        tmp = tempfile.mkdtemp()
+        try:
+            codeloom.memory_lesson(tmp, "in-memory bucket failed because not multi-instance")
+            codeloom.memory_remember(tmp, "PATTERNS", "auth uses JWT")
+            q = codeloom.memory_query(tmp, "auth")
+            self.assertIn("auth uses JWT", q)
+            q2 = codeloom.memory_query(tmp, "bucket")
+            self.assertIn("failed because", q2)
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_cognitive_load_decomposes(self):
+        # --cognitive-load emits intrinsic/extraneous/germane sections
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, "engine.py"), "w") as f:
+                f.write("class Engine:\n    def run(self):\n        pass\n")
+            codeloom.memory_remember(tmp, "DECISIONS", "engine is the core")
+            files = [os.path.join(tmp, "engine.py")]
+            out = codeloom.render_cognitive_load(files, tmp, "engine")
+            self.assertIn("Intrinsic load", out)
+            self.assertIn("Extraneous load", out)
+            self.assertIn("Germane load", out)
+        finally:
+            shutil.rmtree(tmp)
+
     def test_install_grammars_prints(self):
         # without --yes, install_grammars prints the command (doesn't install)
         out = codeloom.install_grammars(do_install=False)
