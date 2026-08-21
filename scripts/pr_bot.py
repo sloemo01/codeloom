@@ -1,29 +1,33 @@
 #!/usr/bin/env python3
-"""Assemble the codeloom PR-bot review comment (clean-room design).
+"""Assemble the codeloom PR-bot review (clean-room design).
 
-One sticky comment per PR, regenerated on every push, built entirely from
-codeloom's own primitives (zero LLM, zero network):
+Two outputs, chosen by --format:
 
-  1. Risk verdict        --risk <merge-base>..HEAD   score + band + drivers
-  2. What changed        git numstat digest         adds/dels per touched file
-  3. Touched-area health --health scoped to the changed files
-  4. New symbols         symbols defined in the diff that nobody calls yet
-  5. Security sweep      eval/exec/hardcoded-secret/TODO patterns in the diff
-  6. Review checklist    generated from what actually changed
-  7. Reviewer brief      --pack keyed to the PR title
+  markdown (default)  one sticky comment: risk verdict, diff digest,
+                      touched-file health, new-symbol orphan detection,
+                      security sweep, generated checklist, reviewer brief.
 
-Sticky-comment contract: output starts with MARKER; the workflow finds and
-updates its own previous comment instead of posting a new one per push.
+  json                machine-readable findings for INLINE review comments:
+                      [{"path": str, "line": int, "severity": "P1"|"P2"|"P3",
+                        "kind": str, "message": str}, ...]
+                      The workflow maps these to exact diff lines via the
+                      GitHub review API — same UX as human inline comments.
 
-Usage: pr_bot.py <revspec> [pr-title] [max-bytes]
+All analysis is deterministic codeloom primitives. Zero LLM, zero network.
+
+Usage: pr_bot.py <revspec> [pr-title] [--format markdown|json] [--max-bytes N]
 """
 import io
+import json as _json
 import os
 import re
 import subprocess
 import sys
 
-MARKER = "<!-- codeloom-pr-bot:v1 -->"
+MARKER = "<!-- codeloom-pr-bot:v2 -->"
+
+# severity order for sorting; P1 must-fix, P3 nit
+_SEV_RANK = {"P1": 0, "P2": 1, "P3": 2}
 
 
 def sh(cmd: list, timeout: int = 120) -> str:
@@ -155,32 +159,125 @@ def new_symbols(revspec: str, files) -> str:
 
 
 SECURITY_PATTERNS = [
-    (r"eval\(|exec\(", "dynamic execution (`eval`/`exec`)"),
-    (r"(?i)(password|secret|api_key|apikey|auth_token)\s*[=:]\s*[\"'][^\"']{8,}[\"']",
-     "possible hardcoded secret"),
-    (r"http://(?!localhost|127\.0\.0\.1)", "insecure http:// URL"),
-    (r"subprocess\.\w+\([^)]*shell\s*=\s*True", "shell=True subprocess"),
+    ("P1", r"eval\(|exec\(", "dynamic execution (`eval`/`exec`) — "
+     "RCE sink if input is user-controlled"),
+    ("P1", r"(?i)(password|secret|api_key|apikey|auth_token)\s*[=:]\s*[\"'][^\"']{8,}[\"']",
+     "possible hardcoded secret — move to env/config"),
+    ("P2", r"http://(?!localhost|127\.0\.0\.1)", "insecure http:// URL"),
+    ("P2", r"subprocess\.\w+\([^)]*shell\s*=\s*True", "shell=True subprocess — "
+     "injection risk; prefer argv lists"),
 ]
+
+SELF_REF = re.compile(r"SECURITY_PATTERNS|insecure http|hardcoded secret"
+                      r"|shell=True subprocess")
+
+
+def _diff_lines(path: str, lo: str, hi: str):
+    """Yield (new_file_line_number, '+', text) for added lines of one file."""
+    patch = sh(["git", "diff", "--unified=0", lo, hi, "--", path])
+    new_ln = 0
+    for hunk in patch.splitlines():
+        m = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", hunk)
+        if m:
+            new_ln = int(m.group(1))
+            continue
+        if new_ln == 0 or hunk.startswith(("+++", "---")):
+            continue
+        if hunk.startswith("+"):
+            yield new_ln, "+", hunk[1:]
+            new_ln += 1
+        elif hunk.startswith("-"):
+            pass  # removed lines don't advance the new-file counter
+        else:
+            new_ln += 1
+
+
+def collect_findings(revspec: str, files):
+    """All line-pinned findings: dicts path/line/severity/kind/message."""
+    base, _, head = revspec.partition("..")
+    lo, hi = base or "HEAD~1", head or "HEAD"
+    out = []
+
+    # 1. security patterns on added lines
+    for path, _, _ in files[:40]:
+        for ln, sign, text in _diff_lines(path, lo, hi):
+            for sev, pat, label in SECURITY_PATTERNS:
+                if re.search(pat, text):
+                    if (path == "scripts/pr_bot.py"
+                            and SELF_REF.search(text)):
+                        continue  # our own pattern definitions
+                    out.append({"path": path, "line": ln, "severity": sev,
+                                "kind": label, "message": f"`{text.strip()[:110]}`"})
+                    break
+
+    # 2. orphan new symbols (defined but zero detected callers)
+    names = []
+    sym_line = {}
+    for path, _, _ in files[:30]:
+        for ln, sign, text in _diff_lines(path, lo, hi):
+            m = NEW_SYMBOL_RE.match("+" + text)
+            if m:
+                n = next(g for g in m.groups() if g)
+                if not n.startswith("_"):
+                    names.append(n)
+                    sym_line[(path, n)] = ln
+    for n in dict.fromkeys(names[:12]):
+        u = sh([sys.executable, "codeloom.py", "--usages", n, "."])
+        cnt = sum(1 for l in u.splitlines()
+                  if l.strip() and not l.startswith("#")
+                  and "definition(s)" not in l and "usage" not in l.lower())
+        if cnt <= 0:
+            for (p, name), ln in sym_line.items():
+                if name == n:
+                    out.append({"path": p, "line": ln, "severity": "P3",
+                                "kind": "orphan symbol",
+                                "message": f"`{n}` has no detected callers — "
+                                    "wire it up, add a test, or prefix with `_`."})
+                    break
+
+    # 3. long functions introduced wholesale (>80 added lines in one file
+    #    is covered by health; here flag TODO/FIXME left in additions)
+    for path, _, _ in files[:40]:
+        for ln, sign, text in _diff_lines(path, lo, hi):
+            if re.search(r"\b(TODO|FIXME|XXX)\b", text) and path != self_path_guard():
+                out.append({"path": path, "line": ln, "severity": "P3",
+                            "kind": "unfinished-work marker",
+                            "message": text.strip()[:110]})
+    return sorted(out, key=lambda f: (_SEV_RANK.get(f["severity"], 9),
+                                      f["path"], f["line"]))
+
+
+def self_path_guard():
+    return "scripts/pr_bot.py"
+
+
+def inline_markdown(findings) -> str:
+    """Human-readable digest of findings for the sticky comment."""
+    if not findings:
+        return ("✅ No line-pinned findings — security sweep clean, no orphan "
+                "symbols, no unfinished-work markers.")
+    rows = ["| severity | location | kind | note |", "|---|---|---|---|"]
+    for f in findings[:20]:
+        loc = f"{f['path']}:{f['line']}"
+        rows.append(f"| **{f['severity']}** | `{loc}` | {f['kind']} | {f['message']} |")
+    extra = len(findings) - 20
+    if extra > 0:
+        rows.append(f"\n…and {extra} more")
+    return "\n".join(rows)
 
 
 def security_sweep(revspec: str, files) -> str:
-    findings = []
-    self_path = "scripts/pr_bot.py"
     base, _, head = revspec.partition("..")
     lo, hi = base or "HEAD~1", head or "HEAD"
+    findings = []
     for path, _, _ in files[:40]:
-        patch = sh(["git", "diff", lo, hi, "--", path])
-        for pat, label in SECURITY_PATTERNS:
-            hits = re.findall(r"^\+.*$", patch, re.M)  # added lines only
-            for line in hits:
-                if re.search(pat, line):
-                    snippet = line[1:].strip()[:110]
-                    # don't flag the bot's own pattern definitions
-                    if path == self_path and ("SECURITY_PATTERNS" in snippet
-                                              or "insecure http" in snippet
-                                              or "hardcoded secret" in snippet):
+        for ln, sign, text in _diff_lines(path, lo, hi):
+            for sev, pat, label in SECURITY_PATTERNS:
+                if re.search(pat, text):
+                    if (path == "scripts/pr_bot.py"
+                            and SELF_REF.search(text)):
                         continue
-                    findings.append((path, label, snippet))
+                    findings.append((path, label, text.strip()[:110]))
     if not findings:
         return ("✅ Clean — no `eval`, hardcoded secrets, insecure URLs, or "
                 "`shell=True` in added lines.")
@@ -230,11 +327,29 @@ def checklist(files, sec_findings_clean: bool, risk_body: str) -> str:
 
 
 def main() -> int:
-    revspec = sys.argv[1] if len(sys.argv) > 1 else "HEAD~1..HEAD"
-    pr_title = sys.argv[2] if len(sys.argv) > 2 else ""
-    max_bytes = int(sys.argv[3]) if len(sys.argv) > 3 else 60000
+    args = sys.argv[1:]
+    revspec = args[0] if args else "HEAD~1..HEAD"
+    pr_title = ""
+    fmt = "markdown"
+    max_bytes = 60000
+    i = 1
+    while i < len(args):
+        if args[i] == "--format" and i + 1 < len(args):
+            fmt = args[i + 1]
+            i += 2
+        elif args[i] == "--max-bytes" and i + 1 < len(args):
+            max_bytes = int(args[i + 1])
+            i += 2
+        else:
+            pr_title = args[i]
+            i += 1
 
     files = changed_files(revspec)
+
+    if fmt == "json":
+        findings = collect_findings(revspec, files)
+        sys.stdout.write(_json.dumps(findings, indent=1))
+        return 0
 
     buf = io.StringIO()
     buf.write(MARKER + "\n## 🪄 codeloom review\n")
@@ -246,17 +361,20 @@ def main() -> int:
     risk_body = run_codeloom(["--risk", f"{lo}..{hi}", "."])
     buf.write(section("Risk verdict", risk_body))
 
+    findings = collect_findings(revspec, files)
+    buf.write(section("Line-pinned findings (also posted inline)",
+                      inline_markdown(findings)))
+
     if files:
         buf.write(section("What changed", diff_digest(files)))
         buf.write(section("Health of touched files", touched_health(files)))
-        buf.write(section("New symbols & their callers",
-                          new_symbols(revspec, files)))
 
-    sec_body = security_sweep(revspec, files)
-    buf.write(section("Security sweep", sec_body))
-
-    clean_sec = sec_body.startswith("✅")
-    buf.write(section("Review checklist", checklist(files, clean_sec, risk_body)))
+    sec_clean = not any(f["kind"].startswith(("dynamic execution",
+                                              "possible hardcoded secret",
+                                              "insecure http",
+                                              "shell=True")) for f in findings)
+    buf.write(section("Review checklist",
+                      checklist(files, sec_clean, risk_body)))
 
     task = pr_title.strip() or "review this pull request"
     brief = run_codeloom(["--pack", task, "."], cap=14000)
