@@ -1,0 +1,1 @@
+{"file":"fixtures/rs/sample.rs","symbols":[{"name":"Cfg","kind":"struct_item","line":4},{"name":"prep","kind":"function_item","line":3},{"name":"launch","kind":"function_item","line":2}],"imports":[],"calls":["prep"]}

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for codeloom. Run with: python3 tests.py"""
 import os
+import json
 import shutil
 import subprocess
 import sys
@@ -1035,6 +1036,54 @@ class TestCodeLoom(unittest.TestCase):
             self.assertIn("No recorded decisions/memory match.", out2)
         finally:
             shutil.rmtree(tmp)
+
+    def test_tree_sitter_grammar_parity_fixtures(self):
+        # codegraph-style discipline: no grammar ships without proving its
+        # extraction. Each fixture dir holds a canonical sample + frozen
+        # expected.jsonl; the engine must reproduce it byte-for-byte.
+        here = os.path.dirname(os.path.abspath(__file__))
+        fx = os.path.join(here, "engine_rs", "fixtures")
+        if not os.path.isdir(fx):
+            self.skipTest("no fixtures dir")
+        bins = [os.path.join(here, "engine_rs", "target", "release", "codeloom_engine")]
+        engine_bin = next((b for b in bins if os.path.isfile(b)), None)
+        if engine_bin is None:
+            self.skipTest("engine_rs binary not built (cargo build --release)")
+        langs = sorted(d for d in os.listdir(fx)
+                       if os.path.isdir(os.path.join(fx, d)))
+        self.assertGreaterEqual(len(langs), 25, "expected >=25 grammar fixtures")
+        for lang in langs:
+            d = os.path.join(fx, lang)
+            exp_path = os.path.join(d, "expected.jsonl")
+            sample = next((os.path.join(d, f) for f in sorted(os.listdir(d))
+                           if f.startswith("sample.")), None)
+            if not os.path.isfile(exp_path) or sample is None:
+                continue
+            with open(exp_path, encoding="utf-8") as f:
+                expected = f.read().strip()
+            lst = subprocess.run([engine_bin, "--list", d], capture_output=True,
+                                 text=True, timeout=60)
+            got = subprocess.run([engine_bin], input=lst.stdout,
+                                 capture_output=True, text=True, timeout=60)
+            actual = got.stdout.strip()
+            # normalize: the frozen file records the path as written at freeze
+            # time; compare on parsed JSON minus the volatile path prefix.
+            def norm(s):
+                out = []
+                for line in s.splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        j = json.loads(line)
+                    except ValueError:
+                        return s  # not JSON — fall back to raw compare
+                    j["file"] = os.path.basename(j.get("file", ""))
+                    out.append(json.dumps(j, sort_keys=True))
+                return "\n".join(out)
+            self.assertEqual(
+                norm(expected), norm(actual),
+                "grammar parity broke for %s — extraction changed; if intended, "
+                "regenerate via engine_rs/gen_fixtures.sh" % lang)
 
 
 if __name__ == "__main__":

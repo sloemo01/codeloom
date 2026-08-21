@@ -1,0 +1,1 @@
+{"file":"fixtures/sh/sample.sh","symbols":[{"name":"prepare","kind":"function_definition","line":5},{"name":"main","kind":"function_definition","line":2}],"imports":[],"calls":[]}

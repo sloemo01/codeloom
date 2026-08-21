@@ -1,0 +1,2 @@
+type App { id: ID! }
+type Query { app(id: ID!): App }

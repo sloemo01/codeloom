@@ -1,0 +1,1 @@
+{"file":"fixtures/ex/sample.ex","symbols":[{"name":"defmodule","kind":"call","line":1},{"name":"defp","kind":"call","line":5},{"name":"def","kind":"call","line":2},{"name":"prep","kind":"call","line":3}],"imports":[],"calls":["defmodule","defp","def","prep"]}

@@ -1,0 +1,1 @@
+{"file":"fixtures/c/sample.c","symbols":[{"name":"int","kind":"function_definition","line":3},{"name":"int","kind":"function_definition","line":2}],"imports":[],"calls":["setup"]}

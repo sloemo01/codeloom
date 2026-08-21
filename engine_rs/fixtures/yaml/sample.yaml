@@ -1,0 +1,4 @@
+app:
+  name: demo
+  deps:
+    - a

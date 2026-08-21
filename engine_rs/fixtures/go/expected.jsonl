@@ -1,0 +1,1 @@
+{"file":"fixtures/go/sample.go","symbols":[{"name":"helper","kind":"function_declaration","line":4},{"name":"Run","kind":"function_declaration","line":3}],"imports":[],"calls":["helper"]}

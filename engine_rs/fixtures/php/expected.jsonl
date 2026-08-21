@@ -1,0 +1,1 @@
+{"file":"fixtures/php/sample.php","symbols":[{"name":"Repo","kind":"class_declaration","line":4},{"name":"find","kind":"function_definition","line":3},{"name":"load","kind":"function_definition","line":2}],"imports":[],"calls":[]}

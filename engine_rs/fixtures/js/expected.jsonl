@@ -1,0 +1,1 @@
+{"file":"fixtures/js/sample.js","symbols":[{"name":"Widget","kind":"class_declaration","line":3},{"name":"start","kind":"function_declaration","line":2},{"name":"boot","kind":"function_declaration","line":1}],"imports":[],"calls":["start"]}

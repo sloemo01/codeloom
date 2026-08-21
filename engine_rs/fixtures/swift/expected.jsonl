@@ -1,0 +1,1 @@
+{"file":"fixtures/swift/sample.swift","symbols":[{"name":"Pt","kind":"class_declaration","line":6},{"name":"View","kind":"class_declaration","line":2},{"name":"layout","kind":"function_declaration","line":4},{"name":"draw","kind":"function_declaration","line":3}],"imports":[],"calls":[]}

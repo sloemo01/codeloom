@@ -1,0 +1,1 @@
+{"file":"fixtures/sol/sample.sol","symbols":[{"name":"Vault","kind":"contract_declaration","line":3},{"name":"log","kind":"function_definition","line":5},{"name":"deposit","kind":"function_definition","line":4}],"imports":[],"calls":[]}

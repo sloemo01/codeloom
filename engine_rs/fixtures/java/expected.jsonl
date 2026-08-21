@@ -1,0 +1,1 @@
+{"file":"fixtures/java/sample.java","symbols":[{"name":"App","kind":"class_declaration","line":2},{"name":"init","kind":"method_declaration","line":4},{"name":"start","kind":"method_declaration","line":3}],"imports":[],"calls":[]}

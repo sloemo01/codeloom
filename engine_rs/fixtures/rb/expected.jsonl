@@ -1,0 +1,1 @@
+{"file":"fixtures/rb/sample.rb","symbols":[{"name":"User","kind":"class","line":1},{"name":"show","kind":"method","line":5},{"name":"initialize","kind":"method","line":2}],"imports":[],"calls":["upcase"]}

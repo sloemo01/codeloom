@@ -1,0 +1,1 @@
+{"file":"fixtures/lua/sample.lua","symbols":[{"name":"prep","kind":"function_declaration","line":4},{"name":"boot","kind":"function_declaration","line":1}],"imports":[],"calls":[]}
