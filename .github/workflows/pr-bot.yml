@@ -66,12 +66,17 @@ jobs:
             }));
             const event = 'COMMENT';
 
+            // commit_id must be a commit ON THE PR — use the checked-out SHA
+            // (actions/checkout on a PR builds the merge ref; github.context.sha
+            // is that merge commit, which createReview rejects with Not Found).
+            const checkedSha = process.env.GITHUB_SHA_OVERRIDE ||
+              require('@actions/github').context.payload.pull_request.head.sha;
             try {
               await github.rest.pulls.createReview({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                commit_id: pr.head.sha,
-                event,
+                commit_id: checkedSha || pr.head.sha,
+                event: 'COMMENT',
                 body: 'codeloom deterministic review',
                 comments,
               });
