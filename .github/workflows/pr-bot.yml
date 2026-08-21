@@ -26,19 +26,69 @@ jobs:
           MB=$(git merge-base "origin/${{ github.base_ref }}" HEAD 2>/dev/null || echo HEAD~1)
           echo "revspec=${MB}..HEAD" >> "$GITHUB_OUTPUT"
 
-      - name: Assemble review comment
-        id: assemble
+      - name: Assemble summary comment (markdown)
         run: |
           python3 scripts/pr_bot.py "${{ steps.base.outputs.revspec }}" \
             "${{ github.event.pull_request.title }}" > /tmp/comment.md
-          echo "bytes=$(wc -c < /tmp/comment.md)" >> "$GITHUB_OUTPUT"
 
-      - name: Post / update sticky comment
+      - name: Collect line-pinned findings (json)
+        run: |
+          python3 scripts/pr_bot.py "${{ steps.base.outputs.revspec }}" \
+            --format json > /tmp/findings.json
+
+      - name: Post inline review comments on exact diff lines
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const MARKER = '<!-- codeloom-pr-bot:v1 -->';
+            let findings = [];
+            try { findings = JSON.parse(fs.readFileSync('/tmp/findings.json', 'utf8')); }
+            catch (e) { console.log('no findings json:', e.message); }
+
+            // map each finding to a commit-side position via the PR diff.
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner, repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            const commitSha = pr.head.sha;
+
+            // GitHub requires positions relative to the diff; easiest correct
+            // path is creating a review with per-file comments using `line`
+            // (the line number in the NEW file). The API resolves it for us.
+            const comments = findings.slice(0, 30).map(f => ({
+              path: f.path,
+              side: 'RIGHT',
+              line: f.line,
+              body: `**${f.severity}** ${f.kind}\n\n${f.message}\n\n<sub>codeloom-pr-bot · deterministic · react 👍 if useful</sub>`,
+            }));
+
+            if (comments.length === 0) {
+              console.log('no inline findings — skipping review');
+              return;
+            }
+
+            const event = comments.some(c => c.body.startsWith('**P1**'))
+              ? 'REQUEST_CHANGES' : 'COMMENT';
+
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_id: commitSha,
+              event,
+              comments,
+            }).then(r => console.log(`posted ${comments.length} inline comment(s), event=${event}`))
+              .catch(e => {
+                // stale-line errors happen when the PR moved; fall back silently —
+                // the sticky comment still carries everything.
+                console.log('inline review failed (lines may have moved):', e.message);
+              });
+
+      - name: Post / update sticky summary comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const MARKER = '<!-- codeloom-pr-bot:v2 -->';
             let body = fs.readFileSync('/tmp/comment.md', 'utf8');
             const cap = 60000;
             if (body.length > cap) body = body.slice(0, cap) + '\n… (truncated)';
@@ -51,20 +101,16 @@ jobs:
             const mine = comments.find(c => c.body && c.body.includes(MARKER));
             if (mine) {
               await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: mine.id,
-                body,
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: mine.id, body,
               });
-              console.log(`updated existing comment ${mine.id}`);
+              console.log(`updated existing summary ${mine.id}`);
             } else {
               await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body,
               });
-              console.log('created new review comment');
+              console.log('created new summary comment');
             }
 
       - name: Apply risk-band label
@@ -73,15 +119,12 @@ jobs:
           script: |
             const fs = require('fs');
             const body = fs.readFileSync('/tmp/comment.md', 'utf8');
-            // band line looks like: "score 77/100 [critical]" or "[low]"
             const m = body.match(/score \d+\/100 \[(\w+)\]/);
             if (!m) { console.log('no score found — skipping label'); return; }
-            const band = m[1];                       // low | medium | high | critical
-            const label = `risk:${band}`;
+            const label = `risk:${m[1]}`;
             const wanted = ['risk:low','risk:medium','risk:high','risk:critical'];
             const { data: labels } = await github.rest.issues.listLabelsOnIssue({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
+              owner: context.repo.owner, repo: context.repo.repo,
               issue_number: context.issue.number,
             });
             for (const l of labels) {
