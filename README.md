@@ -13,14 +13,30 @@
 </p>
 
 <p align="center">
-  <b>17 agents</b> · <b>130+ languages</b> · <b>57 MCP tools</b> · <b>91s Linux kernel</b>
+  <b>17 coding agents supported</b>
+</p>
+<p align="center">
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Claude_Code-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Codex-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Cursor-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Gemini_CLI-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/OpenCode-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Cline-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/OpenHands-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Devin-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Hermes_Agent-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Aider-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Roo_Code-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Windsurf-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Amazon_Q-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/JetBrains-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Junie-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Kimi_CLI-supported-blueviolet"/></a>
+  <a href="#supported-agents"><img src="https://img.shields.io/badge/Qwen_Code-supported-blueviolet"/></a>
 </p>
 
 <p align="center">
-  <code>claude</code> <code>codex</code> <code>cursor</code> <code>gemini</code> <code>opencode</code>
-  <code>cline</code> <code>openhands</code> <code>devin</code> <code>hermes</code> <code>aider</code>
-  <code>roo</code> <code>windsurf</code> <code>amazon-q</code> <code>jetbrains</code>
-  <code>junie</code> <code>kimi</code> <code>qwen</code> — one-command MCP setup
+  <b>17 agents</b> · <b>130+ languages</b> · <b>57 MCP tools</b> · <b>91s Linux kernel</b>
 </p>
 
 ---
