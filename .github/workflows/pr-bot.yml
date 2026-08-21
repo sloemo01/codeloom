@@ -55,14 +55,16 @@ jobs:
               pull_number: context.issue.number,
             });
 
+            // NOTE: a token that owns the PR cannot use REQUEST_CHANGES
+            // ("Can not request changes on your own pull request"), and GITHUB_TOKEN
+            // acts as the repo owner — so always COMMENT.
             const comments = findings.slice(0, 30).map(f => ({
               path: f.path,
               side: 'RIGHT',
               line: f.line,
               body: `**${f.severity}** ${f.kind}\n\n${f.message}\n\n<sub>codeloom-pr-bot · deterministic · react 👍 if useful</sub>`,
             }));
-            const event = findings.some(f => f.severity === 'P1')
-              ? 'REQUEST_CHANGES' : 'COMMENT';
+            const event = 'COMMENT';
 
             try {
               await github.rest.pulls.createReview({
