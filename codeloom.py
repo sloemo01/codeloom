@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.74.0"
+VERSION = "0.75.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -3066,6 +3066,98 @@ def grep_search(files: List[str], root: str, query: str, limit: int = 20) -> Lis
             })
     results.sort(key=lambda r: (-r["score"], r["module"], r["line"]))
     return results[:limit]
+
+def grep_symbolic(files: List[str], root: str, query: str, limit: int = 20) -> List[dict]:
+    """Symbolic grep: matches in REAL CODE only — comments and string literals
+    are stripped before matching (via the same scanner the import graph uses).
+    Results ranked by symbol relevance: matches that land inside a known
+    symbol's definition outrank loose module-level hits, and the enclosing
+    symbol name is attached to every hit. Falls back to plain text matching
+    for extensions with no code rules (docs/config)."""
+    q = query.lower()
+    q_words = [w for w in re.findall(r"[a-zA-Z0-9_]+", q) if len(w) > 1]
+    results = []
+    for f in files:
+        ext = os.path.splitext(f)[1].lower()
+        is_code = ext in LANG_RULES or ext in IMPORT_LANG_RULES or ext in CALL_LANG_RULES
+        mod = module_name_of(f, root)
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                lines = fh.readlines()
+        except OSError:
+            continue
+
+        # per-file: build a stripped twin (same line layout) + symbol map
+        if is_code:
+            try:
+                with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                    clean_text = _strip_strings_comments(fh.read(), ext)
+            except OSError:
+                continue
+            clean_lines = clean_text.splitlines()
+            # symbol spans from the byte index: {start_line: end_line}
+            spans = []
+            idx = build_byte_index([f], root)
+            for _name, locs in idx.items():
+                for loc in locs:
+                    s = loc.get("line") or 0
+                    e = loc.get("end_line") or (s + len(
+                        (loc.get("source") or "").splitlines()))
+                    if s:
+                        spans.append((s, e, _name, loc.get("kind", "")))
+            spans.sort()
+        else:
+            clean_lines = lines  # docs/config: match as-is
+
+        def enclosing(ln: int):
+            """Innermost symbol containing this line."""
+            best = None
+            for s, e, name, kind in spans:
+                if s <= ln <= e and (best is None or s >= best[0]):
+                    best = (s, name, kind)
+            return best
+
+        for i, raw_line in enumerate(lines):
+            code_line = clean_lines[i] if i < len(clean_lines) else ""
+            hay = code_line.lower() if is_code else raw_line.lower()
+            if q not in hay:
+                continue
+            word_hits = sum(1 for w in q_words if w in hay)
+            score = word_hits * 10 + (5 if q in hay else 0)
+            enc = enclosing(i + 1) if is_code else None
+            if enc:
+                score += 15  # inside a real definition beats loose hits
+            snippet = "".join(lines[max(0, i - 1):i + 2]).rstrip()
+            results.append({
+                "module": mod, "path": f, "line": i + 1,
+                "score": score, "snippet": snippet,
+                "symbol": enc[1] if enc else None,
+                "kind": enc[2] if enc else "",
+            })
+    results.sort(key=lambda r: (-r["score"], r["module"], r["line"]))
+    return results[:limit]
+
+
+def render_grep_symbolic(files: List[str], root: str, query: str,
+                         limit: int = 20) -> str:
+    results = grep_symbolic(files, root, query, limit)
+    buf = io.StringIO()
+    n_code = sum(1 for r in results if r.get("symbol"))
+    buf.write(f"# symbolic grep: {query}  (code-only; comments/strings "
+              f"excluded)\n")
+    if not results:
+        buf.write("No CODE matches found. Note: comments/strings are excluded "
+                  "in this mode — use --grep to search everything.\n")
+        return buf.getvalue()
+    buf.write(f"{len(results)} match(es) ({n_code} inside definitions):\n\n")
+    for r in results:
+        sym = f"  in {r['kind']} `{r['symbol']}`" if r.get("symbol") else ""
+        buf.write(f"  {r['module']}:{r['line']}{sym}\n")
+        if r.get("snippet"):
+            buf.write(f"    {r['snippet']}\n")
+    buf.write("\n(use --grep for raw text search incl. docs/comments)\n")
+    return buf.getvalue()
+
 
 def render_grep(files: List[str], root: str, query: str, limit: int = 20) -> str:
     results = grep_search(files, root, query, limit)
@@ -7135,6 +7227,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--seen", action="store_true", help="session memory: report already-read files/symbols to avoid re-reading")
     p.add_argument("--usages", metavar="SYMBOL", help="find where a symbol is used (not just defined)")
     p.add_argument("--grep", metavar="QUERY", help="search file contents for a snippet (ranked + context)")
+    p.add_argument("--grep-symbolic", metavar="QUERY", help="code-only grep: comments/strings excluded, matches ranked by enclosing symbol")
     p.add_argument("--read", metavar="SYMBOL", help="extract exact source of a function/class/method (token-efficient)")
     p.add_argument("--explain", metavar="SYMBOL", help="plain-English explanation of a symbol (AST + call graph)")
     p.add_argument("--precision", metavar="SYMBOL", help="graph precision report: call edges with confidence + class relationships")
@@ -7656,7 +7749,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # --cross / --search / --usages / --grep / --read / --explain / --similar / --deadcode / --get-symbol
     if args.cross or args.search or args.embed_search or args.context_card or args.answer \
-       or args.why or args.health or args.risk is not None or args.pattern or args.usages or args.grep or args.read \
+       or args.why or args.health or args.risk is not None or args.pattern or args.grep_symbolic \
+       or args.usages or args.grep or args.read \
        or args.explain or args.similar or args.deadcode or args.get_symbol or args.precision:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
@@ -7743,6 +7837,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.grep:
             print(render_grep(files, root, args.grep))
+            return 0
+
+        if args.grep_symbolic:
+            print(render_grep_symbolic(files, root, args.grep_symbolic))
             return 0
 
         if args.read:

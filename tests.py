@@ -1184,6 +1184,36 @@ class TestCodeLoom(unittest.TestCase):
             self.assertIn("No structural matches", out3)
         finally:
             shutil.rmtree(tmp)
+    def test_grep_symbolic_excludes_comments_and_strings(self):
+        # plain --grep finds matches everywhere; --grep-symbolic keeps only
+        # real-code hits and tags each with its enclosing symbol
+        tmp = tempfile.mkdtemp()
+        try:
+            f = os.path.join(tmp, "app.py")
+            with open(f, "w") as fh:
+                fh.write(
+                    "# use retry here (comment mention)\n"
+                    "DOC = 'use retry for backoff'\n"
+                    "def handler():\n"
+                    "    return retry(fn)\n"
+                )
+            files = [f]
+            # raw grep sees all three mentions
+            raw = codeloom.render_grep(files, tmp, "retry")
+            self.assertEqual(raw.count("retry"), raw.count("retry"))  # sanity
+            raw_n = len(codeloom.grep_search(files, tmp, "retry"))
+            self.assertEqual(raw_n, 3)
+            # symbolic grep sees only the real call inside `handler`
+            sym = codeloom.render_grep_symbolic(files, tmp, "retry")
+            self.assertIn("in function `handler`", sym)
+            self.assertNotIn("comment mention", sym)
+            self.assertNotIn("backoff", sym)
+            res = codeloom.grep_symbolic(files, tmp, "retry")
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res[0]["symbol"], "handler")
+            self.assertEqual(res[0]["line"], 4)
+        finally:
+            shutil.rmtree(tmp)
 
 
 if __name__ == "__main__":

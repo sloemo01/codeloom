@@ -115,7 +115,7 @@ Also: `--remember`, `--seen`, `--working-state`, `--lessons`, `--supersede`,
 **50 tree-sitter languages dispatched · 46 fixture-proven** (golden-file parity
 tests gate CI on every grammar) · **100+ extensions via regex fallback**.
 
-## MCP server (75 tools + 1 router)
+## MCP server (78 tools + 1 router)
 
 ```json
 {"command": "python3", "args": ["-m", "codeloom_mcp"]}
@@ -123,7 +123,7 @@ tests gate CI on every grammar) · **100+ extensions via regex fallback**.
 
 Or auto-wire any of 17 agents: `codeloom --install-agent <name>`.
 
-77 tools total, but the agent's effective surface is **one tool**:
+78 tools total, but the agent's effective surface is **one tool**:
 `codeloom_ask` takes natural language and routes deterministically —
 no tool-selection misfires. Full listing:
 [`docs/mcp-listing.md`](docs/mcp-listing.md).

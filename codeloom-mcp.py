@@ -33,7 +33,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.74.0"
+SERVER_VERSION = "0.75.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -394,6 +394,25 @@ TOOLS: List[Dict[str, Any]] = [
                 "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["symbol"],
+        },
+    },
+    {
+        "name": "codeloom_grep_symbolic",
+        "description": (
+            "Code-only grep: matches real CODE, excluding comments and string "
+            "literals (the usual false-positive sources). Results ranked by "
+            "symbol relevance — hits inside a known definition outrank loose "
+            "module-level mentions, and the enclosing symbol is attached to "
+            "each hit. Use --grep for raw text search including docs."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "query": {"type": "string", "description": "Text/identifier to find in code"},
+                "limit": {"type": "integer", "description": "Max results (default 20)"},
+            },
+            "required": ["query"],
         },
     },
     {
@@ -1991,6 +2010,11 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if not query:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'query' argument"}]}
         text = codeloom.render_grep(files, root, query)
+    elif name == "codeloom_grep_symbolic":
+        query = args.get("query")
+        if not query:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'query' argument"}]}
+        text = codeloom.render_grep_symbolic(files, root, query)
     elif name == "codeloom_read":
         symbol = args.get("symbol")
         if not symbol:
