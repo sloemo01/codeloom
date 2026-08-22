@@ -6,12 +6,16 @@ Phase 3 of the "Memory OS": a zero-dependency companion script that reads
 `--memory-add` flag. Pure stdlib. No LLM, no network -- every heuristic is a
 deterministic regex over commit messages.
 
-Heuristics (applied to the full message = subject + body):
-  bug          matches (fix|bug|resolve|resolved|close|closes|closes #|
+Heuristics (applied to the full message = subject + body, word-boundary
+anchored; negated phrases like "no issue"/"not a crash"/"without any bug"
+are stripped first so they never trigger a bug memory):
+  bug          matches (fix|hotfix|bug|resolve|resolved|close|closes|closed|
                 issue|crash|panic|segfault|regression) case-insensitively
                 -> confidence 0.7, +0.2 when "regression"/"critical" present,
-                capped at 0.95
-  api          matches (api|endpoint|route|interface|schema|contract) -> 0.6
+                capped at 0.95; hyphenated compounds ("closed-loop") do NOT
+                count
+  api          matches (api|endpoint|route|routing|interface|schema|contract)
+                -> 0.6; "route53" and friends do NOT count
   architecture matches (migrat|refactor|re-architect|redesign), or bare
                 "architect*" wording -- but NOT a typo/spelling fix -> 0.55
 
@@ -26,9 +30,12 @@ never writes state.
 
 The core is invoked as a subprocess argv (never a shell):
     python3 <core> --memory-add --type T --title TITLE --body BODY
-                   [--symbols S1,S2,...]
+                   [--symbols S1,S2,...] <resolved repo root>
 where symbols are derived from the files changed by the commit: basename,
 extension stripped, snake_case/kebab/dotted -> PascalCase module names.
+Passing the resolved repo root as the core's positional ROOT (and never
+relying on the extractor's own cwd) guarantees memories land in the right
+repository no matter where the extractor is invoked from.
 
 Core resolution order: $CODELOOM_CORE override, then <repo>/codeloom.py,
 then the codeloom.py sibling of this script (lets the extractor run against
@@ -53,22 +60,30 @@ import tempfile
 # --------------------------------------------------------------------------
 
 BUG_RE = re.compile(
-    r"(fix|bug|resolve|resolved|close|closes|closes\s*#|issue|crash|panic|"
-    r"segfault|regression)",
+    r"\b(?:fix(?:es|ed)?|hotfix(?:es)?|bug(?:s)?|resolve[ds]?|"
+    r"close[sd]?(?!-)|issue|crash(?:es|ed)?|panic|segfault|regression)\b",
     re.IGNORECASE,
 )
-BUG_BOOST_RE = re.compile(r"(regression|critical)", re.IGNORECASE)
+BUG_BOOST_RE = re.compile(r"\b(regression|critical)\b", re.IGNORECASE)
 API_RE = re.compile(
-    r"(api|endpoint|route|interface|schema|contract)", re.IGNORECASE
+    r"\b(?:api|endpoints?|routes?|routing|interfaces?|schemas?|contracts?)\b",
+    re.IGNORECASE,
 )
 # "migrat" covers migrate/migration/migrating; "re-architect"/"redesign" are
 # unambiguous structural verbs -- they count even if the message also mentions
 # typos elsewhere.
-ARCH_STRONG_RE = re.compile(r"(migrat|refactor|re-architect|redesign)", re.IGNORECASE)
+ARCH_STRONG_RE = re.compile(r"\b(migrat\w*|refactor\w*|re-architect\w*|redesign\w*)\b", re.IGNORECASE)
 # bare "architecture/architectural" wording only counts when the commit is
 # not a typo/spelling fix (the spec's "AND NOT just a typo fix" guard).
-ARCH_WORD_RE = re.compile(r"\barchitect", re.IGNORECASE)
-TYPO_RE = re.compile(r"(typo|spelling)", re.IGNORECASE)
+ARCH_WORD_RE = re.compile(r"\barchitect\w*\b", re.IGNORECASE)
+TYPO_RE = re.compile(r"\b(typos?|spelling)\b", re.IGNORECASE)
+# Negated phrases ("no issue", "not a crash", "without any bug", "never
+# panics") must not trigger a bug memory. Stripped before matching.
+NEGATION_RE = re.compile(
+    r"\b(?:no|not|never|without)\s+(?:(?:any|a|an|more)\s+)?"
+    r"(?:bugs?|issues?|crash(?:es|ed)?|panic|segfault|regression)\b",
+    re.IGNORECASE,
+)
 
 BUG_CONFIDENCE = 0.7
 BUG_BOOST = 0.2
@@ -94,9 +109,10 @@ def classify(message):
     several types (e.g. "fix: api crash" -> bug + api).
     """
     found = []
-    if BUG_RE.search(message):
+    buggy = NEGATION_RE.sub(" ", message)
+    if BUG_RE.search(buggy):
         conf = BUG_CONFIDENCE
-        if BUG_BOOST_RE.search(message):
+        if BUG_BOOST_RE.search(buggy):
             conf += BUG_BOOST
         found.append(("bug", round(min(conf, MAX_CONFIDENCE), 2)))
     if API_RE.search(message):
@@ -131,9 +147,12 @@ def derive_symbols(files):
         stem, ext = os.path.splitext(base)
         if ext.lower() not in SYMBOL_EXTS:
             continue
+        stem = stem.strip()
+        if not stem:
+            continue
         stem = re.sub(r"^test[_.-]", "", stem)
         stem = re.sub(r"[_.-]+test$", "", stem)
-        parts = [p for p in re.split(r"[_.-]+", stem) if p]
+        parts = [p for p in re.split(r"[_.\-\s]+", stem) if p]
         if not parts:
             continue
         name = "".join(p[:1].upper() + p[1:] for p in parts)
@@ -149,6 +168,31 @@ def derive_symbols(files):
 
 GIT_FORMAT = "%x1e%H%x1f%s%x1f%b"
 
+# git's "no commits yet" / unborn HEAD exit status (128) + message fragment
+# (differs by version: "does not have any commits yet" / "does not have any
+# commits"). An empty repo is NOT an error -- it just has nothing to extract.
+_EMPTY_REPO_MARKERS = ("does not have any commits", "does not have any commits yet")
+
+
+def resolve_repo(repo):
+    """Resolve ROOT to the true git top-level.
+
+    Handles being pointed at a subdirectory (state file and git log must
+    live at the top level), git worktrees, and submodules, where `.git` is
+    a file rather than a directory. Raises RuntimeError when not a repo.
+    """
+    proc = subprocess.run(
+        ["git", "-C", repo, "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "not a git repository (git rev-parse failed in %s): %s"
+            % (repo, proc.stderr.strip())
+        )
+    top = proc.stdout.strip()
+    return os.path.abspath(top) if top else os.path.abspath(repo)
+
 
 def git_log(repo, count):
     """Return [{'sha','subject','body','files'}, ...], newest first."""
@@ -160,6 +204,9 @@ def git_log(repo, count):
         cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
     )
     if proc.returncode != 0:
+        # Empty repo (no commits yet) is a legitimate "nothing to extract".
+        if any(m in proc.stderr for m in _EMPTY_REPO_MARKERS):
+            return []
         raise RuntimeError("git log failed in %s: %s" % (repo, proc.stderr.strip()))
     return _parse_log(proc.stdout)
 
@@ -262,7 +309,7 @@ def resolve_core(repo):
     )
 
 
-def build_argv(core, mem_type, title, body, symbols):
+def build_argv(core, mem_type, title, body, symbols, repo_root):
     argv = [
         sys.executable or "python3",
         core,
@@ -273,12 +320,16 @@ def build_argv(core, mem_type, title, body, symbols):
     ]
     if symbols:
         argv += ["--symbols", ",".join(symbols)]
+    # Positional ROOT: the core writes memory.jsonl under this path. Passing
+    # the resolved top-level explicitly (never relying on our cwd) makes
+    # extraction land in the right repo from any invocation directory.
+    argv.append(repo_root)
     return argv
 
 
-def invoke(core, mem_type, title, body, symbols):
+def invoke(core, mem_type, title, body, symbols, repo_root):
     """Call the core. Returns (ok, stderr_tail). Never uses a shell."""
-    argv = build_argv(core, mem_type, title, body, symbols)
+    argv = build_argv(core, mem_type, title, body, symbols, repo_root)
     try:
         proc = subprocess.run(
             argv, capture_output=True, text=True, encoding="utf-8", errors="replace"
@@ -314,10 +365,14 @@ def main(argv=None):
 
     if args.since is not None and args.since < 1:
         ap.error("--since must be >= 1")
+    if not (0.0 <= args.min_confidence <= 1.0):
+        ap.error("--min-confidence must be in [0, 1]")
 
     repo = os.path.abspath(args.repo)
-    if not os.path.isdir(os.path.join(repo, ".git")):
-        sys.stderr.write("error: %s is not a git repository\n" % repo)
+    try:
+        repo = resolve_repo(repo)
+    except RuntimeError as exc:
+        sys.stderr.write("error: %s\n" % exc)
         return 1
 
     if args.since is None:
@@ -336,7 +391,23 @@ def main(argv=None):
         known = {}
     else:
         known = load_state(repo)
-    core = resolve_core(repo)
+
+    # Core resolution is lazy: an empty repo or a history with no candidates
+    # must not require a core. Dry runs never invoke the core, so a missing
+    # core only degrades the WOULD preview line to a placeholder.
+    core = None
+    core_error = None
+
+    def get_core():
+        nonlocal core, core_error
+        if core_error is None and core is None:
+            try:
+                core = resolve_core(repo)
+            except RuntimeError as exc:
+                core_error = exc
+        if core_error is not None:
+            raise core_error
+        return core
 
     stats = {"bug": 0, "api": 0, "architecture": 0}
     skipped = 0
@@ -359,12 +430,21 @@ def main(argv=None):
             symbols = derive_symbols(commit["files"])
 
             if args.dry_run:
-                argv = build_argv(core, mem_type, subject, full, symbols)
+                try:
+                    core = get_core()
+                except RuntimeError:
+                    core = "<core-not-resolved>"
+                argv = build_argv(core, mem_type, subject, full, symbols, repo)
                 print("WOULD " + " ".join(shlex.quote(a) for a in argv))
                 stats[mem_type] += 1
                 continue
 
-            ok, err = invoke(core, mem_type, subject, full, symbols)
+            try:
+                core = get_core()
+            except RuntimeError as exc:
+                sys.stderr.write("error: %s\n" % exc)
+                return 1
+            ok, err = invoke(core, mem_type, subject, full, symbols, repo)
             if ok:
                 stats[mem_type] += 1
                 known[key] = {

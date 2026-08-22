@@ -698,11 +698,11 @@ TOOLS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
-                "type": {"type": "string", "enum": ["decision", "bug", "question", "architecture", "api", "constraint", "lesson", "todo", "warning"], "description": "Memory entry type (default: decision)"},
+                "type": {"type": "string", "enum": ["decision", "bug", "question", "architecture", "api", "constraint", "lesson", "todo", "warning", "goal", "hypothesis"], "description": "Memory entry type (default: decision); matches core MEMORY_TYPES"},
                 "title": {"type": "string", "description": "Short title for the memory entry"},
                 "body": {"type": "string", "description": "Full body/details of the memory entry"},
                 "symbols": {"type": "string", "description": "Comma-separated symbols this memory links to (optional)"},
-                "priority": {"type": "integer", "description": "Optional priority 1-5 (higher = more important)"},
+                "priority": {"type": "integer", "description": "Optional importance override 0-100 (higher = more important); core importance formula caps at 100"},
             },
             "required": ["title", "body"],
         },
@@ -1663,6 +1663,15 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
             return {"content": [{"type": "text", "text": codeloom.build_plan(files, root, q)}]}
         return {"content": [{"type": "text", "text": codeloom.render_task(files, root, q)}]}
 
+    # 2a. Memory-read phrases beat symbol retrieval AND the bare-'remember'
+    # retrieval branch. Without this guard, 'read memory' is hijacked by the
+    # 'read ' symbol keyword and 'what did i remember' by the bare
+    # 'remember' retrieval branch (symbol "did"). These are read phrases,
+    # not writes and not symbol lookups.
+    if any(k in q for k in ["read memory", "my memory", "what did i remember",
+                            "what do i know", "show memory", "what does the repo remember"]):
+        return {"content": [{"type": "text", "text": codeloom.memory_read(root)}]}
+
     # 2. Symbol retrieval — "where is X / show me X / what does X do"
     if any(k in q for k in ["where is", "find symbol", "search for", "show me", "what does",
                             "explain", "source of", "definition of", "get symbol", "read "]):
@@ -1787,8 +1796,6 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
                 break
         if sym:
             return {"content": [{"type": "text", "text": _memory_symbol(root, sym)}]}
-    if any(k in q for k in ["what did i remember", "my memory", "read memory", "what do i know"]):
-        return {"content": [{"type": "text", "text": codeloom.memory_read(root)}]}
     if any(k in q for k in ["adr", "architectural decision", "record decision", "decision record"]):
         if any(k in q for k in ["list", "what adrs", "show adrs"]):
             return {"content": [{"type": "text", "text": codeloom.render_adr_list(root)}]}
@@ -1851,12 +1858,19 @@ def _memory_symbol(root: str, symbol: str) -> str:
     else subprocess fallback to `python3 codeloom.py --memory <symbol> <root>`."""
     fn = getattr(codeloom, "render_memory_graph", None)
     if callable(fn):
-        return str(fn(_collect_files(root, 5000), root, symbol))
+        try:
+            return str(fn(_collect_files(root, 5000), root, symbol))
+        except Exception as e:  # pragma: no cover - fallback chain
+            return f"# memory retrieval failed: {e}"
     try:
         out = subprocess.run(_core_argv("--memory", symbol, root),
                              capture_output=True, text=True, timeout=120)
-        raw = out.stdout if out.stdout else out.stderr
-        return (raw or "").strip() or f"# memory {symbol}: (no output)"
+        if out.returncode == 0:
+            raw = (out.stdout or "").strip()
+            return raw or f"# memory {symbol}: (no output)"
+        errs = [ln for ln in (out.stderr or "").splitlines() if ln.strip()]
+        hint = errs[0] if errs else f"exit {out.returncode}"
+        return f"# memory {symbol}: retrieval failed — `python3 codeloom.py --memory {symbol} <root>` returned {hint}"
     except Exception as e:  # pragma: no cover - fallback chain end
         return f"# memory retrieval failed: {e}"
 
@@ -1866,18 +1880,22 @@ def _memory_add(root: str, title: str, body: str, mtype: str,
     """Memory OS write: core memory_append() if landed, else subprocess
     fallback to `python3 codeloom.py --memory-add ...` (tests.py convention)."""
     if mtype not in ("decision", "bug", "question", "architecture", "api",
-                     "constraint", "lesson", "todo", "warning"):
+                     "constraint", "lesson", "todo", "warning", "goal",
+                     "hypothesis"):
         mtype = "decision"
     fn = getattr(codeloom, "memory_append", None)
     if callable(fn):
-        syms = [s.strip() for s in (symbols or "").split(",") if s and s.strip()]
-        entry: Any = fn(root, mtype, title, body=body, symbols=syms or None,
-                        priority=priority, created="memory")
-        if entry.get("error"):
-            return f"# memory-add failed: {entry['error']}"
-        return ("added [%s] %s — importance: %d, tier: %s"
-                % (entry.get("type", mtype), entry.get("title", title),
-                   entry.get("importance", 0), entry.get("tier", "?")))
+        try:
+            syms = [s.strip() for s in (symbols or "").split(",") if s and s.strip()]
+            entry: Any = fn(root, mtype, title, body=body, symbols=syms or None,
+                            priority=priority, created="memory")
+            if entry.get("error"):
+                return f"# memory-add failed: {entry['error']}"
+            return ("added [%s] %s — importance: %d, tier: %s"
+                    % (entry.get("type", mtype), entry.get("title", title),
+                       entry.get("importance", 0), entry.get("tier", "?")))
+        except Exception as e:  # pragma: no cover - surface honestly, never crash
+            return f"# memory-add failed: {e}"
     # core CLI convention (tests.py): --memory-add --type T --title TITLE
     # --symbols SYMS [--body BODY] [--priority N] <root>
     argv = _core_argv("--memory-add", root)
@@ -1890,8 +1908,12 @@ def _memory_add(root: str, title: str, body: str, mtype: str,
         argv += ["--priority", str(int(priority))]
     try:
         out = subprocess.run(argv, capture_output=True, text=True, timeout=60)
-        raw = out.stdout if out.stdout else out.stderr
-        return (raw or "").strip() or f"# memory-add: {title} (no output)"
+        if out.returncode == 0:
+            raw = (out.stdout or "").strip()
+            return raw or f"# memory-add: {title} (no output)"
+        errs = [ln for ln in (out.stderr or "").splitlines() if ln.strip()]
+        hint = errs[0] if errs else f"exit {out.returncode}"
+        return f"# memory-add failed: {hint}"
     except Exception as e:  # pragma: no cover - fallback chain end
         return f"# memory-add failed: {e}"
 
@@ -1901,12 +1923,19 @@ def _memory_stats(root: str) -> str:
     fallback to `python3 codeloom.py --memory-stats <root>`."""
     fn = getattr(codeloom, "render_memory_stats", None)
     if callable(fn):
-        return str(fn(root))
+        try:
+            return str(fn(root))
+        except Exception as e:  # pragma: no cover - fall through
+            return f"# memory stats failed: {e}"
     try:
         out = subprocess.run(_core_argv("--memory-stats", root),
                              capture_output=True, text=True, timeout=60)
-        raw = out.stdout if out.stdout else out.stderr
-        return (raw or "").strip() or "# memory stats: (no output)"
+        if out.returncode == 0:
+            raw = (out.stdout or "").strip()
+            return raw or "# memory stats: (no output)"
+        errs = [ln for ln in (out.stderr or "").splitlines() if ln.strip()]
+        hint = errs[0] if errs else f"exit {out.returncode}"
+        return f"# memory stats failed: {hint}"
     except Exception as e:  # pragma: no cover - fallback chain end
         return f"# memory stats failed: {e}"
 
@@ -2104,9 +2133,15 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         text = _memory_stats(root)
 
     elif name == "codeloom_memory_prune":
+        # Robust boolean coercion: JSON false arrives as bool False, but some
+        # clients send the string "false"/"0"/"" — bool("false") is True, so
+        # an explicit string must be parsed instead of truthiness-cast.
+        del_flag = args.get("delete", False)
+        if isinstance(del_flag, str):
+            del_flag = del_flag.strip().lower() in ("1", "true", "yes", "on")
         text = codeloom.render_memory_prune(
             root, int(args.get("older_than_days", 90)),
-            bool(args.get("delete", False)))
+            bool(del_flag))
 
     elif name == "codeloom_adr":
         title = args.get("title")

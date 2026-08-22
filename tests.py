@@ -1992,7 +1992,9 @@ class TestMemoryOS(unittest.TestCase):
         # mini repo: engine.py, auth.py (imports engine), utils.py.
         # A decision pinned to engine symbols must be found by
         # --memory <engine symbol> together with the graph-reachable
-        # section (auth.py depends on engine).
+        # section (auth.py depends on engine), and a decision pinned to a
+        # NEIGHBOR symbol (Auth in auth.py) must come back via the
+        # reachable-via-graph path, not the direct path.
         tmp = tempfile.mkdtemp()
         try:
             repo = os.path.join(tmp, "repo")
@@ -2020,12 +2022,91 @@ class TestMemoryOS(unittest.TestCase):
                            "--reason", "pure safety",
                            "--symbols", "Engine", cwd=repo)
             self.assertEqual(r1.returncode, 0, r1.stderr)
+            r1b = self._cli("--decide", "Auth must log every login",
+                            "--reason", "audit trail",
+                            "--symbols", "Auth", cwd=repo)
+            self.assertEqual(r1b.returncode, 0, r1b.stderr)
             r2 = self._cli("--memory", "Engine", cwd=repo)
             self.assertEqual(r2.returncode, 0, r2.stderr)
-            # the entry itself is returned
+            # the direct entry is returned
             self.assertIn("Engine must stay stateless", r2.stdout)
             # graph-reachable section: auth.py depends on engine
             self.assertIn("auth", r2.stdout.lower())
+            # a decision pinned to a graph NEIGHBOR symbol is returned via
+            # the reachable-via-graph path (Auth lives in auth.py, which
+            # imports engine) — this is the real graph retrieval, not the
+            # empty-fallback
+            self.assertIn("Auth must log every login", r2.stdout)
+        finally:
+            force_rmtree(tmp)
+
+    def test_remember_smart_dispatch(self):
+        # --remember NOTE keeps the LEGACY append-to-section write for
+        # free-form notes, but --remember <codebase-symbol> smart-dispatches
+        # to graph retrieval (the value resolves to a module/symbol in the
+        # repo). --memory <symbol> is retrieval, never a write.
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(repo)
+            with open(os.path.join(repo, "engine.py"), "w") as fh:
+                fh.write("class Engine:\n    def run(self):\n        return 42\n")
+            # 1) free-form note: legacy write into DECISIONS.md, no jsonl entry
+            r1 = self._cli("--remember", "always revalidate the jwt on refresh",
+                           cwd=repo)
+            self.assertEqual(r1.returncode, 0, r1.stderr)
+            self.assertIn("remembered: DECISIONS", r1.stdout)
+            dec = os.path.join(repo, ".codeloom-memory", "DECISIONS.md")
+            self.assertTrue(os.path.isfile(dec), "legacy note must land in DECISIONS.md")
+            with open(dec, "r", encoding="utf-8") as fh:
+                self.assertIn("always revalidate the jwt", fh.read())
+            self.assertEqual(self._jsonl(repo), [],
+                             "legacy --remember must NOT write memory.jsonl")
+            # 2) symbol-resolvable value: smart-dispatches to graph retrieval
+            r2 = self._cli("--remember", "Engine", cwd=repo)
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            self.assertIn("# memory: Engine", r2.stdout)
+            self.assertNotIn("remembered:", r2.stdout,
+                             "symbol value must not take the append path")
+            # no DECISIONS.md entry was added by the dispatch
+            with open(dec, "r", encoding="utf-8") as fh:
+                self.assertNotIn("- Engine", fh.read())
+            # 3) --memory is retrieval-only even for unknown symbols
+            r3 = self._cli("--memory", "NoSuchSymbol", cwd=repo)
+            self.assertEqual(r3.returncode, 0, r3.stderr)
+            self.assertIn("# memory: NoSuchSymbol", r3.stdout)
+            entries = self._jsonl(repo)
+            self.assertEqual(entries, [])
+            self.assertEqual(
+                [f for f in os.listdir(os.path.join(repo, ".codeloom-memory"))
+                 if f.endswith(".md")],
+                ["DECISIONS.md"], "--memory must never create memory files")
+        finally:
+            force_rmtree(tmp)
+
+    def test_query_memory_ranking_by_importance(self):
+        # typed hits in --query-memory are ranked by importance desc:
+        # the hot bug (keyword + type weight) must come before the
+        # low-importance question even though both match the query
+        tmp = tempfile.mkdtemp()
+        try:
+            r1 = self._cli("--memory-add", "--type", "bug",
+                           "--title", "zebra high",
+                           "--body", "critical security issue", cwd=tmp)
+            self.assertEqual(r1.returncode, 0, r1.stderr)
+            r2 = self._cli("--memory-add", "--type", "question",
+                           "--title", "zebra low", cwd=tmp)
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            r3 = self._cli("--query-memory", "zebra", cwd=tmp)
+            self.assertEqual(r3.returncode, 0, r3.stderr)
+            hi = r3.stdout.find("zebra high")
+            lo = r3.stdout.find("zebra low")
+            self.assertNotEqual(hi, -1, "high-importance hit missing")
+            self.assertNotEqual(lo, -1, "low-importance hit missing")
+            self.assertLess(hi, lo,
+                            "importance-desc ranking violated: %r" % r3.stdout)
+            # both ranked hits carry the jsonl provenance marker
+            self.assertIn("[memory.jsonl]", r3.stdout)
         finally:
             force_rmtree(tmp)
 
@@ -2042,6 +2123,112 @@ class TestMemoryOS(unittest.TestCase):
             self.assertEqual(r2.returncode, 0, r2.stderr)
             # the jsonl entry body, not just the echoed query header
             self.assertIn("zebra token cassette", r2.stdout)
+        finally:
+            force_rmtree(tmp)
+
+    def test_goal_hypothesis_adr_dual_write(self):
+        # --goal/--hypothesis/--adr keep their legacy markdown/journal
+        # surfaces AND append typed memory.jsonl entries (created source
+        # stamped; adr entries carry the decision as body + context as
+        # reason, symbols forwarded)
+        tmp = tempfile.mkdtemp()
+        try:
+            r1 = self._cli("--goal", "ship v2 before friday", cwd=tmp)
+            self.assertEqual(r1.returncode, 0, r1.stderr)
+            r2 = self._cli("--hypothesis", "pool is not shared", cwd=tmp)
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            r3 = self._cli("--adr", "Use Postgres",
+                           "--context", "write scale",
+                           "--decision", "migrate to pg",
+                           "--symbols", "Store", cwd=tmp)
+            self.assertEqual(r3.returncode, 0, r3.stderr)
+            # legacy surfaces survive
+            mem = os.path.join(tmp, ".codeloom-memory")
+            with open(os.path.join(mem, "GOALS.md"), "r", encoding="utf-8") as fh:
+                self.assertIn("ship v2 before friday", fh.read())
+            adrs = [f for f in os.listdir(os.path.join(mem, "adr"))
+                    if f.startswith("ADR-") and f.endswith(".md")]
+            self.assertEqual(len(adrs), 1)
+            entries = self._jsonl(tmp)
+            self.assertEqual(len(entries), 3, "one jsonl entry per writer")
+            by_type = {e["type"]: e for e in entries}
+            self.assertEqual(sorted(by_type), ["architecture", "goal",
+                                               "hypothesis"])
+            g = by_type["goal"]
+            self.assertEqual(g["title"], "ship v2 before friday")
+            self.assertEqual(g["created"], "goal")
+            h = by_type["hypothesis"]
+            self.assertEqual(h["title"], "pool is not shared")
+            self.assertEqual(h["created"], "hypothesis")
+            self.assertIn("status: open", h.get("body") or "")
+            a = by_type["architecture"]
+            self.assertEqual(a["title"], "Use Postgres")
+            self.assertEqual(a["created"], "adr")
+            self.assertIn("migrate to pg", a.get("body") or "")
+            self.assertIn("write scale", a.get("reason") or "")
+            self.assertIn("Store", a.get("affected_symbols") or [])
+            # symbols were forwarded from --adr --symbols
+        finally:
+            force_rmtree(tmp)
+
+    def test_include_archive_retrieval(self):
+        # archived entries are invisible to --memory by default and surface
+        # with --include-archive; the live file still stays capped
+        tmp = tempfile.mkdtemp()
+        try:
+            env = {"CODELOOM_MEMORY_CAP_BYTES": "300"}
+            for i in range(8):
+                r = self._cli("--memory-add", "--type", "bug",
+                              "--title", "t%02d" % i,
+                              "--symbols", "AuthService", cwd=tmp, env=env)
+                self.assertEqual(r.returncode, 0, r.stderr)
+            arch = os.path.join(tmp, ".codeloom-memory", "archive")
+            self.assertTrue(os.path.isdir(arch))
+            r1 = self._cli("--memory", "AuthService", cwd=tmp)
+            self.assertEqual(r1.returncode, 0, r1.stderr)
+            self.assertNotIn("t00", r1.stdout,
+                             "archived entries must be hidden without the flag")
+            r2 = self._cli("--memory", "AuthService", "--include-archive",
+                           cwd=tmp)
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            self.assertIn("t00", r2.stdout,
+                          "--include-archive must surface archived entries")
+            self.assertIn("t07", r2.stdout)
+        finally:
+            force_rmtree(tmp)
+
+    def test_memory_stats_top_symbols(self):
+        # --memory-stats reports the top-5 linked symbols by count, ranked
+        # count desc then name asc
+        tmp = tempfile.mkdtemp()
+        try:
+            r = self._cli("--memory-add", "--type", "bug", "--title", "a",
+                          "--symbols", "Alpha", cwd=tmp)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            r = self._cli("--memory-add", "--type", "bug", "--title", "b",
+                          "--symbols", "Alpha", cwd=tmp)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            r = self._cli("--memory-add", "--type", "bug", "--title", "c",
+                          "--symbols", "Beta", cwd=tmp)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            r = self._cli("--memory-stats", cwd=tmp)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("top linked symbols:", r.stdout)
+            # count-desc then name-asc
+            self.assertRegex(r.stdout,
+                             r"Alpha\s*[:=]\s*2[^\n]*\n\s*Beta\s*[:=]\s*1")
+        finally:
+            force_rmtree(tmp)
+
+    def test_memory_add_requires_title(self):
+        # --memory-add without --title is a hard error (exit 1, stderr hint)
+        tmp = tempfile.mkdtemp()
+        try:
+            r = self._cli("--memory-add", "--type", "bug", cwd=tmp)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("--memory-add requires --title", r.stderr)
+            self.assertEqual(self._jsonl(tmp), [],
+                             "failed write must not append a partial entry")
         finally:
             force_rmtree(tmp)
 

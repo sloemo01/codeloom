@@ -7710,18 +7710,32 @@ def _memory_tier(importance: int) -> str:
     return "archive"
 
 
-def _memory_recency(entry: dict) -> int:
-    """Read-time recency bonus: +10 within 7 days, +5 within 30, else 0.
-    Used as the deterministic tiebreaker for retrieval ranking."""
+def _memory_epoch(ts: str) -> Optional[float]:
+    """Parse an entry timestamp to epoch seconds; None when unparseable.
+    Accepts aware ISO-8601 (Z or offset) AND naive datetimes (treated as
+    UTC — the naive/aware subtraction crash and the silent recency=0 for
+    naive timestamps were both bugs)."""
     import datetime as _dt
-    ts = entry.get("timestamp", "")
     if not ts:
-        return 0
+        return None
     try:
         t = _dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        days = (_dt.datetime.now(_dt.timezone.utc) - t).total_seconds() / 86400.0
     except (ValueError, TypeError):
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=_dt.timezone.utc)
+    return t.timestamp()
+
+
+def _memory_recency(entry: dict) -> int:
+    """Read-time recency bonus: +10 within 7 days, +5 within 30, else 0.
+    Used as the deterministic tiebreaker for retrieval ranking. Naive
+    timestamps parse as UTC (no crash, no silent zero)."""
+    ep = _memory_epoch(entry.get("timestamp", ""))
+    if ep is None:
         return 0
+    import time as _time
+    days = (_time.time() - ep) / 86400.0
     if days <= 7:
         return 10
     if days <= 30:
@@ -7729,13 +7743,68 @@ def _memory_recency(entry: dict) -> int:
     return 0
 
 
+def _memory_sort_key(entry: dict) -> Tuple:
+    """Deterministic retrieval ranking: importance desc, then recency desc,
+    then timestamp desc (newest first), then id for a stable total order.
+    Timestamps are compared as epoch floats so mixed naive/aware stamps
+    never raise (naive treated as UTC, unparseable = oldest)."""
+    ep = _memory_epoch(entry.get("timestamp", ""))
+    return (-int(entry.get("importance", 0) or 0),
+            -_memory_recency(entry),
+            -(ep if ep is not None else -1.0),
+            entry.get("id", ""))
+
+
+def _memory_scan_id(root: str, type_: str) -> Tuple[int, int]:
+    """Stream live + archived JSONL for one type; return (count, max_numeric_id).
+
+    Cheap write-path scan — no entry materialization (the old path parsed
+    every line into a dict on EVERY write). count guards id uniqueness when
+    entries carry no numeric suffix (legacy sha256-style ids); max_numeric_id
+    keeps the counter monotonic across archive loss: counting entries instead
+    under-counts after --memory-prune removes archive files, which would
+    recycle ids and collide with live entries."""
+    import json as _json
+    import re as _re
+    count = 0
+    max_n = 0
+
+    def _scan(p: str) -> None:
+        nonlocal count, max_n
+        try:
+            with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    if '"type"' not in line:
+                        continue
+                    try:
+                        e = _json.loads(line)
+                    except _json.JSONDecodeError:
+                        continue
+                    if not isinstance(e, dict) or e.get("type") != type_:
+                        continue
+                    count += 1
+                    m = _re.search(r"(\d+)\s*$", str(e.get("id", "")))
+                    if m:
+                        max_n = max(max_n, int(m.group(1)))
+        except OSError:
+            pass
+
+    _scan(_memory_jsonl_path(root))
+    arch = _memory_archive_dir(root)
+    if os.path.isdir(arch):
+        for fn in sorted(os.listdir(arch)):
+            if fn.startswith("memory") and fn.endswith(".jsonl"):
+                _scan(os.path.join(arch, fn))
+    return count, max_n
+
+
 def _memory_next_id(root: str, type_: str) -> str:
-    """Deterministic '<slug>-NNN' id: slug from the type, NNN = next per-type
-    counter across live + archived entries (lossless rotation keeps counts
-    stable)."""
-    n = 1 + sum(1 for e in _memory_entries(root, include_archive=True)
-                if e.get("type") == type_)
-    return "%s-%03d" % (type_, n)
+    """Deterministic '<slug>-NNN' id: NNN = max existing numeric id + 1 across
+    live + archived entries (rotation is lossless, so counters stay monotonic
+    even after --memory-remove/prune deletes archive files — counting entries
+    instead would recycle ids and collide with live entries)."""
+    count, max_n = _memory_scan_id(root, type_)
+    return "%s-%03d" % (type_, max(count, max_n) + 1)
 
 
 def memory_append(root: str, type_: str, title: str, body: str = "",
@@ -7821,17 +7890,6 @@ def memory_rotate_jsonl(root: str) -> bool:
         return False
 
 
-def _memory_sort_key(entry: dict) -> Tuple:
-    """Deterministic retrieval ranking: importance desc, then recency desc,
-    then timestamp desc (newest first), then id for a stable total order."""
-    import datetime as _dt
-    ts = entry.get("timestamp", "")
-    return (-int(entry.get("importance", 0) or 0),
-            -_memory_recency(entry),
-            ts,
-            entry.get("id", ""))
-
-
 def _memory_line(entry: dict) -> str:
     """One retrieval line: 'T [priority] type: title — body[:200]'."""
     t = (entry.get("title") or "").strip()
@@ -7899,7 +7957,8 @@ def memory_symbol_resolve(files: List[str], root: str, sym: str) -> bool:
 
 def render_memory_graph(files: List[str], root: str, symbol: str,
                         target_root: Optional[str] = None,
-                        include_archive: bool = False) -> str:
+                        include_archive: bool = False,
+                        max_files: int = 5000) -> str:
     """--memory <symbol>: graph-linked memory retrieval. Direct entries
     (affected_symbols contain the symbol), ranked importance desc then
     recency, then a 'reachable via graph' section: entries whose
@@ -7915,7 +7974,21 @@ def render_memory_graph(files: List[str], root: str, symbol: str,
                   "--decide/--lesson/--adr/--goal/--hypothesis/--memory-add.\n")
         return buf.getvalue()
     tgt = os.path.abspath(target_root or root)
-    modules, symbols = _memory_symbols(files, tgt)
+    # --target-root: graph expansion runs against ANOTHER repo, so walk THAT
+    # root for its own files — reusing the memory root's file list would
+    # module-name them relative to tgt, producing garbage '..' dotted names
+    # and an empty graph (files must live under the root they are named
+    # against).
+    if target_root:
+        tfiles: List[str] = []
+        rules = []
+        gi = os.path.join(tgt, ".gitignore")
+        if os.path.isfile(gi):
+            rules = parse_gitignore(gi)
+        _walk(tgt, rules, max_files, tfiles)
+    else:
+        tfiles = files
+    modules, symbols = _memory_symbols(tfiles, tgt)
     low = sym.lower()
     direct = [e for e in entries
               if any(s.lower() == low for s in (e.get("affected_symbols") or []))]
@@ -7934,7 +8007,7 @@ def render_memory_graph(files: List[str], root: str, symbol: str,
                   f"({tgt}) — no graph to expand.\n")
         return buf.getvalue()
     try:
-        graph = build_graph(files, tgt)
+        graph = build_graph(tfiles, tgt)
     except Exception:
         graph = {}
     neighbors: Set[str] = set()
@@ -7944,7 +8017,7 @@ def render_memory_graph(files: List[str], root: str, symbol: str,
     for dep in graph.get(mod, set()):
         neighbors.add(dep)
     try:
-        calls = build_call_graph(files, tgt)
+        calls = build_call_graph(tfiles, tgt)
         for m, fns in calls.items():
             for _caller, callees in fns.items():
                 if sym in callees and m != mod:
@@ -9525,7 +9598,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.memory:
             print(render_memory_graph(files, root, args.memory,
                                       target_root=args.target_root,
-                                      include_archive=args.include_archive))
+                                      include_archive=args.include_archive,
+                                      max_files=args.max_files))
             return 0
 
         # --memory-add: generic typed write (needs --title)
@@ -9555,7 +9629,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             if memory_symbol_resolve(files, root, args.remember):
                 print(render_memory_graph(files, root, args.remember,
                                           target_root=args.target_root,
-                                          include_archive=args.include_archive))
+                                          include_archive=args.include_archive,
+                                          max_files=args.max_files))
                 return 0
             print(memory_remember(root, args.section, args.remember))
             return 0
@@ -9564,8 +9639,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(wm_goal(root, args.goal))
             # typed mirror: goal entries append to memory.jsonl too
             e = memory_append(root, "goal", args.goal, created="goal")
-            print("memory: [goal] importance: %d, tier: %s"
-                  % (e["importance"], e["tier"]))
+            if e.get("error"):
+                print("memory: jsonl mirror FAILED (%s); the markdown "
+                      "goal was still recorded" % e["error"], file=sys.stderr)
+            else:
+                print("memory: [goal] importance: %d, tier: %s"
+                      % (e["importance"], e["tier"]))
             return 0
 
         if args.decide:
@@ -9578,13 +9657,36 @@ def main(argv: Optional[List[str]] = None) -> int:
                                reason=args.reason,
                                symbols=args.symbols.split(",")
                                if args.symbols else None,
+                               priority=args.priority,
                                created="decide")
-            print("memory: importance: %d, tier: %s"
-                  % (me["importance"], me["tier"]))
+            if me.get("error"):
+                print("memory: jsonl mirror FAILED (%s); the markdown "
+                      "decision was still recorded" % me["error"],
+                      file=sys.stderr)
+            else:
+                print("memory: importance: %d, tier: %s"
+                      % (me["importance"], me["tier"]))
             return 0
 
         if args.reject:
+            # --reject is --decide with status=rejected: keep the markdown
+            # journal entry AND the typed jsonl mirror (dual-write parity
+            # with --decide — a rejected decision is still a decision).
             print(wm_decide(root, args.reject, args.reason, "rejected"))
+            me = memory_append(root, "decision", args.reject,
+                               body="status: rejected",
+                               reason=args.reason,
+                               symbols=args.symbols.split(",")
+                               if args.symbols else None,
+                               priority=args.priority,
+                               created="decide")
+            if me.get("error"):
+                print("memory: jsonl mirror FAILED (%s); the markdown "
+                      "rejection remains recorded" % me["error"],
+                      file=sys.stderr)
+            else:
+                print("memory: importance: %d, tier: %s"
+                      % (me["importance"], me["tier"]))
             return 0
 
         if args.hypothesis:
@@ -9592,8 +9694,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             # typed hypothesis: append to memory.jsonl too
             me = memory_append(root, "hypothesis", args.hypothesis,
                                body="status: open", created="hypothesis")
-            print("memory: importance: %d, tier: %s"
-                  % (me["importance"], me["tier"]))
+            if me.get("error"):
+                print("memory: jsonl mirror FAILED (%s); the markdown "
+                      "hypothesis was still recorded" % me["error"],
+                      file=sys.stderr)
+            else:
+                print("memory: importance: %d, tier: %s"
+                      % (me["importance"], me["tier"]))
             return 0
 
         if args.list_decisions:
@@ -9610,13 +9717,36 @@ def main(argv: Optional[List[str]] = None) -> int:
             me = memory_append(root, "lesson", args.lesson,
                                symbols=args.symbols.split(",")
                                if args.symbols else None,
+                               priority=args.priority,
                                created="lesson")
-            print("memory: importance: %d, tier: %s"
-                  % (me["importance"], me["tier"]))
+            if me.get("error"):
+                print("memory: jsonl mirror FAILED (%s); the markdown "
+                      "lesson was still recorded" % me["error"],
+                      file=sys.stderr)
+            else:
+                print("memory: importance: %d, tier: %s"
+                      % (me["importance"], me["tier"]))
             return 0
 
         if args.supersede:
+            # --supersede records a decision-replacement fact: keep the
+            # markdown record AND append a typed jsonl entry (dual-write
+            # parity — supersession is a decision-level event too).
             print(memory_supersede(root, args.supersede[0], args.supersede[1]))
+            me = memory_append(root, "decision",
+                               "%s superseded by %s" % (args.supersede[0],
+                                                        args.supersede[1]),
+                               body="supersedes %s" % args.supersede[0],
+                               symbols=args.symbols.split(",")
+                               if args.symbols else None,
+                               created="decide")
+            if me.get("error"):
+                print("memory: jsonl mirror FAILED (%s); the markdown "
+                      "supersede record was still written" % me["error"],
+                      file=sys.stderr)
+            else:
+                print("memory: importance: %d, tier: %s"
+                      % (me["importance"], me["tier"]))
             return 0
 
         if args.query_memory:
@@ -9656,9 +9786,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                                reason=(args.context or ""),
                                symbols=args.symbols.split(",")
                                if args.symbols else None,
+                               priority=args.priority,
                                created="adr")
-            print("memory: importance: %d, tier: %s"
-                  % (me["importance"], me["tier"]))
+            if me.get("error"):
+                print("memory: jsonl mirror FAILED (%s); the markdown "
+                      "ADR was still written" % me["error"], file=sys.stderr)
+            else:
+                print("memory: importance: %d, tier: %s"
+                      % (me["importance"], me["tier"]))
             return 0
 
     if args.churn:
