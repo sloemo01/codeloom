@@ -24,9 +24,9 @@ Three scanning engines, one interface:
 | `codeloom_rs` | full standalone Rust CLI (map/search/read/calls/cross) | `rustc` |
 | `engine_rs/` | real tree-sitter AST, 16 languages | `cargo` (optional) |
 
-The MCP layer (`codeloom-mcp.py`, 71 tools) wraps these behind a **single
+The MCP layer (`codeloom-mcp.py`, 77 tools) wraps these behind a **single
 entry point** (`codeloom_ask`) that routes deterministically — no model picking
-among 71 tools.
+among 77 tools.
 
 ## 3. The working-memory model
 
