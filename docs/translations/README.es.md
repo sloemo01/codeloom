@@ -180,7 +180,7 @@ para los números):
 | Prueba de lenguajes | **46 probados por fixtures en CI** | no publicado | — | — |
 | Configuración→respuesta | **0.13s en caliente** | 41s pip + 4s build + daemon | tras la indexación | tras la indexación |
 
-Números medidos: recuperación de símbolos con 24–36× menos tokens que crg;
+Números medidos: recuperación de símbolos con 43–54× menos tokens que crg;
 recuperación tras compactación con **95.4% menos tokens**; grafo completo del
 kernel de Linux en ~89–113s (motor C). Detalles y comandos de reproducción en
 [`benchmarks/README.md`](benchmarks/README.md).

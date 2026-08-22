@@ -114,6 +114,49 @@ python3 codeloom.py --index /path/to/repo
 
 # Check index freshness
 python3 codeloom.py --index-status /path/to/repo
+
+# --- Retrieval & evidence (v0.76+) ---
+# One-call cited answer with honest confidence (the "just ask" entry point)
+python3 codeloom.py --answer "how does login work" /path/to/repo
+
+# Batch triage: N symbols in one call
+python3 codeloom.py --context-card Engine LoginRoute /path/to/repo
+
+# Decision lookup with evidence stamps
+python3 codeloom.py --why "why retry(3)" /path/to/repo
+
+# Natural-language flow discovery
+python3 codeloom.py --find "where login is handled" /path/to/repo
+
+# Structural AST search with metavariables ($VAR / $$$REST)
+python3 codeloom.py --pattern '$F($$$ARGS)' /path/to/repo
+
+# --- Safety layer (v0.78): run these around edits ---
+# Post-edit integrity oracle: GO/CHECK/STOP after you (or an agent) edited files
+python3 codeloom.py --verify-edit /path/to/repo
+python3 codeloom.py --verify-edit --severity strict /path/to/repo   # STOP exits 1
+
+# Blindspot: warn when editing files never read (uses --mark-seen hot set)
+python3 codeloom.py --blindspot /path/to/repo
+
+# Change-risk for the last commit (score 0-100 + drivers)
+python3 codeloom.py --risk /path/to/repo
+python3 codeloom.py --risk HEAD~3..HEAD /path/to/repo
+
+# --- Health & signal ---
+python3 codeloom.py --health /path/to/repo        # 0-10 per file
+python3 codeloom.py --churn /path/to/repo         # most-edited files
+python3 codeloom.py --timeline /path/to/repo      # architecture evolution
+python3 codeloom.py --bug-predict /path/to/repo   # likely-to-break files
+python3 codeloom.py --langs                       # supported languages
+
+# --- Savings & proof ---
+python3 codeloom.py --savings-report /path/to/repo   # local token ledger (no telemetry)
+python3 codeloom.py --eval bench --root /path/to/repo  # reproducible benchmark suite
+
+# --- Hooks ---
+python3 codeloom.py --install-hook /path/to/repo   # warn-only pre-commit
+python3 codeloom.py --uninstall-hook /path/to/repo
 ```
 
 ## Quick Reference
@@ -144,6 +187,8 @@ python3 codeloom.py --index-status /path/to/repo
 | `--embed-search "q"` | fuzzy semantic search (subword-hash embedding, zero-dep — catches typos) |
 | `--usages X` | find where a symbol is used (call sites + snippet) |
 | `--grep X` | search file contents for a snippet (ranked + context) |
+| `--grep-symbolic QUERY` | grep with symbolic awareness: match symbols/identifiers, not just text |
+| `--lessons TEXT` | alias for `--lesson` (README documents `--lessons`) |
 | `--read X` | extract exact source of a symbol (AST / tree-sitter / brace-match) |
 | `--explain X` | plain-English explanation of a symbol (no LLM) |
 | `--similar X` | find structurally similar functions/classes (refactoring) |
@@ -180,11 +225,43 @@ python3 codeloom.py --index-status /path/to/repo
 | `--no-outline` | skip per-file one-liners (faster) |
 | `--max-files N` | cap traversal (default 20000) |
 | `--memory-add` (v0.79) | write a typed memory object to `.codeloom-memory/memory.jsonl` (`--type decision\|bug\|question\|architecture\|api\|constraint\|lesson\|todo\|warning\|goal\|hypothesis`, default goal, + `--title`/`--body`/`--symbols`/`--priority`); importance scored by formula |
-| `--memory SYMBOL` (v0.79) | graph-linked retrieval: typed entries for the symbol + graph-neighbor reachable entries |
+| `--memory SYMBOL` (v0.79) | graph-linked retrieval: typed entries for the symbol + graph-neighbor reachable entries; `--target-root ROOT` builds the graph against another root, `--include-archive` also searches archived `memory-*.jsonl` |
 | `--memory-stats` (v0.79) | typed-memory stats: per-type counts, tiers, archive/rotation info |
+| `--goal TEXT` | record the session goal (shown by `--working-state` and `--resume`; appends a typed `goal` entry to `memory.jsonl`) |
+| `--adr-status STATUS` | status for `--adr` (default Accepted) |
 | `--remember NOTE` | smart-dispatch: if NOTE names a repo symbol or a pinned memory entry → graph retrieval; otherwise legacy append to `--section` markdown (default DECISIONS) |
 | `--memory-prune` | dry-run report of old `.codeloom-memory/archive` entries; `--older-than DAYS` (default 90), `--delete` actually deletes |
 | `--engine {py,c,rust}` | scanning engine: py (pure-Python, default), c (compiled codeloom_core), rust (compiled codeloom_core_rs, multi-threaded) |
+
+**Answers, evidence & safety (v0.76-v0.78 surface):**
+| Flag | Purpose |
+|---|---|
+| `--answer QUESTION` | one-call cited answer with honest confidence — the "just ask" retrieval entry point |
+| `--context-card S1 S2 ...` | batch triage card: N symbols' signatures + docs + relevance in one call |
+| `--why QUERY` | decision lookup with evidence stamps `[exact]`/`[fuzzy]`/`[unverified]` |
+| `--verify-edit [ROOT]` | **post-edit integrity oracle**: re-parse changed files, GO/CHECK/STOP verdict on dangling imports/cycles; `--severity warn` (exit 0 on STOP) or `--severity strict` (exit 1) |
+| `--blindspot` | compare the `--mark-seen` hot set against impact-derived read set: STOP-tier "editing a file you never read" warning; `--no-blindspot` opts out |
+| `--risk [REVSPEC]` | change-risk report for a commit/range (default `HEAD~1..HEAD`): score 0-100 + named drivers |
+| `--savings-report` | token/seconds savings vs grep+read baseline, from the `--session` log; `--since DAYS` filters, `--repo PATH` aggregates per repo |
+| `--eval KIND` | run `benchmarks/eval_runner.py` (`--root PATH`): kinds `token|compaction|sealed|bench` — the reproducible benchmark suite |
+| `--install-hook` | install `.git/hooks/pre-commit` running `scripts/pre-commit-hook.sh` (warn-only, never blocks) |
+| `--uninstall-hook` | remove the codeloom-managed pre-commit hook |
+| `--health` | code-health screen: 0–10 per file, deterministic detectors (complexity, duplication, churn, ownership) |
+| `--churn` | git churn: most-edited files (instability signal for refactor targeting) |
+| `--timeline` | repository timeline: replay architecture evolution via git history |
+| `--dedup` | session dedupe: skip already-read files, show only the new |
+| `--pattern PATTERN` | structural AST search: `$VAR` captures, `$$$REST` captures (metavariable pattern matching) |
+| `--hybrid-search QUERY` | combined semantic + symbolic search (index-first with fuzzy fallback) |
+| `--langs` | list supported languages/extensions (broad regex + tree-sitter dispatched) |
+| `--lsp` | show LSP bridge status (optional semantic enrichment when an LSP is installed) |
+| `--lsp-symbol SYMBOL` | resolve a symbol's real definition via an installed LSP server |
+| `--graph-html` | write a local zoomable HTML graph view (browser-based exploration) |
+| `--find QUERY` | natural-language flow discovery: `--find "where login is handled"` |
+| `--plugin-sdk` | show the plugin SDK surface for framework-aware extensions |
+| `--build-core` | build the optional C accelerator (`codeloom_core.c` → compiled) |
+| `--parallel` | parallelize file parsing for heavy ops (large-repo speedup) |
+| `--bug-predict` | bug prediction: files likely to break (churn + complexity heuristic) |
+| `--watch-merge` | read watcher JSON lines from stdin, apply changed files into the index |
 
 **Optional precision backends** (auto-enabled when present, zero-dep otherwise):
 - `tree-sitter` + grammars → precise multi-language AST parsing
@@ -232,6 +309,38 @@ This is the decision guide: given what you're trying to do, which flag serves it
 - `codeloom --refactor X` — refactor engine: files, deps, risk, safe order
 - `codeloom --rename OLD NEW` — what a rename touches (blast radius for renames)
 
+### Verify an edit (after editing — the loop-closure layer, v0.78)
+- `codeloom --verify-edit` — **after** you (or an agent) changed files: re-parses
+  and returns GO/CHECK/STOP on dangling imports/new cycles. Run it before telling
+  the agent "edit is fine" — `--severity strict` makes STOP exit 1 (for CI/gates).
+- `codeloom --blindspot` — "am I about to edit a file I never read?" (uses the
+  `--mark-seen` hot set); `--no-blindspot` opts out.
+- `codeloom --risk HEAD~1..HEAD` — "how risky is my last change?" (0-100 + drivers)
+- `codeloom --install-hook` — make the pre-commit warn automatically (never blocks)
+- `codeloom --savings-report` — "what did this session cost in tokens?" (local ledger)
+
+### One-call retrieval (evidence-first answers)
+- `codeloom --answer "Q"` — cited answer with honest confidence — first choice
+  when the agent needs to answer a question about the codebase
+- `codeloom --context-card A B C` — batch triage: many symbols in one call
+- `codeloom --why "X"` — "why was this decision made?" (evidence-stamped)
+- `codeloom --find "login flow"` — natural-language flow discovery
+- `codeloom --pattern '$F($$$ARGS)'` — structural AST search (metavariables)
+- `codeloom --hybrid-search Q` — semantic + symbolic combined
+- `codeloom --embed-search "q"` — fuzzy semantic search (typo-tolerant)
+
+### Health / signal (refactor targeting)
+- `codeloom --health` — 0-10 per-file code health screen
+- `codeloom --churn` — most-edited files (instability signal)
+- `codeloom --timeline` — architecture evolution over git history
+- `codeloom --bug-predict` — files likely to break next
+- `codeloom --dedup` — "what's new since my last run?" (skip already-read)
+
+### Proof / reproducibility (maintenance)
+- `codeloom --eval bench --root <repo>` — run the whole measured benchmark suite
+  (token efficiency, compaction recovery, sealed retrieval, memory eval)
+- `codeloom --verify FILE` — SHA-256 checksum (download trust)
+
 ### Web / backend architecture
 - `codeloom --routes` — "what HTTP endpoints exist, METHOD path → handler"
 - `codeloom --channels` — "what pub-sub/event channels, EMITS → LISTENS_ON"
@@ -245,6 +354,7 @@ This is the decision guide: given what you're trying to do, which flag serves it
 - `codeloom --adr-list` — list saved ADRs
 | `--decide "title" --reason "..."` | record a decision (accepted/rejected) — survives compaction |
 | `--reject "title" --reason "..."` | record a rejected decision |
+| `--status STATUS` | status for `--decide` (accepted/rejected/open) |
 | `--hypothesis "title"` | record an open hypothesis |
 | `--mark-seen f sym` | mark files/symbols as deeply understood (hot set) |
 | `--working-state` | layered working-state packet: goal, decisions, actions, open items, hot set |
@@ -380,7 +490,7 @@ structured, importance-scored, graph-linked entries:
 ```bash
 python3 tests.py
 ```
-Expect `OK` (101 tests, incl. the 7 `TestMemoryOS` cases). Add tests for any
+Expect `OK` (107 tests, incl. the 7 `TestMemoryOS` cases). Add tests for any
 new feature.
 
 ### 5. Re-record the demo GIF
@@ -411,7 +521,7 @@ new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (101 tests).
+- `python3 tests.py` → `OK` (107 tests).
 - `codeloom --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codeloom --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codeloom --task "text" <root>` returns a ranked module list.

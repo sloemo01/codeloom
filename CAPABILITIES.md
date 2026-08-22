@@ -90,7 +90,7 @@ Everything codeloom can do, in one place. Zero-dependency, single file, no daemo
 | `codeloom --adr-list` | List saved ADRs |
 | `codeloom --session` / `--session-report` | Log & summarize what was done |
 
-## MCP server (78 tools + 1 router)
+## MCP server (82 tools + 1 router)
 
 `codeloom-mcp.py` is a zero-dependency MCP server (stdlib JSON-RPC over stdio).
 Tools: `codeloom_map`, `codeloom_graph`, `codeloom_focus`, `codeloom_calls`,

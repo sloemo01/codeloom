@@ -186,7 +186,7 @@ contracts: theirs is "orient the agent", ours is "hand the agent the code".
 | First query | 3.23s cold (`--answer`, no index) / **0.13s warm** (`--get-symbol` after `--index`) | 0.18s (after build) |
 | Semantic search | zero-dep subword hash, offline | `pip install code-review-graph[embeddings]` (sentence-transformers ~2GB) **or cloud API key** |
 | Background process | none | `crg-daemon`: 1 proc, 16.3MB RSS, TOML watch config |
-| MCP surface | **77 tools + `codeloom_ask` NL router** (counted live via MCP handshake) | 30 tools, no router |
+| MCP surface | **82 tools + `codeloom_ask` NL router** (counted live via MCP handshake) | 30 tools, no router |
 
 The honest caveat on timing: codeloom's `--answer` hybrid search walks the
 tree on every call (~3.2s on fastapi, cold or warm) — its fast path is

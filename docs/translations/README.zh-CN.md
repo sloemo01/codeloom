@@ -166,7 +166,7 @@ v0.79 的 MCP 表面新增 **Memory OS 三件套**：`codeloom_memory_add`（带
 | 语言证明 | **46 种语言在 CI 中经 fixture 验证** | 未公布 | — | — |
 | 安装→出答案 | **0.13 秒热启动** | 41 秒 pip + 4 秒构建 + 守护进程 | 建索引后 | 建索引后 |
 
-实测数据：符号检索比 crg 少 24–36 倍 tokens；压缩恢复
+实测数据：符号检索比 crg 少 43–54 倍 tokens；压缩恢复
 **少 95.4% tokens**；Linux 内核完整图约 89–113 秒（C 引擎）。细节和
 复现命令见 [`benchmarks/README.md`](benchmarks/README.md)。
 

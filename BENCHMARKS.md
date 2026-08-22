@@ -42,7 +42,7 @@ Symbol retrieval: codeloom 9–10 tokens vs crg 428–485 (43–54× fewer) —
 `benchmarks/vs_crg.py` (table below in `benchmarks/README.md`).
 Setup: codeloom 1 file / 3.23s cold, 0.13s warm with index vs crg pip 75
 packages (8.6s) / 42.6MB graph / daemon 16.3MB RSS / embeddings extra. MCP:
-codeloom 77 tools + NL router vs crg 30 tools no router (both counted live).
+codeloom 82 tools + NL router vs crg 30 tools no router (both counted live).
 Loss rows: task brief 1,625 vs their 161 tokens (theirs is a pointer card;
 ours embeds the code); crg first query 0.18s after build vs codeloom `--answer`
 ~3.2s (codeloom's fast path is `--get-symbol` after `--index`, 0.13s).
