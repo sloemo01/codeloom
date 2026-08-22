@@ -187,7 +187,11 @@ shape + proof-per-grammar + memory depth — not their moats.
 | [`FEATURES.md`](FEATURES.md) | Strategic feature map |
 | [`SECURITY.md`](SECURITY.md) | Trust model & verification |
 | [`docs/COMPETITION.md`](docs/COMPETITION.md) | Source-cited competitor matrix |
-| [`bench/`](bench/RESULTS.md) | Reproducible benchmark results |
+| [`docs/mcp-listing.md`](docs/mcp-listing.md) | MCP marketplace listing copy |
+| [`bench/RESULTS.md`](bench/RESULTS.md) | Replay-bench results (loss rows published) |
+| [`BENCHMARKS.md`](BENCHMARKS.md) | Measured performance numbers |
+| [`TECHNICAL_REPORT.md`](TECHNICAL_REPORT.md) | Architecture decisions write-up |
+| [`AGENT_TRACE.md`](AGENT_TRACE.md) | Agent before/after task trace |
 
 ## Trust & verification
 
@@ -201,6 +205,14 @@ shape + proof-per-grammar + memory depth — not their moats.
 
 PRs welcome. Run tests with `python3 tests.py`. Ethos: zero-dependency, fast,
 one file, honest claims.
+
+## Agent skill
+
+A ready-to-load skill for using and maintaining codeloom ships at
+[`skills/codeloom/SKILL.md`](skills/codeloom/SKILL.md) — every flag, MCP
+wiring, the test suite, re-recording the demo GIF, and how to extend the tool.
+Install into your agent's skill directory (e.g.
+`~/.hermes/skills/software-development/codeloom/`).
 
 ## License
 
