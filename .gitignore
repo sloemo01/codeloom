@@ -11,6 +11,9 @@ build/
 .codeloom-index.*
 .codeloom-embeds.json
 .codeloom-checkpoint.md
+.codeloom-memory/
+.codeloom-session.jsonl
+.codeloom-cache.json
 codeloom_core
 codeloom_core_rs
 codeloom_rs

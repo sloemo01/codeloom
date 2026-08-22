@@ -16,6 +16,13 @@ Two outputs, chosen by --format:
 All analysis is deterministic codeloom primitives. Zero LLM, zero network.
 
 Usage: pr_bot.py <revspec> [pr-title] [--format markdown|json] [--max-bytes N]
+
+Security contract: the workflow passes PR-controlled values via environment
+variables, NEVER via shell interpolation of the run block. Env vars:
+  PR_TITLE   pull-request title (untrusted — must never enter bash)
+  PR_AUTHOR  pull_request.user.login (self-review guard)
+  ACTOR      github.actor (self-review guard)
+  BOT_LOGIN  extra comma-separated logins treated as the bot itself
 """
 import io
 import json as _json
@@ -26,8 +33,37 @@ import sys
 
 MARKER = "<!-- codeloom-pr-bot:v2 -->"
 
+# make the repo-root codeloom module importable no matter where pr_bot is
+# invoked from (workflow cwd is the checkout root; local runs may differ)
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 # severity order for sorting; P1 must-fix, P3 nit
 _SEV_RANK = {"P1": 0, "P2": 1, "P3": 2}
+
+# identities the bot never reviews: GitHub's auto-bot plus its own login
+_BOT_IDS = {"github-actions", "github-actions[bot]"}
+
+
+def _is_self_review() -> bool:
+    """True when the PR was authored or triggered by the bot itself.
+
+    Identities arrive via env (PR_AUTHOR / ACTOR / BOT_LOGIN) — the
+    workflow passes them with `env:` so untrusted PR fields never touch a
+    bash string. No env set => local run, never self-flagged.
+    """
+    actors = [a.strip().lower()
+              for a in (os.environ.get("PR_AUTHOR", ""),
+                        os.environ.get("ACTOR", ""))
+              if a and a.strip()]
+    if not actors:
+        return False
+    bots = set(_BOT_IDS)
+    for extra in os.environ.get("BOT_LOGIN", "").split(","):
+        if extra.strip():
+            bots.add(extra.strip().lower())
+    return any(a in bots for a in actors)
 
 
 def sh(cmd: list, timeout: int = 120) -> str:
@@ -93,11 +129,49 @@ def diff_digest(files) -> str:
 
 
 def touched_health(files, cap: int = 9000) -> str:
-    """--health over the repo, filtered down to the touched files.
+    """Health screen scoped to the touched files ONLY.
+
+    Runs the deterministic health pass in-process over the touched-file
+    list so the headline count, per-file scores, and the Worst files
+    section all describe exactly the files this PR touches (the repo-wide
+    headline and untracked worst files used to leak into the section).
+    Falls back to the old text-filtered scan if codeloom is not
+    importable in this environment.
+    """
+    touched = {f for f, _, _ in files}
+    if not touched:
+        return "No code files to screen."
+    abs_paths = [p for p in (os.path.join(_REPO_ROOT, f) for f in touched)
+                 if os.path.isfile(p)]
+    if not abs_paths:
+        return "No touched code files to screen."
+    try:
+        import codeloom  # noqa: F401  (pure stdlib module; repo root on path)
+    except ImportError:
+        return _touched_health_text_fallback(files, cap)
+    try:
+        out = codeloom.render_health(sorted(abs_paths), _REPO_ROOT)
+    except Exception:
+        return _touched_health_text_fallback(files, cap)
+    if not out or out == "(no output)":
+        return "(no output)"
+    lines = out.splitlines()
+    if lines and lines[0].startswith("#"):
+        lines[0] = lines[0].replace(
+            "code health", "code health (touched files only)", 1)
+    body = "\n".join(lines)
+    if len(body) > cap:
+        body = body[:cap] + "\n… (truncated)"
+    return body
+
+
+def _touched_health_text_fallback(files, cap: int = 9000) -> str:
+    """Subprocess fallback: repo-wide --health, filtered to touched files.
 
     Matches ANY line that names a touched file (covers both summary rows
     like 'path — N findings' and finding-detail rows like
-    '[dead_symbol] path:12'), so nothing is dropped by format drift."""
+    '[dead_symbol] path:12'), so nothing is dropped by format drift.
+    Headline is relabeled since the raw count is repo-wide."""
     touched = {f for f, _, _ in files}
     basenames = {os.path.basename(f): f for f in touched}
     if not touched:
@@ -106,7 +180,12 @@ def touched_health(files, cap: int = 9000) -> str:
     if not out or out == "(no output)":
         return "(no output)"
     lines = out.splitlines()
-    keep = [l for l in lines[:2] if l.startswith("#")]  # headline
+    keep = []
+    for l in lines[:2]:
+        if l.startswith("#"):
+            keep.append(l.replace("code health",
+                                  "code health (touched files only, "
+                                  "repo-wide scan)", 1))
     for line in lines:
         if any(base in line for base in basenames):
             if line not in keep:
@@ -211,7 +290,8 @@ def collect_findings(revspec: str, files):
                     break
 
     # 2. orphan new symbols (defined but zero detected callers)
-    names = []
+    #    Deduped: ONE finding per unique symbol name — when the same name
+    #    is defined in several changed files, only the first path is kept.
     sym_line = {}
     for path, _, _ in files[:30]:
         for ln, sign, text in _diff_lines(path, lo, hi):
@@ -219,21 +299,18 @@ def collect_findings(revspec: str, files):
             if m:
                 n = next(g for g in m.groups() if g)
                 if not n.startswith("_"):
-                    names.append(n)
-                    sym_line[(path, n)] = ln
-    for n in dict.fromkeys(names[:12]):
+                    sym_line.setdefault(n, (path, ln))
+    for n in list(sym_line)[:12]:
         u = sh([sys.executable, "codeloom.py", "--usages", n, "."])
         cnt = sum(1 for l in u.splitlines()
                   if l.strip() and not l.startswith("#")
                   and "definition(s)" not in l and "usage" not in l.lower())
         if cnt <= 0:
-            for (p, name), ln in sym_line.items():
-                if name == n:
-                    out.append({"path": p, "line": ln, "severity": "P3",
-                                "kind": "orphan symbol",
-                                "message": f"`{n}` has no detected callers — "
-                                    "wire it up, add a test, or prefix with `_`."})
-                    break
+            path, ln = sym_line[n]
+            out.append({"path": path, "line": ln, "severity": "P3",
+                        "kind": "orphan symbol",
+                        "message": f"`{n}` has no detected callers — "
+                            "wire it up, add a test, or prefix with `_`."})
 
     # 3. long functions introduced wholesale (>80 added lines in one file
     #    is covered by health; here flag TODO/FIXME left in additions)
@@ -295,15 +372,6 @@ def security_sweep(revspec: str, files) -> str:
     return "\n".join(rows)
 
 
-CHECKLIST_RULES = [
-    (lambda fa, fd: fa > 400, "Very large diff (+{fa}) — consider splitting."),
-    (lambda fa, fd: fd > fa * 2 and fd > 100,
-     "Deletion-heavy change (−{fd}) — confirm removals are intentional."),
-    (lambda fa, fd: any(p.endswith(("test.py", "_test.go")) is False for p in []) or False,
-     ""),  # placeholder unused
-]
-
-
 def checklist(files, sec_findings_clean: bool, risk_body: str) -> str:
     items = []
     total_a = sum(a for _, a, _ in files)
@@ -327,9 +395,13 @@ def checklist(files, sec_findings_clean: bool, risk_body: str) -> str:
 
 
 def main() -> int:
+    if _is_self_review():
+        print("codeloom-pr-bot: skipping review — PR authored/triggered by "
+              "the bot itself (no self-review)")
+        return 0
     args = sys.argv[1:]
     revspec = args[0] if args else "HEAD~1..HEAD"
-    pr_title = ""
+    pr_title = os.environ.get("PR_TITLE", "") or ""
     fmt = "markdown"
     max_bytes = 60000
     i = 1
@@ -341,7 +413,10 @@ def main() -> int:
             max_bytes = int(args[i + 1])
             i += 2
         else:
-            pr_title = args[i]
+            # positional PR title is accepted for local runs; the workflow
+            # itself passes PR_TITLE via env so untrusted titles never hit bash
+            if not pr_title:
+                pr_title = args[i]
             i += 1
 
     files = changed_files(revspec)

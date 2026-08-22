@@ -10,13 +10,19 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python: ["3.8", "3.11", "3.12"]
+        python: ["3.8", "3.9", "3.10", "3.11", "3.12"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - name: Install Rust toolchain
+        if: matrix.os == 'ubuntu-latest'
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build Rust engine (release)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo build --release --manifest-path engine_rs/Cargo.toml
       - name: Run test suite
         run: python tests.py
       - name: Verify CLI works
