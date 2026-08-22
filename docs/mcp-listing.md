@@ -33,9 +33,10 @@ or point at the single file directly:
 {"command": "python3", "args": ["/path/to/codeloom-mcp.py"]}
 ```
 
-## Tools (77)
+## Tools (78)
 
 Routers: `codeloom_ask` (natural language). Retrieval: search, embed-search,
+grep-symbolic,
 hybrid-search, get-symbol, read, snippet, grep, usages, similar. Task-shaped:
 context-card, answer, why, pack, plan, ask. Graph: graph, cross, impact,
 refactor, rename, precision, trace. Quality: health, risk, deadcode,

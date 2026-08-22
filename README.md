@@ -153,7 +153,7 @@ Summary against the four competitors (all verified from their repos):
 |---|---|---|---|---|
 | License | **MIT** | dual-use/paid commercial | MIT | MIT |
 | Install | **one stdlib file** | pip + deps | bundled binary | single binary |
-| MCP surface | **77 + 1 NL router** | 90+ via 6 routers | 1 listed + 7 unlisted | 15 |
+| MCP surface | **78 + 1 NL router** | 90+ via 6 routers | 1 listed + 7 unlisted | 15 |
 | Languages | **50 / 46 fixture-proven** | 70+ claimed | 20 byte-verified | 158 vendored |
 | Compaction memory | ✅ decision ledger | ❌ | ✅ session state | ❌ |
 | Pattern search | ✅ `$VAR`/`$$$REST` capture | ✅ presets/DSL | ❌ | ❌ |
