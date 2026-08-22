@@ -1,4 +1,4 @@
-<!-- Versión en español — generada con v0.76, puede quedar desactualizada tras actualizaciones -->
+<!-- Versión en español — generada con v0.77, puede quedar desactualizada tras actualizaciones -->
 
 <h1 align="center">codeloom</h1>
 
@@ -18,7 +18,7 @@
 <p align="center">
   <a href="#quickstart">Inicio rápido</a> ·
   <a href="#what-it-gives-your-agent">Funcionalidades</a> ·
-  <a href="#mcp-server-75-tools--1-router">MCP</a> ·
+  <a href="#mcp-server-78-tools--1-router">MCP</a> ·
   <a href="#pr-review-bot">Bot de PR</a> ·
   <a href="#why-its-different">vs. competidores</a> ·
   <a href="#documentation">Documentación</a>
@@ -115,12 +115,12 @@ También: `--remember`, `--seen`, `--working-state`, `--lessons`, `--supersede`,
 | `--risk HEAD~1..HEAD` | Puntuación de riesgo del cambio 0–100 + impulsores con nombre para cualquier rango de commits |
 | `--embed-search Q` | Búsqueda semántica sin conexión — subword-hash, cero dependencias (ggml opt-in) |
 | `--watch` → `--watch-merge` | Frescura en vivo: el watcher nativo canaliza al índice persistente |
-| `--engine c` | Núcleo C de auto-compilación: grafo completo del kernel de Linux en ~91s |
+| `--engine c` | Núcleo C de auto-compilación: grafo completo del kernel de Linux en ~89–113s (motor C) |
 | `--verify FILE` | Verificación de suma de verificación SHA-256 |
 
 **50 lenguajes tree-sitter despachados · 46 probados con fixtures** (pruebas
 de paridad de archivos golden validan la CI en cada gramática) ·
-**100+ extensiones mediante respaldo regex**.
+**130+ extensiones mediante respaldo regex**.
 
 ## Servidor MCP (78 herramientas + 1 router)
 
@@ -176,7 +176,7 @@ para los números):
 
 Números medidos: recuperación de símbolos con 24–36× menos tokens que crg;
 recuperación tras compactación con **97.9% menos tokens**; grafo completo del
-kernel de Linux en ~91s. Detalles y comandos de reproducción en
+kernel de Linux en ~89–113s (motor C). Detalles y comandos de reproducción en
 [`benchmarks/README.md`](benchmarks/README.md).
 
 Dónde los competidores van por delante, dicho sin rodeos: jcodemunch tiene una
@@ -220,7 +220,7 @@ memoria — no sus fosos.
 
 ## Confianza y verificación
 
-- **CI**: Linux/macOS/Windows × Python 3.8–3.12, 75 pruebas, ≥45 fixtures de
+- **CI**: Linux/macOS/Windows × Python 3.8–3.12, 77 pruebas, ≥46 fixtures de
   gramática controlados por archivos golden
 - **Sumas de verificación**: cada versión publica el SHA-256 de `codeloom.py`;
   verifica con `codeloom --verify codeloom.py`

@@ -1,4 +1,4 @@
-<!-- 日本語版 — v0.76 で生成、バージョンアップで遅れる可能性あり -->
+<!-- 日本語版 — v0.77 で生成、バージョンアップで遅れる可能性あり -->
 
 <h1 align="center">codeloom</h1>
 
@@ -18,7 +18,7 @@
 <p align="center">
   <a href="#quickstart">クイックスタート</a> ·
   <a href="#what-it-gives-your-agent">機能</a> ·
-  <a href="#mcp-server-75-tools--1-router">MCP</a> ·
+  <a href="#mcp-server-78-tools--1-router">MCP</a> ·
   <a href="#pr-review-bot">PR ボット</a> ·
   <a href="#why-its-different">競合との比較</a> ·
   <a href="#documentation">ドキュメント</a>
@@ -111,11 +111,11 @@ codeloom --resume                                 # restore after compaction
 | `--risk HEAD~1..HEAD` | 任意のコミット範囲に対する変更リスクスコア 0〜100 + 原因の名前 |
 | `--embed-search Q` | オフラインのセマンティック検索 — サブワードハッシュ、依存ゼロ (ggml はオプトイン) |
 | `--watch` → `--watch-merge` | ライブ鮮度: ネイティブウォッチャーが永続インデックスにパイプ接続 |
-| `--engine c` | 自動構築の C コア: Linux カーネル完全グラフを約 91 秒で |
+| `--engine c` | 自動構築の C コア: Linux カーネル完全グラフを約 89–113 秒で (C エンジン) |
 | `--verify FILE` | SHA-256 チェックサムの検証 |
 
 **50 言語の tree-sitter をディスパッチ · 46 言語をフィクスチャで実証済み** (ゴールデンファイル
-一致テストが全グラマーの CI をゲート) · **regex フォールバックで 100+ 拡張子に対応**。
+一致テストが全グラマーの CI をゲート) · **regex フォールバックで 130+ 拡張子に対応**。
 
 ## MCP server (78 tools + 1 router)
 
@@ -163,7 +163,7 @@ codeloom --resume                                 # restore after compaction
 | セットアップから回答まで | **ウォーム 0.105 秒** | pip 41 秒 + ビルド 4 秒 + デーモン | インデックス化後 | インデックス化後 |
 
 計測値: シンボル取得は crg より 24〜36 倍少ないトークン; コンパクション復旧は
-**97.9% トークン削減**; Linux カーネル完全グラフ約 91 秒。詳細と再現コマンドは
+**97.9% トークン削減**; Linux カーネル完全グラフ約 89–113 秒 (C エンジン)。詳細と再現コマンドは
 [`benchmarks/README.md`](benchmarks/README.md)。
 
 競合が優れている点を正直に言う: jcodemunch はより広いセーフティ事前チェック
@@ -203,8 +203,8 @@ codeloom --resume                                 # restore after compaction
 
 ## 信頼と検証
 
-- **CI**: Linux/macOS/Windows × Python 3.8–3.12、75 テスト、ゴールデンファイルで
-  ゲートされた ≥45 グラマーフィクスチャ
+- **CI**: Linux/macOS/Windows × Python 3.8–3.12、77 テスト、ゴールデンファイルで
+  ゲートされた ≥46 グラマーフィクスチャ
 - **チェックサム**: すべてのリリースは `codeloom.py` の SHA-256 を公開;
   `codeloom --verify codeloom.py` で検証
 - **監査可能**: 単一の stdlib ファイル — 実行前に全部読める

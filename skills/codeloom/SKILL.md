@@ -158,7 +158,7 @@ python3 codeloom.py --index-status /path/to/repo
 | `--install-grammars` | install tree-sitter grammars (opt-in precision) |
 | `--install-grammars --yes` | actually run pip install (one-command) |
 | `--index` | build + save a persistent knowledge graph (symbols + call/import edges) |
-| `--index --engine c` | use the compiled C accelerator (auto-builds from codeloom_core.c on first use) — Linux kernel ~91s |
+| `--index --engine c` | use the compiled C accelerator (auto-builds from codeloom_core.c on first use) — Linux kernel full graph ~89–113s (C engine) |
 | `--auto-grammars` | scan repo + install grammars for its languages (repo-aware AST depth) |
 | `--ask "task"` | one-shot complete task brief: loom + blast radius + files-to-touch |
 | `--rename OLD NEW` | what a rename touches: definitions, files, dependents, edges |
@@ -178,7 +178,7 @@ python3 codeloom.py --index-status /path/to/repo
 | `--json` | machine-readable JSON |
 | `--write FILE` | write map to FILE |
 | `--no-outline` | skip per-file one-liners (faster) |
-| `--max-files N` | cap traversal (default 5000) |
+| `--max-files N` | cap traversal (default 20000) |
 
 **Optional precision backends** (auto-enabled when present, zero-dep otherwise):
 - `tree-sitter` + grammars → precise multi-language AST parsing
@@ -344,7 +344,7 @@ decided and where you left off.
 ```bash
 python3 tests.py
 ```
-Expect `OK` (currently 59 tests). Add tests for any new feature.
+Expect `OK` (currently 83 tests). Add tests for any new feature.
 
 ### 4. Re-record the demo GIF
 1. Edit `demo.tape` to showcase the features you want (map, graph+focus, calls, diff).
@@ -374,7 +374,7 @@ Expect `OK` (currently 59 tests). Add tests for any new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (59 tests).
+- `python3 tests.py` → `OK` (83 tests).
 - `codeloom --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codeloom --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codeloom --task "text" <root>` returns a ranked module list.

@@ -15,7 +15,7 @@ design. Statuses: ✅ shipped · 🚧 in progress · ⬜ planned.
 ### 1. Intent Engine — `loom_context(task)` ⭐⭐⭐⭐⭐ — 🚧
 **Status: partial — `codeloom_ask` routes; `loom_context` orchestrates layered context.**
 
-Instead of exposing 40 tools, expose **ONE**: `loom_context(task)`. Given "fix
+Instead of exposing 78 tools, expose **ONE**: `loom_context(task)`. Given "fix
 the auth bug", CodeLoom internally decides search → graph → embeddings → git →
 tests → docs, then returns **layered context**, not one tool's output.
 
@@ -196,7 +196,7 @@ files in the repo, so a wiped agent resumes mid-work, not from zero.)
 
 ### 29. Single-Entry-Point Router ✅
 `codeloom_ask` routes deterministically across the entire tool surface — the
-agent's effective surface is **1 tool** (~50 tokens) instead of 61 schemas
+agent's effective surface is **1 tool** (~50 tokens) instead of 78 schemas
 (~3,000 tokens). Token efficiency + precision + full coverage.
 
 ### 30. Integrated C Engine + LSP ✅

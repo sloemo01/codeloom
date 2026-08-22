@@ -38,9 +38,9 @@
   <tr><td>C core (<code>--engine c</code>)</td><td>compile-once accelerator, auto-builds</td><td><code>cc</code></td></tr>
   <tr><td>Rust core (<code>--engine rust</code>)</td><td>multi-threaded, auto-builds</td><td><code>rustc</code></td></tr>
   <tr><td><code>codeloom_rs</code></td><td>full standalone Rust CLI</td><td><code>rustc</code></td></tr>
-  <tr><td><code>engine_rs/</code></td><td>real tree-sitter AST, 26 languages (fixtures-proven)</td><td><code>cargo</code> (optional)</td></tr>
+  <tr><td><code>engine_rs/</code></td><td>real tree-sitter AST, 50 dispatched / 46 fixture-proven</td><td><code>cargo</code> (optional)</td></tr>
 </table>
-<p>The MCP layer (74 tools) wraps these behind a <strong>single entry point</strong> (<code>codeloom_ask</code>) that routes deterministically.</p>
+<p>The MCP layer (78 tools + 1 router) wraps these behind a <strong>single entry point</strong> (<code>codeloom_ask</code>) that routes deterministically.</p>
 
 <h2>3. Measured results</h2>
 <table>
@@ -54,7 +54,7 @@
 
 <h2>4. Honest limitations</h2>
 <ul>
-  <li>26 fixture-proven tree-sitter languages today; other extensions use the fast regex walker (100+ recognized).</li>
+  <li>50 tree-sitter languages dispatched / 46 fixture-proven today; other extensions use the fast regex walker (130+ recognized).</li>
   <li>Neural embeddings require a user-supplied local ggml model (infrastructure wired; a bundled model would break the zero-dep single file).</li>
   <li>The kernel benchmark is walk + symbol extraction, not full semantic deep-index.</li>
   <li>No claim to "understand" code better than codebase-memory; the win is agent context efficiency and memory, not raw graph depth.</li>

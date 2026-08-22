@@ -90,7 +90,7 @@ Everything codeloom can do, in one place. Zero-dependency, single file, no daemo
 | `codeloom --adr-list` | List saved ADRs |
 | `codeloom --session` / `--session-report` | Log & summarize what was done |
 
-## MCP server (77 tools)
+## MCP server (78 tools + 1 router)
 
 `codeloom-mcp.py` is a zero-dependency MCP server (stdlib JSON-RPC over stdio).
 Tools: `codeloom_map`, `codeloom_graph`, `codeloom_focus`, `codeloom_calls`,
@@ -103,7 +103,7 @@ Tools: `codeloom_map`, `codeloom_graph`, `codeloom_focus`, `codeloom_calls`,
 entire tool surface — task, symbol, call-graph, routes, channels, framework,
 rename, refactor, similar, deadcode, precision, memory, checkpoint, adr,
 resume, seen, session, export, cross-repo, context-diff, files, langs — so the
-agent's effective surface is **1 tool**, not 61), `codeloom_framework`.
+agent's effective surface is **1 tool**, not 78), `codeloom_framework`.
 
 ## Language support
 
@@ -121,6 +121,7 @@ AST depth for ANY grammar you install, falling back to regex otherwise.
 Build once: `cc -O3 -o codeloom_core codeloom_core.c`, then `--index --engine c`
 uses a compiled C scanner for the high-volume file walk + symbol + call + import
 extraction. Measured on the Linux kernel (~28M LOC, 64,814 code files): full
-knowledge graph + symbol index in **~91s** — 3.2M symbols, 408k edges. The
+C-engine knowledge graph + symbol index in **~89–113s** — 3.2M symbols, 408k
+edges. (The Rust walk+map — 67,306 files / 5.66M symbols — is ~11–13s.) The
 pure-Python default stays zero-dependency; `--engine c` is the opt-in
 accelerator for huge monorepos.

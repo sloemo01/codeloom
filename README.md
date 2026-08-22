@@ -16,7 +16,7 @@
 <p align="center">
   <a href="#quickstart">Quickstart</a> ·
   <a href="#what-it-gives-your-agent">Features</a> ·
-  <a href="#mcp-server-75-tools--1-router">MCP</a> ·
+  <a href="#mcp-server-78-tools--1-router">MCP</a> ·
   <a href="#pr-review-bot">PR Bot</a> ·
   <a href="#why-its-different">vs competitors</a> ·
   <a href="#documentation">Docs</a>
@@ -109,11 +109,11 @@ Also: `--remember`, `--seen`, `--working-state`, `--lessons`, `--supersede`,
 | `--risk HEAD~1..HEAD` | Change-risk score 0–100 + named drivers for any commit range |
 | `--embed-search Q` | Semantic search offline — subword-hash, zero deps (ggml opt-in) |
 | `--watch` → `--watch-merge` | Live freshness: native watcher pipes into the persistent index |
-| `--engine c` | Auto-building C core: ~91s Linux-kernel full graph |
+| `--engine c` | Auto-building C core: Linux-kernel full graph (C engine) ~89-113s |
 | `--verify FILE` | SHA-256 checksum verification |
 
 **50 tree-sitter languages dispatched · 46 fixture-proven** (golden-file parity
-tests gate CI on every grammar) · **100+ extensions via regex fallback**.
+tests gate CI on every grammar) · **130+ extensions via regex fallback**.
 
 ## MCP server (78 tools + 1 router)
 
@@ -147,8 +147,10 @@ Zero LLM cost for stage 1. Works on any GitHub repo — copy the workflow file.
 ## Why it's different
 
 Full source-cited matrix: [`docs/COMPETITION.md`](docs/COMPETITION.md).
-Summary against the field (verified from their repos, crg measured live
-2026-08-22 — see [`benchmarks/README.md`](benchmarks/README.md) for numbers):
+Summary against the 8-row field — code-review-graph, code-context-engine,
+claude-context, codeseek, jcodemunch, codegraph, codebase-memory-mcp, repowise
+(verified from their repos, crg measured live 2026-08-22 — see
+[`benchmarks/README.md`](benchmarks/README.md) for numbers):
 
 | | **codeloom** | code-review-graph (30.6k★) | code-context-engine | claude-context |
 |---|---|---|---|---|
@@ -161,7 +163,7 @@ Summary against the field (verified from their repos, crg measured live
 | Setup→answer | **0.105s warm** | 41s pip + 4s build + daemon | after indexing | after indexing |
 
 Measured numbers: symbol retrieval 24–36× fewer tokens than crg; compaction
-recovery **97.9% fewer tokens**; Linux kernel full graph ~91s. Details and
+recovery **97.9% fewer tokens**; Linux kernel full graph (C engine) ~89-113s. Details and
 reproduction commands in [`benchmarks/README.md`](benchmarks/README.md).
 
 Where competitors are ahead, stated plainly: jcodemunch has broader safety
@@ -201,7 +203,7 @@ shape + proof-per-grammar + memory depth — not their moats.
 
 ## Trust & verification
 
-- **CI**: Linux/macOS/Windows × Python 3.8–3.12, 75 tests, ≥45 grammar
+- **CI**: Linux/macOS/Windows × Python 3.8–3.12, 83 tests, ≥46 grammar
   fixtures gated by golden files
 - **Checksums**: every release publishes the SHA-256 of `codeloom.py`;
   verify with `codeloom --verify codeloom.py`
@@ -216,7 +218,7 @@ one file, honest claims.
 
 [简体中文](docs/translations/README.zh-CN.md) · [日本語](docs/translations/README.ja.md) · [Español](docs/translations/README.es.md) · [हिन्दी](docs/translations/README.hi.md)
 
-Generated with v0.76 — may lag after upgrades.
+Generated with v0.77 — may lag after upgrades.
 
 ## Agent skill
 

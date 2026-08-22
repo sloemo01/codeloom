@@ -28,7 +28,7 @@ marked. Last updated: 2026-08-22.
 | MCP tools | **78 + `codeloom_ask` NL router** | 30, no router (counted live) | many (code-search) | 90+, 6 routers | 1 + 7 unlisted | 15 | 22 | 10 task-shaped |
 | Tree-sitter languages | **50 dispatched / 46 fixture-proven** | claims (not per-grammar proven) | — | 70+ claimed | 20 byte-verified | 158 vendored | — | n/a |
 | Per-language CI proof | ✅ golden fixtures gate CI | not seen | — | not seen | ✅ byte-for-byte | tests badge, no per-grammar | not seen | n/a |
-| Cold index | <1s first result; ~91s kernel | build 4s (fastapi) → 42MB graph; needs pip install first | after indexing | after indexing | ~100s | 3min claim | after indexing | "slowest indexer" |
+| Cold index | <1s first result; ~89–113s kernel full graph (C engine) | build 4s (fastapi) → 42MB graph; needs pip install first | after indexing | after indexing | ~100s | 3min claim | after indexing | "slowest indexer" |
 | Freshness | reads-live; `--watch`→`--watch-merge` | watcher + daemon | — | watch modes | watcher default-on | daemon watchers | daemon | `watch` + hooks |
 | Session memory across compaction | ✅ **decision ledger** (decide/checkpoint/resume/supersede/lessons) | ⚠️ markdown journal of Q&A (no compaction mention) | memsearch plugin (separate) | ❌ | ✅ session memory + learning | ❌ | ⚠️ `record_decision` MCP calls | ADRs only |
 | Semantic search | ✅ zero-dep subword hash (ggml opt-in) | ❌ requires `[embeddings]` extra (~2GB) or cloud key | ✅ (Zilliz) | opt-in | ❌ | ✅ bundled | ❌ requires ONNX embeddings | vector hybrid |

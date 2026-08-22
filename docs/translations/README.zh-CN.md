@@ -1,4 +1,4 @@
-<!-- 中文版 — 随 v0.76 生成；版本升级后可能滞后。 -->
+<!-- 中文版 — 随 v0.77 生成；版本升级后可能滞后。 -->
 <h1 align="center">codeloom</h1>
 
 <p align="center">
@@ -17,7 +17,7 @@
 <p align="center">
   <a href="#quickstart">快速开始</a> ·
   <a href="#what-it-gives-your-agent">功能特性</a> ·
-  <a href="#mcp-server-75-tools--1-router">MCP</a> ·
+  <a href="#mcp-server-78-tools--1-router">MCP</a> ·
   <a href="#pr-review-bot">PR 机器人</a> ·
   <a href="#why-its-different">与竞品对比</a> ·
   <a href="#documentation">文档</a>
@@ -109,11 +109,11 @@ codeloom --resume                                 # restore after compaction
 | `--risk HEAD~1..HEAD` | 任意提交范围的变更风险评分 0–100 + 具名驱动因素 |
 | `--embed-search Q` | 离线语义搜索——子词哈希，零依赖（ggml 可选） |
 | `--watch` → `--watch-merge` | 实时保鲜：原生 watcher 接入持久化索引 |
-| `--engine c` | 自动构建的 C 核心：约 91 秒跑完 Linux 内核全图 |
+| `--engine c` | 自动构建的 C 核心：约 89–113 秒跑完 Linux 内核全图（C 引擎） |
 | `--verify FILE` | SHA-256 校验和验证 |
 
 **50 种 tree-sitter 语言已调度 · 46 种经 fixture 验证**（golden-file 一致性测试
-在每个文法上把关 CI）· **100+ 扩展名通过正则回退支持**。
+在每个文法上把关 CI）· **130+ 扩展名通过正则回退支持**。
 
 ## MCP 服务器（78 个工具 + 1 个路由器）
 
@@ -161,7 +161,7 @@ codeloom --resume                                 # restore after compaction
 | 安装→出答案 | **0.105 秒热启动** | 41 秒 pip + 4 秒构建 + 守护进程 | 建索引后 | 建索引后 |
 
 实测数据：符号检索比 crg 少 24–36 倍 tokens；压缩恢复
-**少 97.9% tokens**；Linux 内核完整图约 91 秒。细节和
+**少 97.9% tokens**；Linux 内核完整图约 89–113 秒（C 引擎）。细节和
 复现命令见 [`benchmarks/README.md`](benchmarks/README.md)。
 
 竞品领先的地方，直说无妨：jcodemunch 有更广的安全预检
@@ -201,7 +201,7 @@ codeloom --resume                                 # restore after compaction
 
 ## 信任与验证
 
-- **CI**：Linux/macOS/Windows × Python 3.8–3.12，75 个测试，≥45 个文法
+- **CI**：Linux/macOS/Windows × Python 3.8–3.12，77 个测试，≥46 个文法
   fixture 由 golden files 把关
 - **校验和**：每个版本公布 `codeloom.py` 的 SHA-256；
   用 `codeloom --verify codeloom.py` 验证

@@ -22,11 +22,11 @@ Three scanning engines, one interface:
 | C core (`--engine c`) | compile-once accelerator, auto-builds | `cc` |
 | Rust core (`--engine rust`) | multi-threaded, auto-builds | `rustc` |
 | `codeloom_rs` | full standalone Rust CLI (map/search/read/calls/cross) | `rustc` |
-| `engine_rs/` | real tree-sitter AST, 16 languages | `cargo` (optional) |
+| `engine_rs/` | real tree-sitter AST, 50 dispatched / 46 fixture-proven | `cargo` (optional) |
 
-The MCP layer (`codeloom-mcp.py`, 77 tools) wraps these behind a **single
-entry point** (`codeloom_ask`) that routes deterministically — no model picking
-among 77 tools.
+The MCP layer (`codeloom-mcp.py`, 78 tools + 1 router) wraps these behind a
+**single entry point** (`codeloom_ask`) that routes deterministically — no
+model picking among 78 tools.
 
 ## 3. The working-memory model
 
@@ -44,8 +44,10 @@ model's internal reasoning (which cannot be recorded).
 
 ## 4. Measured results (this session)
 
-- **Linux kernel**: 67,306 files walked + 5,663,390 symbols extracted in
-  **~11–13s** (real clone, real run; artifact removed after).
+- **Linux kernel (Rust walk+map)**: 67,306 files walked + 5,663,390 symbols
+  extracted in **~11–13s** (real clone, real run; artifact removed after).
+  Distinct from the **C-engine full graph** (64,814 files, 3.2M symbols,
+  408k edges, ~89–113s).
 - **Semantic search**: subword-hash catches typos (`engin` → `Engine`, sim 0.72)
   with zero deps; upgrades to neural via local ggml when configured.
 - **Cross-service**: `codeloom_rs cross` detects `xrepo_b -> verify_token`
@@ -53,7 +55,8 @@ model's internal reasoning (which cannot be recorded).
 
 ## 5. Honest limitations
 
-- 16 tree-sitter languages today (not 100+; the rest use the fast regex walker).
+- 50 tree-sitter languages dispatched / 46 fixture-proven today (not 130+; the
+  rest use the fast regex walker).
 - Neural embeddings require a user-supplied local ggml model (infrastructure is
   wired; a bundled model would break the zero-dep single file).
 - The kernel benchmark is walk + symbol extraction, not a full semantic deep-index.

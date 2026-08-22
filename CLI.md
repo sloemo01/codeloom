@@ -77,7 +77,7 @@ codeloom [OPTIONS] [ROOT]
 | Flag | Description |
 |---|---|
 | `--index` | build + save a persistent knowledge graph (symbols + call/import edges) |
-| `codeloom --index --engine c` | use the compiled C accelerator (build: `cc -O3 -o codeloom_core codeloom_core.c`) — Linux kernel ~91s |
+| `codeloom --index --engine c` | use the compiled C accelerator (build: `cc -O3 -o codeloom_core codeloom_core.c`) — Linux kernel full graph ~89–113s (C engine) |
 | `codeloom --watch-core ROOT` | Native C file watcher (kqueue/inotify): print changed code files live |
 | `codeloom --serve ROOT` | C-resident index server: sub-ms symbol lookups (no Python per query) |
 | `--watch` | incremental daemon-less refresh: re-index only changed files |
