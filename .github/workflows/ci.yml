@@ -123,7 +123,10 @@ jobs:
         if: always()
         run: |
           set -o pipefail
-          python3 benchmarks/memory_eval.py --repo . 2>&1 | tee memory-eval.log
+          # No --repo: memory_eval builds a small synthetic repo by default.
+          # Passing --repo . would copytree the whole tree (incl. 1.2G
+          # engine_rs/target) -> ~140s locally, way too slow for CI.
+          python3 benchmarks/memory_eval.py 2>&1 | tee memory-eval.log
       - name: Extract JSON result
         if: always()
         run: |

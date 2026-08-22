@@ -35,60 +35,89 @@ requires the agent to call `record_decision` MCP tools from a running server
 (they ship "memory nudges" because agents forget to). Nobody else ships a
 deterministic restore.
 
-## Memory OS benchmark (measured 2026-08-22)
+## Memory OS benchmark (typed surface — measured 2026-08-22)
 
-`benchmarks/memory_eval.py` measures the persistent-memory layer — codeloom's
-`--remember` / `--lesson` / `--query-memory` (the "never forgets" differentiator
-that survives compaction because it is a file on disk). Pipeline:
+`benchmarks/memory_eval.py` measures the persistent-memory layer on the landed
+Memory OS surface: typed `memory.jsonl` entries (`--memory-add`) + graph-linked
+retrieval (`--memory <symbol>`), with the legacy full-text row
+(`--query-memory`) kept as the baseline comparison. The "never forgets"
+differentiator survives compaction because it is a file on disk. Pipeline:
 
-1. **Build** a synthetic 5-file repo (23 real symbols) — or copy any repo
-   (`--repo`) into a scratch dir so the source repo's `.codeloom-memory` is
-   never touched.
-2. **Seed** 20 typed memory entries via the real CLI (`--remember` into
-   DECISIONS/ARCHITECTURE/PATTERNS/CONVENTIONS + `--lesson` bugs), each
-   anchored on a real symbol in the repo.
-3. **Recall** — for 10 query symbols, `--query-memory <symbol>` must return the
-   entry whose note names that symbol (full-text match, exactly what a
-   wiped agent would ask). Latency = avg wall time over 3 runs per query.
-4. **Tokens** — `--query-memory` output size (cl100k_base, bytes/4 fallback)
-   vs the naive baseline: `grep -rn <symbol> repo` + read the top 3 matching
-   files whole, same 10 queries.
+1. **Build** a synthetic 5-file repo (23 real symbols + real import/call
+   edges) — or copy any repo (`--repo`) into a scratch dir so the source
+   repo's `.codeloom-memory` is never touched.
+2. **Seed** 20 typed entries via the real CLI
+   (`--memory-add --type/--title/--body/--symbols`), each pinned
+   (`affected_symbols`) to a real symbol in the repo — plus one graph-link
+   entry per query, pinned to a symbol in an import-graph **neighbor** module
+   of the query's module (the "recorded for a dependency, retrieved via the
+   queried symbol" case).
+3. **Recall (primary row)** — for 10 query symbols, `--memory <symbol>`
+   graph-linked retrieval must return (a) the entry pinned to the symbol
+   ("## entries linked to <symbol>") and (b) the neighbor-pinned entry
+   ("## reachable via graph"). The printed neighbor-module list is parsed and
+   checked for exact equality against the script's own graph model
+   (independent prediction on the synthetic repo; a pre-seeding probe of
+   codeloom's own graph on real repos). Latency = avg wall time over 3 runs
+   per query.
+4. **Recall (baseline row)** — the same 10 symbols via `--query-memory
+   <symbol>` (full-text term match, the pre-Memory-OS surface).
+5. **Tokens** — retrieval output size (cl100k_base, bytes/4 fallback) vs the
+   naive baseline: `grep -rn <symbol> repo` (memory dir excluded — a wiped
+   agent greps the codebase, not its own erased memory) + read the top 3
+   matching files whole, same 10 queries.
 
 ```bash
 python3 benchmarks/memory_eval.py --repo /tmp/bench-fastapi   # real-repo numbers below
 python3 benchmarks/memory_eval.py                            # default: synthetic repo (fast)
 ```
 
-Measured on the default synthetic repo (23 symbols, 20 entries, 10 queries):
+Measured on the default synthetic repo (23 symbols, 20+10 entries, 10
+queries, 3 runs; stable across two full runs):
 
-| query symbol | hit | codeloom tok | mem ms | baseline tok |
-|---|---|---|---|---|
-| `evict` | YES | 42 | 93.2 | 331 |
-| `Router` | YES | 58 | 94.3 | 451 |
-| `Engine` | YES | 94 | 100.4 | 345 |
-| `AuthError` | YES | 188 | 89.6 | 828 |
-| `validate_token` | YES | 61 | 91.2 | 502 |
-| `normalize` | YES | 38 | 88.6 | 305 |
-| `authenticate` | YES | 33 | 92.8 | 295 |
-| `ttl_of` | YES | 41 | 88.1 | 312 |
-| `CacheEntry` | YES | 66 | 89.0 | 452 |
-| `TokenStore` | YES | 61 | 89.7 | 556 |
+| query symbol | dir | graph | gmatch | --memory tok | mem ms | qm tok | base tok |
+|---|---|---|---|---|---|---|---|
+| `load_config` | YES | YES | OK | 377 | 85.0 | 190 | 466 |
+| `CacheEntry` | YES | YES | OK | 659 | 84.4 | 134 | 158 |
+| `Engine` | YES | YES | OK | 514 | 84.2 | 391 | 224 |
+| `TokenStore` | YES | YES | OK | 319 | 83.8 | 130 | 279 |
+| `authenticate` | YES | YES | OK | 316 | 85.6 | 125 | 164 |
+| `handle_request` | YES | YES | OK | 635 | 86.2 | 107 | 361 |
+| `validate_token` | YES | YES | OK | 321 | 85.1 | 91 | 224 |
+| `reload_config` | YES | YES | OK | 368 | 84.4 | 96 | 125 |
+| `Settings` | YES | YES | OK | 357 | 84.0 | 131 | 117 |
+| `AuthError` | YES | YES | OK | 321 | 84.2 | 334 | 220 |
 
-**memory retrieval: 10/10 linked hits, 92 ms avg, 682 tok vs baseline
-4,377 tok (84.4% fewer)**; write: avg 88 ms per `--remember`/`--lesson` add.
-LOSS ROWS: none.
+**--memory retrieval: 10/10 direct hits, 10/10 graph-neighbor hits, 10/10
+neighbor-set OK, 85 ms avg, 4,187 tok vs baseline 2,338 tok (~79% more —
+the graph-linked view intentionally returns direct + neighbor entries)**;
+**--query-memory row: 10/10 hits, 82 ms avg, 1,729 tok (26% fewer than
+baseline)**; write: avg 84 ms per `--memory-add`. LOSS ROWS: none.
 
-Measured on a copy of `/tmp/bench-fastapi` (4,116 symbols): **10/10 hits,
-~1.48 s avg recall, 609 tok vs baseline 78,758 tok (99.2% fewer)** — same
-retrieval contract, but every invocation pays ~1.5 s Python startup + full
-tree walk on the 5000-file repo (the same cold-vs-warm trade-off documented
-in the vs-crg section; the synthetic default measures the pure memory path).
+The honest read on the toy repo: grep-and-read is nearly free (2.3k tokens),
+so `--memory`'s *broader* graph-linked context costs more than grep — the
+token-efficiency story is a real-repo story (below), while the synthetic
+numbers prove the storage + graph-retrieval contract (10/10 both rows,
+exact neighbor-set agreement).
 
-**The honest note:** entries are **synthetic** — scripted with a deterministic
-seed, not real agent history. This measures the storage + retrieval paths
-(does `--query-memory` return what was recorded? how fast? how many tokens?)
-and does *not* measure the quality of what a real agent would choose to
-remember. Loss rows are printed, never filtered.
+Measured on a copy of `/tmp/bench-fastapi` (4,116 symbols, 1 run each; three
+runs agree on all hit counts): **--memory retrieval: 10/10 direct hits,
+4/4 graph-neighbor hits (6 queries' modules have no reachable neighbor
+symbols — printed as n/a, never fudged), 10/10 neighbor-set OK, ~3.7 s avg,
+1,264 tok vs baseline ~1.13M tok (99.9% fewer)**; **--query-memory row:
+10/10 hits, ~1.5 s avg, 1,125 tok (99.9% fewer)**; write: avg ~1.46 s per
+`--memory-add`. Every invocation pays cold Python startup + a full tree
+walk; `--memory` additionally builds the import + call graphs before
+rendering (the ~3.7 s vs ~1.5 s gap) — the same cold-vs-warm trade-off
+documented in the vs-crg section, and the reason the synthetic default
+exists: it measures the pure memory path.
+
+**The honest note:** entries are **synthetic** — scripted with a
+deterministic seed, not real agent history. This measures the storage +
+retrieval paths (does `--memory`/`--query-memory` return what was recorded,
+in the right section? how fast? how many tokens?) and does *not* measure the
+quality of what a real agent would choose to remember. Loss rows are
+printed, never filtered.
 
 ## Sealed retrieval benchmark (no LLM, deterministic — measured 2026-08-22)
 
@@ -105,8 +134,10 @@ answer lives? No LLM anywhere — fully reproducible offline.
 
 | toolchain | found | calls | tokens (est, cl100k_base) |
 |---|---|---|---|
-| **bare** | 3/10 | **29** | **6,656** |
+| **bare** | 1–3/10* | **29** | **5,632–6,656** |
 | **codeloom** | 4/10 | **10** | **731** |
+
+*Bare hit-rate is run-variant (grep/read ordering); codeloom's side is deterministic.
 
 **The honest read:** codeloom finds answers with **2.9× fewer calls and
 ~9× fewer tokens** — and its output is a *cited answer with confidence*,
