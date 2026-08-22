@@ -1,4 +1,4 @@
-<!-- Versión en español — generada con v0.77, puede quedar desactualizada tras actualizaciones -->
+<!-- Versión en español — generada con v0.79, puede quedar desactualizada tras actualizaciones -->
 
 <h1 align="center">codeloom</h1>
 
@@ -18,7 +18,7 @@
 <p align="center">
   <a href="#quickstart">Inicio rápido</a> ·
   <a href="#what-it-gives-your-agent">Funcionalidades</a> ·
-  <a href="#mcp-server-78-tools--1-router">MCP</a> ·
+  <a href="#mcp-server-82-tools--1-router">MCP</a> ·
   <a href="#pr-review-bot">Bot de PR</a> ·
   <a href="#why-its-different">vs. competidores</a> ·
   <a href="#documentation">Documentación</a>
@@ -122,7 +122,7 @@ También: `--remember`, `--seen`, `--working-state`, `--lessons`, `--supersede`,
 de paridad de archivos golden validan la CI en cada gramática) ·
 **130+ extensiones mediante respaldo regex**.
 
-## Servidor MCP (78 herramientas + 1 router)
+## Servidor MCP (82 herramientas + 1 router)
 
 ```json
 {"command": "python3", "args": ["-m", "codeloom_mcp"]}
@@ -131,7 +131,7 @@ de paridad de archivos golden validan la CI en cada gramática) ·
 O conecta automáticamente cualquiera de los 17 agentes:
 `codeloom --install-agent <name>`.
 
-78 herramientas en total, pero la superficie efectiva del agente es
+82 herramientas en total, pero la superficie efectiva del agente es
 **una herramienta**: `codeloom_ask` toma lenguaje natural y enruta de forma
 determinista — sin errores de selección de herramienta. Listado completo:
 [`docs/mcp-listing.md`](docs/mcp-listing.md).
@@ -169,7 +169,7 @@ para los números):
 | Instalación | **un archivo stdlib** | pip: **78 paquetes** + daemon + configuración TOML | pip + ONNX + server | npm |
 | Proceso en segundo plano | **ninguno** | `crg-daemon` (16MB RSS, comprobaciones de salud) | `cce serve` + gobernador de recursos | — |
 | Memoria de compactación | ✅ **registro de decisiones, medido: 2 llamadas / ~985 tok para recuperar** (95.4% menos) | ⚠️ diario Q&A en markdown, cero menciones de compactación | ⚠️ MCP `record_decision` invocado por el agente | plugin memsearch |
-| Superficie MCP | **78 + 1 router NL** | 30, sin router | 22 | muchas |
+| Superficie MCP | **82 + 1 router NL** | 30, sin router | 22 | muchas |
 | Búsqueda semántica | ✅ cero dependencias, sin conexión | ❌ extra `[embeddings]` (~2GB) o clave en la nube | ❌ requiere ONNX | ✅ (Zilliz) |
 | Prueba de lenguajes | **46 probados por fixtures en CI** | no publicado | — | — |
 | Configuración→respuesta | **0.13s en caliente** | 41s pip + 4s build + daemon | tras la indexación | tras la indexación |

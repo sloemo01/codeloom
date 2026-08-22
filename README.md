@@ -16,7 +16,7 @@
 <p align="center">
   <a href="#quickstart">Quickstart</a> ·
   <a href="#what-it-gives-your-agent">Features</a> ·
-  <a href="#mcp-server-79-tools--1-router">MCP</a> ·
+  <a href="#mcp-server-82-tools--1-router">MCP</a> ·
   <a href="#pr-review-bot">PR Bot</a> ·
   <a href="#why-its-different">vs competitors</a> ·
   <a href="#documentation">Docs</a>
@@ -39,6 +39,9 @@ it — and it re-derives everything from scratch. Over and over.
 2. **The memory** — `--decide`, `--checkpoint`, `--resume` record the agent's
    decision stream so `--resume` restores *both* the structural context *and*
    what the agent already tried, decided, and rejected — after any compaction.
+3. **Memory OS (v0.79)** — typed, importance-scored memory objects written to
+   `memory.jsonl` and **linked to the code graph itself**: retrieve what the
+   repo learned about a symbol and its graph neighbors in one call.
 
 No install. No daemon. No GPU. No telemetry. Runs 100% on your machine.
 
@@ -94,6 +97,79 @@ codeloom **never auto-deletes** memory; the only way to shrink it is
 `--memory-prune --dry-run` (see what would be removed, then apply) — the
 agent's explicit choice, never the tool's.
 
+## Memory OS — the graph remembers for you
+
+Landing in **v0.79**, Memory OS turns the repo's memory from a plain ledger
+into a **typed, importance-scored, graph-linked memory layer** — the new
+differentiator.
+
+### Typed memory objects
+
+Every memory is a typed record appended to `.codeloom-memory/memory.jsonl`
+with a fixed schema:
+
+```json
+{"type": "decision|lesson|architecture|pattern|convention|bugfix|api",
+ "id": "sha256-of-content",
+ "title": "use retry(3) not retry(∞)",
+ "body": "unbounded hangs agents; 3 keeps backoff bounded",
+ "affected_symbols": ["retry", "agent_loop"],
+ "importance": 87,
+ "confidence": 0.7,
+ "tier": "core|extended|archive",
+ "timestamp": "2026-08-22T12:00:00+00:00"}
+```
+
+Typed objects beat markdown walls because retrieval can be precise: filter
+by `type`, rank by `importance`, resolve by `id`, and trace exactly which
+symbols a memory touches.
+
+### Importance scoring
+
+Every memory gets a 0–100 importance score — deterministic, no LLM:
+
+```
+importance = base(50)
+           + keywords     (bug/crash/security/API …)
+           + type_weight  (decision +20, api +15, convention +5 …)
+           + graph_centrality (of affected_symbols in the import/call graph)
+           + recency
+           , capped at 100
+```
+
+`--memory-stats` reports the distribution (counts per type/tier, mean
+importance, top-N by importance, total size) so you can see what the repo
+knows and what it cares about.
+
+### Graph-linked retrieval: `--memory <symbol>`
+
+`--memory <symbol>` doesn't just match text — it returns **entries that
+mention the symbol *plus* entries attached to its graph neighbors**
+(dependents, dependencies, callers), scored by importance. Ask about
+`validate()` and you get the memory attached to `login()` that calls it.
+That's the difference between a journal and a memory that's wired into the
+codebase's shape.
+
+### The auto-extractor
+
+`scripts/memory_extract.py` (stdlib-only, no LLM, no network) mines **git
+history** into typed memories: deterministic regex heuristics classify
+commits (`bug` → confidence 0.7, `api` → 0.6, `architecture` → 0.55;
+`regression`/`critical` bumps bug confidence, capped at 0.95) and derive
+`affected_symbols` from the files each commit touched. Idempotent via
+`.codeloom-memory/extract-state.json`; `--dry-run` previews what would be
+extracted without touching anything.
+
+```bash
+python3 scripts/memory_extract.py --repo .            # extract new memories
+python3 scripts/memory_extract.py --all               # re-attempt everything
+python3 scripts/memory_extract.py --dry-run           # preview only
+```
+
+The old CLI surface still works as the manual layer: `--memory-add`
+(typed memory objects) / `--decide`/`--remember` (free-text note), `--adr`,
+`--query-memory`.
+
 ### Structural intelligence
 
 | Command | Result |
@@ -123,7 +199,7 @@ agent's explicit choice, never the tool's.
 **50 tree-sitter languages dispatched · 46 fixture-proven** (golden-file parity
 tests gate CI on every grammar) · **130+ extensions via regex fallback**.
 
-## MCP server (79 tools + 1 router)
+## MCP server (82 tools + 1 router)
 
 ```json
 {"command": "python3", "args": ["-m", "codeloom_mcp"]}
@@ -131,15 +207,19 @@ tests gate CI on every grammar) · **130+ extensions via regex fallback**.
 
 Or auto-wire any of 17 agents: `codeloom --install-agent <name>`.
 
-79 tools total, but the agent's effective surface is **one tool**:
+82 tools total, but the agent's effective surface is **one tool**:
 `codeloom_ask` takes natural language and routes deterministically —
 no tool-selection misfires. Full listing:
 [`docs/mcp-listing.md`](docs/mcp-listing.md).
 
-The v0.78 MCP surface adds the same loop-closure pair the CLI ships:
-`verify_edit` (post-edit integrity oracle) and `blindspot` (unread-file
-warning), plus `loom://resources` exposing state/delta/hotset/resume as
-resources, not just tools.
+The v0.79 MCP surface adds the **Memory OS trio**: `codeloom_memory_add`
+(typed memory objects with importance), `codeloom_remember` (graph-linked
+retrieval) and `codeloom_memory_stats` (the distribution report) — routed
+from `codeloom_ask` via the memory/remember/stats keywords alongside
+`query_memory`. v0.78's loop-closure pair is still there: `verify_edit`
+(post-edit integrity oracle) and `blindspot` (unread-file warning), plus
+`loom://resources` exposing state/delta/hotset/resume as resources, not
+just tools.
 
 ## PR review bot
 
@@ -169,8 +249,8 @@ claude-context, codeseek, jcodemunch, codegraph, codebase-memory-mcp, repowise
 |---|---|---|---|---|
 | Install | **one stdlib file** | pip: **75 packages** + daemon + TOML config | pip + ONNX + server | npm |
 | Background process | **none** | `crg-daemon` (16MB RSS, health checks) | `cce serve` + resource governor | — |
-| Compaction memory | ✅ **decision ledger, measured: 2 calls / ~985 tok to recover** (95.4% fewer) | ⚠️ markdown Q&A journal, zero compaction mentions | ⚠️ agent-called `record_decision` MCP | memsearch plugin |
-| MCP surface | **79 + 1 NL router** | 30, no router | 22 | many |
+| Compaction memory | ✅ **decision ledger + Memory OS: typed, graph-linked `memory.jsonl` objects**, measured: 2 calls / ~985 tok to recover (95.4% fewer) | ⚠️ markdown Q&A journal, zero compaction mentions | ⚠️ agent-called `record_decision` MCP | memsearch plugin |
+| MCP surface | **82 + 1 NL router** | 30, no router | 22 | many |
 | Semantic search | ✅ zero-dep, offline | ❌ `[embeddings]` extra (~2GB) or cloud key | ❌ ONNX required | ✅ (Zilliz) |
 | Language proof | **46 fixture-proven in CI** | not published | — | — |
 | Setup→answer | **0.13s warm** | 41s pip + 4s build + daemon | after indexing | after indexing |
@@ -191,6 +271,10 @@ the post-edit GO/CHECK/STOP verdict (their preflight stops at *before*),
 `--savings-report` publishes a **local-only** token-savings ledger (no
 telemetry — receipts live in the repo, not in our README), and
 `--install-hook`/`--uninstall-hook` add a warn-only pre-commit risk hook.
+v0.79 adds the differentiator they can't copy without a graph: **Memory OS
+— typed, importance-scored memory objects linked to the code graph**,
+retrieved by symbol + graph neighbors (`--memory <symbol>`,
+`codeloom_remember`).
 
 ## Known limits (honest)
 

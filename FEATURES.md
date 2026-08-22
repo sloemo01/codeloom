@@ -15,7 +15,7 @@ design. Statuses: ✅ shipped · 🚧 in progress · ⬜ planned.
 ### 1. Intent Engine — `loom_context(task)` ⭐⭐⭐⭐⭐ — 🚧
 **Status: partial — `codeloom_ask` routes; `loom_context` orchestrates layered context.**
 
-Instead of exposing 79 tools, expose **ONE**: `loom_context(task)`. Given "fix
+Instead of exposing 82 tools, expose **ONE**: `loom_context(task)`. Given "fix
 the auth bug", CodeLoom internally decides search → graph → embeddings → git →
 tests → docs, then returns **layered context**, not one tool's output.
 
@@ -56,6 +56,22 @@ related discussions — not just code.
   nothing dropped. codeloom **never auto-deletes**; `--memory-prune` is the
   only shrink path and it is user-initiated, with `--dry-run` to preview
   before applying.
+- **Memory OS (v0.79):** the ledger gains a typed, graph-linked layer —
+  see the strategic rows below.
+
+### 3b. Memory OS — typed, graph-linked memory layer 🚧 (landing v0.79) ⭐⭐⭐⭐⭐
+
+The repo's memory becomes structured and wired into the code graph itself —
+the strategic moat row.
+
+| Memory OS capability | Status |
+|---|---|
+| Typed memory objects (`memory.jsonl`: type/id/title/body/`affected_symbols`/`importance`/`confidence`/`tier`/timestamp) | 🚧 landing v0.79 |
+| Importance scoring (base + keywords + type weight + graph centrality + recency, capped 100, deterministic no-LLM) | 🚧 landing v0.79 |
+| Graph-linked retrieval — `--memory <symbol>` returns entries + graph-neighbor entries ranked by importance | 🚧 landing v0.79 |
+| `--memory-stats` distribution report (per-type/tier counts, mean importance, top-N, size) | 🚧 landing v0.79 |
+| Auto-extractor `scripts/memory_extract.py` (git-log heuristics: bug/api/architecture, confidence 0.55–0.95, idempotent state, `--dry-run`) | ✅ shipped (companion script) |
+| MCP surface — `codeloom_memory_add` / `codeloom_remember` / `codeloom_memory_stats` (82 tools + 1 router total) | 🚧 landing v0.79 |
 
 ### 4. Live File Watching 🚧
 Every save → incremental AST update → incremental graph update → incremental
@@ -197,11 +213,12 @@ are exactly this; `--pack` exports a task brief, `--resume` exports the map.)
 The agent's work survives a context wipe. (`--resume` restores the map,
 `--remember` persists conclusions, `--seen` tracks explored files,
 `--checkpoint` snapshots in-progress work, `--adr` records decisions — all as
-files in the repo, so a wiped agent resumes mid-work, not from zero.)
+files in the repo, so a wiped agent resumes mid-work, not from zero. v0.79's
+`--memory-add`/`--memory <symbol>` add the typed, graph-linked layer on top.)
 
 ### 29. Single-Entry-Point Router ✅
 `codeloom_ask` routes deterministically across the entire tool surface — the
-agent's effective surface is **1 tool** (~50 tokens) instead of 79 schemas
+agent's effective surface is **1 tool** (~50 tokens) instead of 82 schemas
 (~3,000 tokens). Token efficiency + precision + full coverage.
 
 ### 30. Integrated C Engine + LSP ✅
@@ -237,9 +254,16 @@ every commit. **Warn-only by design** — it never blocks, never rewrites your
 commit; it prints the risk verdict and lets you decide.
 
 ### 36. MCP Loop-Closure Pair + Resources 🚧 (landing v0.78)
-`verify_edit` and `blindspot` join the MCP surface (79 tools + 1 router), and
+`verify_edit` and `blindspot` join the MCP surface, and
 `loom://resources` exposes state/delta/hotset/resume as first-class MCP
 resources — so agents can *read* working state without calling a tool.
+
+### 37. Memory OS MCP Trio 🚧 (landing v0.79)
+`codeloom_memory_add` (typed memory objects with importance),
+`codeloom_remember` (graph-linked retrieval by symbol + neighbors) and
+`codeloom_memory_stats` (distribution report) join the surface — **82 tools
++ 1 router** — and are routed from `codeloom_ask` via the
+memory/remember/stats keywords alongside `query_memory`.
 
 ---
 
@@ -257,3 +281,6 @@ resources — so agents can *read* working state without calling a tool.
 10. **v0.78 loop-closure set** — `--verify-edit` + `--blindspot` (post-edit
     integrity), `--savings-report` (local ledger), `--memory-prune`
     (bounded memory), `--eval` (self-serve benchmarks), hooks, MCP pair.
+11. **v0.79 Memory OS** — typed `memory.jsonl` objects with importance
+    scoring, `--memory <symbol>` graph-linked retrieval, `--memory-stats`,
+    `scripts/memory_extract.py`, and the MCP trio (82 tools + 1 router).

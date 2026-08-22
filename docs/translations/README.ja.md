@@ -1,4 +1,4 @@
-<!-- 日本語版 — v0.77 で生成、バージョンアップで遅れる可能性あり -->
+<!-- 日本語版 — v0.79 で生成、バージョンアップで遅れる可能性あり -->
 
 <h1 align="center">codeloom</h1>
 
@@ -18,7 +18,7 @@
 <p align="center">
   <a href="#quickstart">クイックスタート</a> ·
   <a href="#what-it-gives-your-agent">機能</a> ·
-  <a href="#mcp-server-78-tools--1-router">MCP</a> ·
+  <a href="#mcp-server-82-tools--1-router">MCP</a> ·
   <a href="#pr-review-bot">PR ボット</a> ·
   <a href="#why-its-different">競合との比較</a> ·
   <a href="#documentation">ドキュメント</a>
@@ -117,7 +117,7 @@ codeloom --resume                                 # restore after compaction
 **50 言語の tree-sitter をディスパッチ · 46 言語をフィクスチャで実証済み** (ゴールデンファイル
 一致テストが全グラマーの CI をゲート) · **regex フォールバックで 130+ 拡張子に対応**。
 
-## MCP server (78 tools + 1 router)
+## MCP server (82 tools + 1 router)
 
 ```json
 {"command": "python3", "args": ["-m", "codeloom_mcp"]}
@@ -125,7 +125,7 @@ codeloom --resume                                 # restore after compaction
 
 または 17 種類のエージェントのいずれかに自動配線: `codeloom --install-agent <name>`。
 
-ツールは全部で 78 個だが、エージェントが実際に触れる面は**ツール 1 個**:
+ツールは全部で 82 個だが、エージェントが実際に触れる面は**ツール 1 個**:
 `codeloom_ask` が自然言語を受け取り、決定的にルーティングする —
 ツール選択のミスは起きない。完全な一覧は
 [`docs/mcp-listing.md`](docs/mcp-listing.md)。
@@ -157,7 +157,7 @@ codeloom --resume                                 # restore after compaction
 | インストール | **stdlib ファイル 1 個** | pip: **78 パッケージ** + デーモン + TOML 設定 | pip + ONNX + サーバー | npm |
 | バックグラウンドプロセス | **なし** | `crg-daemon` (16MB RSS、ヘルスチェック) | `cce serve` + リソースガバナー | — |
 | コンパクション後のメモリ | ✅ **決定台帳、計測値: 復旧に 2 呼び出し / ~985 トークン** (95.4% 削減) | ⚠️ markdown の Q&A ジャーナル、コンパクションの言及ゼロ | ⚠️ エージェントが呼ぶ `record_decision` MCP | memsearch プラグイン |
-| MCP サーフェス | **78 + 1 NL ルーター** | 30、ルーターなし | 22 | 多数 |
+| MCP サーフェス | **82 + 1 NL ルーター** | 30、ルーターなし | 22 | 多数 |
 | セマンティック検索 | ✅ 依存ゼロ、オフライン | ❌ `[embeddings]` オプション (~2GB) またはクラウドキー | ❌ ONNX 必須 | ✅ (Zilliz) |
 | 言語実証 | **CI で 46 言語をフィクスチャ実証** | 非公開 | — | — |
 | セットアップから回答まで | **ウォーム 0.13 秒** | pip 41 秒 + ビルド 4 秒 + デーモン | インデックス化後 | インデックス化後 |

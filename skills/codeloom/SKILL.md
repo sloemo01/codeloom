@@ -29,7 +29,7 @@ agents via MCP, and maintain/extend the repo.
 
 - Python 3.8+ (stdlib only — no pip deps).
 - Repo files: `codeloom.py`, `codeloom-mcp.py`, `tests.py`, `demo.tape`,
-  `README.md`, `LAUNCH.md`.
+  `README.md`, `LAUNCH.md`, `scripts/memory_extract.py`.
 - `codeloom` symlinked to `~/bin/codeloom` (macOS/Linux) for bare-command use.
 - `vhs` (charmbracelet) installed via `brew install vhs` to re-record the GIF.
 
@@ -179,6 +179,9 @@ python3 codeloom.py --index-status /path/to/repo
 | `--write FILE` | write map to FILE |
 | `--no-outline` | skip per-file one-liners (faster) |
 | `--max-files N` | cap traversal (default 20000) |
+| `--memory-add` (v0.79) | write a typed memory object to `.codeloom-memory/memory.jsonl` (`--type bug|task|note` + `--title`/`--body`/`--symbols`/`--priority`); importance scored by formula |
+| `--memory SYMBOL` (v0.79) | graph-linked retrieval: typed entries for the symbol + graph-neighbor reachable entries |
+| `--memory-stats` (v0.79) | typed-memory stats: per-type counts, tiers, archive/rotation info |
 
 **Optional precision backends** (auto-enabled when present, zero-dep otherwise):
 - `tree-sitter` + grammars → precise multi-language AST parsing
@@ -246,6 +249,9 @@ This is the decision guide: given what you're trying to do, which flag serves it
 - `codeloom --lesson "tried X, failed because Y"` — record a trap (never re-explore dead ends)
 - `codeloom --supersede OLD NEW` — mark a decision as superseded
 - `codeloom --query-memory "auth"` — what do we already know about X
+- `codeloom --memory-add --type bug --title "..." --symbols AuthService` (v0.79) — write a typed memory object to `memory.jsonl`
+- `codeloom --memory Engine` (v0.79) — typed + graph-neighbor memory retrieval
+- `codeloom --memory-stats` (v0.79) — per-type memory counts/tiers
 - `codeloom --cognitive-load "topic"` — cognitive-load-aware decomposition
 - `codeloom --seen` — "what have I already explored?" (avoid re-reading)
 - `codeloom --resume` — restore the structural map after a compaction
@@ -337,23 +343,50 @@ decided and where you left off.
    `codeloom_usages`, `codeloom_grep`, `codeloom_read`, `codeloom_explain`,
    `codeloom_similar`, `codeloom_deadcode`, `codeloom_get_symbol`,
    `codeloom_snippet`, `codeloom_incremental`, `codeloom_verify`,
-   `codeloom_trace`, and `codeloom_ask` (single natural-language entry point
-   that routes deterministically — the agent never picks among tools).
+   `codeloom_trace`, `codeloom_ask` (single natural-language entry point
+   that routes deterministically — the agent never picks among tools), and
+   (v0.79) `codeloom_memory_add`, `codeloom_remember`, `codeloom_memory_stats`
+   (82 tools total).
 
-### 3. Run the test suite
+### 3. Memory OS workflow (v0.79)
+The typed-memory layer (`memory.jsonl`) turns the markdown memory files into
+structured, importance-scored, graph-linked entries:
+
+1. **Write memory the standard ways** — `--decide`, `--lesson`, `--adr`
+   keep writing their markdown files AND append a typed JSONL entry
+   (backward-compatible dual write).
+2. **Write arbitrary typed notes** — `--memory-add --type bug|task|note
+   --title "..." [--body "..." --symbols A,B --priority N]` appends a typed
+   entry to `.codeloom-memory/memory.jsonl`; importance comes from the
+   formula (type + keywords + symbols), printed as `importance: N`.
+3. **Retrieve graph-linked** — `--memory <symbol>` returns the typed
+   entries pinned to that symbol PLUS entries reachable through graph
+   neighbors (e.g. a module that imports it), not just exact matches.
+4. **Extract from history** — `scripts/memory_extract.py [--dry-run]`
+   deterministically mines `git log` (regex heuristics: bug/api/
+   architecture → typed memories with confidence) and feeds the core via
+   `--memory-add`; idempotent via `.codeloom-memory/extract-state.json`.
+   Always run `--dry-run` first.
+5. **Stats & bounds** — `--memory-stats` per-type counts/tiers; entries
+   rotate losslessly into `archive/memory-<date>.jsonl` at cap
+   (`CODELOOM_MEMORY_CAP_BYTES`), `--memory-prune` reports/deletes old
+   archive entries (dry-run by default, `--delete` to act).
+
+### 4. Run the test suite
 ```bash
 python3 tests.py
 ```
-Expect `OK` (currently 83 tests). Add tests for any new feature.
+Expect `OK` (currently 101 tests; the 7 `TestMemoryOS` cases skip until the
+Memory OS lands in `codeloom.py`). Add tests for any new feature.
 
-### 4. Re-record the demo GIF
+### 5. Re-record the demo GIF
 1. Edit `demo.tape` to showcase the features you want (map, graph+focus, calls, diff).
 2. Ensure the demo repo (`demo-repo/`) is a git repo with a committed baseline
    and a real change so `--diff` has output.
 3. Run `vhs demo.tape` (with `~/bin` on PATH so `codeloom` resolves).
 4. Verify a late frame with `vision_analyze` (extract via ffmpeg) before committing.
 
-### 5. Extend codeloom
+### 6. Extend codeloom
 - New CLI flag: add to `argparse` in `main()`, implement the logic, add a test.
 - New MCP tool: add to `TOOLS` list + a branch in `call_tool()` in `codeloom-mcp.py`.
 - Bump `VERSION` in `codeloom.py` and `SERVER_VERSION` in `codeloom-mcp.py`.
@@ -374,7 +407,7 @@ Expect `OK` (currently 83 tests). Add tests for any new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (83 tests).
+- `python3 tests.py` → `OK` (101 tests, 7 MemoryOS skipped until v0.79 lands).
 - `codeloom --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codeloom --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codeloom --task "text" <root>` returns a ranked module list.
@@ -391,5 +424,6 @@ Expect `OK` (currently 83 tests). Add tests for any new feature.
 - `codeloom --incremental <root>` returns changed files (hash cache).
 - `codeloom --trace <cmd> <root>` returns runtime call edges (or none).
 - MCP server keeps an in-memory index (incremental, always fresh); `--get-symbol` uses a lazy per-symbol dbm index (near-resident single-key lookups).
-- MCP smoke test returns `serverInfo` name `codeloom-mcp`.
+- MCP smoke test returns `serverInfo` name `codeloom-mcp`; `tools/list` reports 82 tools once v0.79 lands.
+- `scripts/memory_extract.py --dry-run` lists mined bug/api/architecture memories without writing.
 - `demo.gif` exists and a late frame shows the intended feature output.

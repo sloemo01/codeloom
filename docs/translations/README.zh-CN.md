@@ -1,4 +1,4 @@
-<!-- 中文版 — 随 v0.77 生成；版本升级后可能滞后。 -->
+<!-- 中文版 — 随 v0.79 生成；版本升级后可能滞后。 -->
 <h1 align="center">codeloom</h1>
 
 <p align="center">
@@ -17,7 +17,7 @@
 <p align="center">
   <a href="#quickstart">快速开始</a> ·
   <a href="#what-it-gives-your-agent">功能特性</a> ·
-  <a href="#mcp-server-78-tools--1-router">MCP</a> ·
+  <a href="#mcp-server-82-tools--1-router">MCP</a> ·
   <a href="#pr-review-bot">PR 机器人</a> ·
   <a href="#why-its-different">与竞品对比</a> ·
   <a href="#documentation">文档</a>
@@ -115,7 +115,7 @@ codeloom --resume                                 # restore after compaction
 **50 种 tree-sitter 语言已调度 · 46 种经 fixture 验证**（golden-file 一致性测试
 在每个文法上把关 CI）· **130+ 扩展名通过正则回退支持**。
 
-## MCP 服务器（78 个工具 + 1 个路由器）
+## MCP 服务器（82 个工具 + 1 个路由器）
 
 ```json
 {"command": "python3", "args": ["-m", "codeloom_mcp"]}
@@ -123,7 +123,7 @@ codeloom --resume                                 # restore after compaction
 
 或者自动接入 17 种代理中的任意一种：`codeloom --install-agent <name>`。
 
-总共 78 个工具，但代理的有效面只有一个**工具**：
+总共 82 个工具，但代理的有效面只有一个**工具**：
 `codeloom_ask` 接收自然语言并确定性路由——
 不会出现工具选择失误。完整清单：
 [`docs/mcp-listing.md`](docs/mcp-listing.md)。
@@ -155,7 +155,7 @@ codeloom --resume                                 # restore after compaction
 | 安装 | **一个 stdlib 文件** | pip：**78 个包** + 守护进程 + TOML 配置 | pip + ONNX + 服务器 | npm |
 | 后台进程 | **无** | `crg-daemon`（16MB RSS，健康检查） | `cce serve` + 资源治理 | — |
 | 压缩后记忆 | ✅ **决策台账，实测：2 次调用 / ~985 个 token 即可恢复**（少 95.4%） | ⚠️ markdown 问答日志，零压缩提及 | ⚠️ 代理调用的 `record_decision` MCP | memsearch 插件 |
-| MCP 表面 | **78 + 1 个自然语言路由器** | 30，无路由器 | 22 | 很多 |
+| MCP 表面 | **82 + 1 个自然语言路由器** | 30，无路由器 | 22 | 很多 |
 | 语义搜索 | ✅ 零依赖、离线 | ❌ `[embeddings]` 附加项（约 2GB）或云端密钥 | ❌ 需要 ONNX | ✅ (Zilliz) |
 | 语言证明 | **46 种语言在 CI 中经 fixture 验证** | 未公布 | — | — |
 | 安装→出答案 | **0.13 秒热启动** | 41 秒 pip + 4 秒构建 + 守护进程 | 建索引后 | 建索引后 |

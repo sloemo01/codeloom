@@ -1,12 +1,17 @@
-# Launch material
+# Launch material — codeloom v0.79 "Memory OS"
 
-Ready-to-post copy for codeloom. The GIF is the hook — link the raw GitHub URL
-so it renders inline on both platforms. All numbers below are measured and
+**Headline — codeloom is now a Memory OS.** Typed memory objects
+(`memory.jsonl`), an importance engine, and `--memory <symbol>`: graph-linked
+retrieval that answers "what the graph knows about X" instead of an
+embedding-search hope. Deterministic extraction, zero LLM, zero deps.
+
+Ready-to-post copy for the launch. The GIF is the hook — link the raw GitHub
+URL so it renders inline on both platforms. All numbers below are measured and
 reproducible ([`benchmarks/README.md`](benchmarks/README.md)).
 
 - Demo GIF: `https://raw.githubusercontent.com/sloemo01/codeloom/main/demo.gif`
 - Repo: `https://github.com/sloemo01/codeloom`
-- Latest release: `https://github.com/sloemo01/codeloom/releases/tag/v0.77.0`
+- Latest release: `https://github.com/sloemo01/codeloom/releases/tag/v0.79.0`
 
 ---
 
@@ -25,6 +30,8 @@ I kept hitting this, so I built codeloom: one file, zero dependencies, no daemon
 ![codeloom demo](https://raw.githubusercontent.com/sloemo01/codeloom/main/demo.gif)
 
 **The measured numbers (all reproducible, loss rows published):**
+
+- **Graph-linked memory retrieval (v0.79).** Memory objects are typed, stored in `memory.jsonl`, and linked to the call graph — `--memory <symbol>` returns what the graph knows about that symbol, not an embedding-search hope. Extraction is deterministic (`scripts/memory_extract.py` mines git history), `--memory-stats` and the `memory_eval` benchmark ship with it, and none of it runs an LLM.
 
 - **Compaction recovery: 2 calls / ~985 tokens vs 33 calls / ~21.6k tokens.** After a compaction, `--resume` restores both the structural map and the decision ledger. Nobody else publishes this number — the 30k★ field leader has zero mentions of compaction in its README. ([bench](https://github.com/sloemo01/codeloom/blob/main/benchmarks/README.md))
 - **Symbol retrieval: 24–36× fewer tokens than code-review-graph** on the same fastapi symbols, same tokenizer (13–20 vs 428–485). Measured live against their MCP server.
@@ -46,11 +53,14 @@ What it does:
 - **Zero-install, zero-telemetry, offline** — one stdlib file, no `pip install`, no model downloads, no license validation, no telemetry that phones home. The heavyweight tools can't say that.
 - **Git-diffable** — `codeloom --write MAP.md` produces a reviewable text artifact you commit and diff in PRs. jcodemunch's index is a binary blob.
 - **CI action** — `codeloom --install-agents .` writes AGENTS.md + a GitHub Action that runs `--pack` on every PR and posts the brief as a comment. One line to add.
-- **MCP server** — zero-dep, **78 tools**, resident in-memory knowledge graph + `--watch` incremental refresh (daemon-speed, no daemon).
+- **MCP server** — zero-dep, **82 tools**, resident in-memory knowledge graph + `--watch` incremental refresh (daemon-speed, no daemon).
+- **Memory OS (v0.79)** — typed memory objects in `memory.jsonl`, an importance engine, and `--memory <symbol>` retrieval linked straight into the call graph. Extraction is deterministic (`scripts/memory_extract.py` mines git history), so memory is reproducible — zero-LLM, zero-dep, and it never phones home.
 - **AST depth, repo-aware** — `--install-grammars --yes` for core languages, or `--auto-grammars` scans the repo and installs grammars for the languages it actually uses (no per-language setup). 130+ extensions via regex/C extraction.
 - **Optional C engine, Linux-kernel scale** — build `codeloom_core.c` once, `--index --engine c` indexes the **full Linux kernel graph (C engine: 64,814 files, 3.2M symbols, 408k edges) in ~89–113s**. Pure-Python stays zero-dep; the C accelerator is opt-in for huge monorepos. (The Rust walk+map — 67,306 files / 5.66M symbols — is ~11–13s.)
 
 The whole thing is Python stdlib only. No `pip install`, no indexing daemon, no GPU. Copy one file into your repo, point your agent at it, done.
+
+And now it remembers. v0.79 ships Memory OS: typed memory objects (`memory.jsonl`) with graph-linked retrieval — `--memory <symbol>` returns what the graph knows about that symbol, with deterministic extraction from git history (`scripts/memory_extract.py`). Zero-LLM, zero-dep: the memory is reproducible, not vibes.
 
 **Why not just use the existing tools?** They're great at retrieval — but they're search engines, not task-orientation engines. They answer "where is this symbol?" codeloom answers "what code actually runs for this task?" — and embeds it, with the blast radius and a files-to-touch checklist (`--ask`). Plus it's the fastest possible structural context, in one file, in under a second, always fresh (no stale index) — and it indexes the Linux kernel full graph (C engine) in ~89–113s (vs their ~3 min).
 
@@ -66,17 +76,19 @@ Would love feedback — especially on the edit-relevance ranking and the compact
 
 So I built codeloom: a map of your repo for agents. One file, zero deps, no daemon, 100% local. Under a second.
 
-**2/6** The measured differentiator: after a context compaction, a bare agent re-derives with **33 calls / ~21.6k tokens**. `codeloom --resume` restores the map *and* the decision ledger in **2 calls / ~985 tokens**. The 30k★ field leader has zero mentions of compaction anywhere.
+**2/7** The measured differentiator: after a context compaction, a bare agent re-derives with **33 calls / ~21.6k tokens**. `codeloom --resume` restores the map *and* the decision ledger in **2 calls / ~985 tokens**. The 30k★ field leader has zero mentions of compaction anywhere.
 
-**3/6** The pitch in one line: the search tools answer "where is this symbol?" codeloom answers "what code actually runs for this task?" — and embeds it.
+**3/7** Your agent forgets nothing the graph can link. v0.79 is a Memory OS: typed memory objects in `memory.jsonl` linked to the call graph — `--memory <symbol>` returns what the graph knows about X, not an embedding-search hope. Deterministic extraction from git history, zero LLM.
+
+**4/7** The pitch in one line: the search tools answer "where is this symbol?" codeloom answers "what code actually runs for this task?" — and embeds it.
 
 `codeloom --pack "fix the login bug"` returns a ~1.6k-token brief with the actual `login()` source embedded, the call path, the impact list, and what's safe to touch. An agent pastes it once and works — zero retrieval on the core path.
 
-**4/6** Measured head-to-head vs code-review-graph (same repo, same symbols, same tokenizer): 13–20 tokens vs 428–485. Setup: one stdlib file vs 75 pip packages + a daemon. Semantic search: zero-dep offline vs a ~2GB embeddings extra.
+**5/7** Measured head-to-head vs code-review-graph (same repo, same symbols, same tokenizer): 13–20 tokens vs 428–485. Setup: one stdlib file vs 75 pip packages + a daemon. Semantic search: zero-dep offline vs a ~2GB embeddings extra.
 
-**5/6** Zero-install, zero-telemetry, offline — one stdlib file, no pip, no model downloads, no license checks, no telemetry that phones home. The heavyweight tools can't say that.
+**6/7** Zero-install, zero-telemetry, offline — one stdlib file, no pip, no model downloads, no license checks, no telemetry that phones home. The heavyweight tools can't say that.
 
-**6/6** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.77.0 released. `--resume` restores your agent's structural context after compaction; `--pack`/`--answer`/`--impact` give the code, the call path, and the blast radius. Measured compaction recovery 2 calls vs 33, retrieval 10 calls vs 29. Go use it.
+**7/7** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.79.0 "Memory OS" released. `--resume` restores your agent's structural context after compaction; `--pack`/`--answer`/`--impact` give the code, the call path, and the blast radius. Measured compaction recovery 2 calls vs 33, retrieval 10 calls vs 29. Go use it.
 
 ---
 
@@ -86,22 +98,24 @@ So I built codeloom: a map of your repo for agents. One file, zero deps, no daem
 
 So I built codeloom: a map of your repo for agents. One file, zero deps, no daemon, 100% local. Under a second.
 
-**2/6** The pitch in one line: the search tools answer "where is this symbol?" codeloom answers "what code actually runs for this task?" — and embeds it.
+**2/7** The pitch in one line: the search tools answer "where is this symbol?" codeloom answers "what code actually runs for this task?" — and embeds it.
 
 `codeloom --pack "fix the login bug"` returns a ~1.6k-token brief with the actual `login()` source embedded, the call path, the impact list, and what's safe to touch. An agent pastes it once and works — zero retrieval on the core path.
 
-**3/6** The ranking is edit-relevance, not keyword overlap:
+**3/7** Your agent forgets nothing the graph can link. v0.79 is a Memory OS: typed memory objects in `memory.jsonl` linked to the call graph — `--memory <symbol>` returns what the graph knows about X, not an embedding-search hope. Deterministic extraction from git history, zero LLM.
+
+**4/7** The ranking is edit-relevance, not keyword overlap:
 • anchor the task ("login") → walk the call graph both directions
 • `session.py` ranks above `constants.py` for "fix the login bug" because it's on the login call path
 • that's "what code runs" vs "where does the word appear"
 
-**4/6** Zero-install, zero-telemetry, offline — one stdlib file, no pip, no model downloads, no license checks, no telemetry that phones home. The heavyweight tools can't say that.
+**5/7** Zero-install, zero-telemetry, offline — one stdlib file, no pip, no model downloads, no license checks, no telemetry that phones home. The heavyweight tools can't say that.
 
-**5/6** Git-diffable + CI action:
+**6/7** Git-diffable + CI action:
 • `codeloom --write MAP.md` → a reviewable text artifact you commit and diff in PRs (their index is a binary blob)
 • `codeloom --install-agents .` → writes AGENTS.md + a GitHub Action that posts the `--pack` brief on every PR. One line.
 
-**6/6** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.77.0 released. `--resume` restores your agent's structural context after a compaction; `--working-state` + `--cognitive-load` restore its decisions, lessons, open items and hot set. Code-embedded task brief (`--ask`/`--pack`), 99% token savings, lazy per-symbol index + `--watch`/`--watch-core` (near-resident or native, no daemon), 78 MCP tools, integrated C engine + `--serve` — indexes the full Linux kernel graph (C engine) in **~89–113s**. Go use it.
+**7/7** Repo: https://github.com/sloemo01/codeloom — MIT, one file, CI-verified on Linux/macOS/Windows, v0.79.0 "Memory OS" released. `--resume` restores your agent's structural context after a compaction; `--working-state` + `--cognitive-load` restore its decisions, lessons, open items and hot set. Code-embedded task brief (`--ask`/`--pack`), 99% token savings, lazy per-symbol index + `--watch`/`--watch-core` (near-resident or native, no daemon), 82 MCP tools, integrated C engine + `--serve` — indexes the full Linux kernel graph (C engine) in **~89–113s**. Go use it.
 
 ---
 
@@ -125,11 +139,14 @@ returns a self-contained ~1.6k-token brief with the **actual `login()` source em
 
 The ranking is **edit-relevance**, not keyword overlap: it anchors the task ("login"), walks the call graph both directions, and ranks the execution path. `session.py` ranks above `constants.py` for "fix the login bug" because it's on the login call path — not because it has more word matches.
 
+**Memory, not a markdown journal.** Most "memory" solutions are markdown journals — the agent writes notes into a file and hopes a later search finds them. codeloom's memory (v0.79) is typed, structured (`memory.jsonl`), and *linked into the call graph*: `--memory <symbol>` returns what the graph knows about that symbol, so retrieval follows the same structure the code does — deterministic extraction from git history, no LLM in the loop, nothing to hope for. It's the difference between a pile of notes and a memory with a graph attached.
+
 Also:
 - **Zero-install, zero-telemetry, offline** — one file, no pip, no model downloads, no license checks, no telemetry that phones home
 - **Git-diffable** — `codeloom --write MAP.md` is a reviewable text artifact you commit and diff in PRs
 - **CI action** — `codeloom --install-agents .` writes AGENTS.md + a GitHub Action that posts the `--pack` brief on every PR
-- **MCP server** — zero-dep, 78 tools, resident in-memory knowledge graph + `--watch` incremental refresh (daemon-speed, no daemon)
+- **MCP server** — zero-dep, 82 tools, resident in-memory knowledge graph + `--watch` incremental refresh (daemon-speed, no daemon)
+- **Memory OS (v0.79)** — typed memory in `memory.jsonl`, importance engine, `--memory <symbol>` graph-linked retrieval, `--memory-stats` + `memory_eval` benchmark; deterministic extraction from git history, zero-LLM, zero-dep
 - **AST depth, repo-aware** — `--auto-grammars` scans the repo and installs grammars for its languages; 130+ extensions via regex/C extraction
 - **Compaction recovery, measured** — after a compaction: 2 calls / ~985 tokens to restore (`--resume`) vs 33 calls / ~21.6k tokens to re-derive (bare). All numbers reproducible: github.com/sloemo01/codeloom/blob/main/benchmarks/README.md
 

@@ -61,7 +61,7 @@ work — an incremental graph, a watch daemon, a GitHub Action, 5 translated
 READMEs. We measured them live on the same repo. Where we win:
 
 - **30 tools, no router.** Their agent must pick from 30 MCP tools. Ours
-  has 79 behind *one* deterministic NL router (`codeloom_ask`) — no
+  has 82 behind *one* deterministic NL router (`codeloom_ask`) — no
   tool-selection misfires, which is the "it loves to just grep" adherence
   problem every tree-sitter tool hits.
 - **Compaction survival is a feature, not an afterthought.** Their "memory
@@ -110,6 +110,42 @@ explicit and user-initiated: `--memory-prune` with `--dry-run` first shows
 exactly what would be removed, and nothing is deleted until you apply it.
 Unbounded growth, silent deletion, and opaque summarization are all off the
 table by design.
+
+## Is memory just markdown?
+
+No — since v0.79, codeloom's memory layer is **typed JSONL with a markdown
+mirror**, not a wall of text. Every memory is a structured object in
+`.codeloom-memory/memory.jsonl`:
+
+```json
+{"type": "decision", "id": "sha256…", "title": "use retry(3)",
+ "body": "unbounded hangs agents", "affected_symbols": ["retry"],
+ "importance": 87, "confidence": 0.7, "tier": "core",
+ "timestamp": "2026-08-22T12:00:00+00:00"}
+```
+
+The dual-write matters because the two formats serve two consumers: the
+**markdown side** is what a human (or a plain-text agent) greps in
+`DECISIONS.md`/`ARCHITECTURE.md` — it stays readable and diffable. The
+**JSONL side** is what the tool queries — typed fields (`type`,
+`importance`, `confidence`, `tier`, `affected_symbols`, `timestamp`) make
+retrieval precise: filter by type, rank by importance, dedupe by `id`,
+prune by tier. Markdown is the interface; JSONL is the index.
+
+## How is memory linked to code?
+
+Through `affected_symbols` plus the repo graph. Each memory object names
+the symbols it touches, and `--memory <symbol>` (or the MCP
+`codeloom_remember`) retrieves **both** the entries that mention the symbol
+**and** the entries attached to its graph neighbors — the modules that
+import it, the functions that call it, the symbols it depends on — ranked
+by importance score. Ask about `validate()` and you get the memory attached
+to `login()`, because the graph knows `login` calls `validate`. That's the
+difference between a journal and a memory wired into the codebase's shape:
+the memory follows the code, not just the words. (There's also a
+`--memory-stats` report showing the distribution, and
+`scripts/memory_extract.py` auto-mines git history into typed memories via
+the core's `--memory-add`.)
 
 ## Does codeloom phone home? Where do the savings numbers come from?
 
