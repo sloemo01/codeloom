@@ -119,6 +119,11 @@ jobs:
         run: |
           set -o pipefail
           python3 benchmarks/eval_runner.py bench --json --root . 2>&1 | tee bench-run.log
+      - name: Run memory eval
+        if: always()
+        run: |
+          set -o pipefail
+          python3 benchmarks/memory_eval.py --repo . 2>&1 | tee memory-eval.log
       - name: Extract JSON result
         if: always()
         run: |
@@ -140,4 +145,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bench-proof
-          path: bench-proof.json
+          path: |
+            bench-proof.json
+            memory-eval.log

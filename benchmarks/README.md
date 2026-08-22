@@ -35,6 +35,61 @@ requires the agent to call `record_decision` MCP tools from a running server
 (they ship "memory nudges" because agents forget to). Nobody else ships a
 deterministic restore.
 
+## Memory OS benchmark (measured 2026-08-22)
+
+`benchmarks/memory_eval.py` measures the persistent-memory layer — codeloom's
+`--remember` / `--lesson` / `--query-memory` (the "never forgets" differentiator
+that survives compaction because it is a file on disk). Pipeline:
+
+1. **Build** a synthetic 5-file repo (23 real symbols) — or copy any repo
+   (`--repo`) into a scratch dir so the source repo's `.codeloom-memory` is
+   never touched.
+2. **Seed** 20 typed memory entries via the real CLI (`--remember` into
+   DECISIONS/ARCHITECTURE/PATTERNS/CONVENTIONS + `--lesson` bugs), each
+   anchored on a real symbol in the repo.
+3. **Recall** — for 10 query symbols, `--query-memory <symbol>` must return the
+   entry whose note names that symbol (full-text match, exactly what a
+   wiped agent would ask). Latency = avg wall time over 3 runs per query.
+4. **Tokens** — `--query-memory` output size (cl100k_base, bytes/4 fallback)
+   vs the naive baseline: `grep -rn <symbol> repo` + read the top 3 matching
+   files whole, same 10 queries.
+
+```bash
+python3 benchmarks/memory_eval.py --repo /tmp/bench-fastapi   # real-repo numbers below
+python3 benchmarks/memory_eval.py                            # default: synthetic repo (fast)
+```
+
+Measured on the default synthetic repo (23 symbols, 20 entries, 10 queries):
+
+| query symbol | hit | codeloom tok | mem ms | baseline tok |
+|---|---|---|---|---|
+| `evict` | YES | 42 | 93.2 | 331 |
+| `Router` | YES | 58 | 94.3 | 451 |
+| `Engine` | YES | 94 | 100.4 | 345 |
+| `AuthError` | YES | 188 | 89.6 | 828 |
+| `validate_token` | YES | 61 | 91.2 | 502 |
+| `normalize` | YES | 38 | 88.6 | 305 |
+| `authenticate` | YES | 33 | 92.8 | 295 |
+| `ttl_of` | YES | 41 | 88.1 | 312 |
+| `CacheEntry` | YES | 66 | 89.0 | 452 |
+| `TokenStore` | YES | 61 | 89.7 | 556 |
+
+**memory retrieval: 10/10 linked hits, 92 ms avg, 682 tok vs baseline
+4,377 tok (84.4% fewer)**; write: avg 88 ms per `--remember`/`--lesson` add.
+LOSS ROWS: none.
+
+Measured on a copy of `/tmp/bench-fastapi` (4,116 symbols): **10/10 hits,
+~1.48 s avg recall, 609 tok vs baseline 78,758 tok (99.2% fewer)** — same
+retrieval contract, but every invocation pays ~1.5 s Python startup + full
+tree walk on the 5000-file repo (the same cold-vs-warm trade-off documented
+in the vs-crg section; the synthetic default measures the pure memory path).
+
+**The honest note:** entries are **synthetic** — scripted with a deterministic
+seed, not real agent history. This measures the storage + retrieval paths
+(does `--query-memory` return what was recorded? how fast? how many tokens?)
+and does *not* measure the quality of what a real agent would choose to
+remember. Loss rows are printed, never filtered.
+
 ## Sealed retrieval benchmark (no LLM, deterministic — measured 2026-08-22)
 
 `benchmarks/live_sealed_run/harness.py` measures the *retrieval phase* — the
