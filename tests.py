@@ -94,6 +94,139 @@ class TestCodeLoom(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("file_count", r.stdout)
 
+    def _run_cli(self, *argv, cwd=None, timeout=120):
+        """Run codeloom.py as a subprocess in an isolated cwd (default: a
+        throwaway temp dir so per-repo artifacts like .codeloom-memory never
+        land in the fixture repo or the codeloom checkout)."""
+        if cwd is None:
+            cwd = tempfile.mkdtemp()
+        r = subprocess.run(
+            [sys.executable, os.path.join(os.path.dirname(__file__), "codeloom.py")]
+            + list(argv),
+            capture_output=True, text=True, cwd=cwd, timeout=timeout,
+        )
+        return r, cwd
+
+    def _make_cli_repo(self, base):
+        """Tiny 3-file Python repo with a symbol, a dead symbol, and a call."""
+        repo = os.path.join(base, "repo")
+        os.makedirs(repo)
+        with open(os.path.join(repo, "engine.py"), "w") as f:
+            f.write("from utils.retry import retry\n\n"
+                    "class Engine:\n"
+                    "    def run(self):\n"
+                    "        return retry(lambda: None)\n\n"
+                    "def main():\n"
+                    "    eng = Engine()\n"
+                    "    return eng.run()\n")
+        with open(os.path.join(repo, "utils.py"), "w") as f:
+            f.write("def retry(fn, tries=3):\n"
+                    "    return fn()\n\n"
+                    "def backup():\n"
+                    "    return 1\n")
+        with open(os.path.join(repo, "cli.py"), "w") as f:
+            f.write("def parse(args):\n    return args\n")
+        return repo
+
+    def test_cli_get_symbol_dispatch(self):
+        # --get-symbol resolves a real symbol (class def + body) to its file
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = self._make_cli_repo(tmp)
+            r, _ = self._run_cli("--get-symbol", "Engine", repo)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("# get_symbol: Engine", r.stdout)
+            self.assertRegex(r.stdout, r"engine:\d+")
+            self.assertIn("class Engine", r.stdout)
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_cli_pack_dispatch(self):
+        # --pack emits a single-shot task brief with a ranked reading order
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = self._make_cli_repo(tmp)
+            r, _ = self._run_cli("--pack", "add retry to engine", repo)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("# TASK: add retry to engine", r.stdout)
+            self.assertIn("## 1. READ THESE, IN ORDER", r.stdout)
+            self.assertIn("engine.py", r.stdout)
+            self.assertIn("## 2. THE RELEVANT CODE", r.stdout)
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_cli_decide_query_memory_roundtrip(self):
+        # --decide writes to .codeloom-memory in the CWD; --query-memory in
+        # the same CWD reads it back. Runs in a throwaway dir so the repo
+        # and the codeloom checkout stay clean.
+        tmp = tempfile.mkdtemp()
+        try:
+            r1, wd = self._run_cli("--decide", "Use retry everywhere",
+                                   "--reason", "idempotent")
+            self.assertEqual(r1.returncode, 0, r1.stderr)
+            self.assertIn("recorded decision", r1.stdout)
+            self.assertTrue(os.path.isfile(
+                os.path.join(wd, ".codeloom-memory", "DECISIONS.md")))
+            r2, _ = self._run_cli("--query-memory", "retry", cwd=wd)
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            self.assertIn('--query-memory "retry"', r2.stdout)
+            self.assertIn("Use retry everywhere", r2.stdout)
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_cli_health_dispatch(self):
+        # --health prints a score line (avg X/10 across N files)
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = self._make_cli_repo(tmp)
+            r, _ = self._run_cli("--health", repo)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("code health", r.stdout)
+            self.assertRegex(r.stdout, r"avg \d+(\.\d+)?/10")
+            self.assertIn("files", r.stdout)
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_cli_risk_dispatch(self):
+        # --risk on a git commit range exits 0 and prints a score line
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = self._make_cli_repo(tmp)
+            for c in (["init", "-q"],
+                      ["config", "user.email", "t@t"],
+                      ["config", "user.name", "t"]):
+                g = subprocess.run(["git"] + c, cwd=repo,
+                                   capture_output=True, text=True)
+                self.assertEqual(g.returncode, 0, g.stderr)
+            subprocess.run(["git", "add", "-A"], cwd=repo,
+                           capture_output=True, text=True)
+            subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo,
+                           capture_output=True, text=True)
+            with open(os.path.join(repo, "engine.py"), "w") as f:
+                f.write("from utils.retry import retry\n\n"
+                        "class Engine:\n"
+                        "    def run(self):\n"
+                        "        return retry(lambda: None)\n\n"
+                        "def main():\n"
+                        "    eng = Engine()\n"
+                        "    return eng.run() + 1\n")
+            subprocess.run(["git", "add", "-A"], cwd=repo,
+                           capture_output=True, text=True)
+            subprocess.run(["git", "commit", "-q", "-m", "tweak"], cwd=repo,
+                           capture_output=True, text=True)
+            r, _ = self._run_cli("--risk", "HEAD~1..HEAD", repo)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("change risk", r.stdout)
+            self.assertRegex(r.stdout, r"score \d+/100")
+        finally:
+            def _force_remove(func, path, _exc):
+                try:
+                    os.chmod(path, 0o700)
+                    func(path)
+                except OSError:
+                    pass
+            shutil.rmtree(tmp, onerror=_force_remove)
+
     def test_graph_import_edges(self):
         m = codeloom.build_map(self.repo, True, 5000)
         files = []
@@ -916,7 +1049,9 @@ class TestCodeLoom(unittest.TestCase):
 
     def test_versions_in_sync(self):
         # Version-drift guard: VERSION in codeloom.py, SERVER_VERSION in
-        # codeloom-mcp.py, and pyproject.toml must all agree.
+        # codeloom-mcp.py, and pyproject.toml must all agree. No hardcoded
+        # expectation: the three files are the single source of truth for
+        # each other, so any one-sided bump fails loudly.
         import re
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, "codeloom-mcp.py")) as f:
@@ -933,6 +1068,54 @@ class TestCodeLoom(unittest.TestCase):
                          "codeloom.VERSION != codeloom-mcp.py SERVER_VERSION")
         self.assertEqual(codeloom.VERSION, pyproject_version,
                          "codeloom.VERSION != pyproject.toml version")
+        # all three must be non-empty and identical (guards against a stale
+        # regex capturing the wrong key)
+        self.assertNotEqual(codeloom.VERSION, "",
+                            "codeloom.VERSION must not be empty")
+        self.assertEqual(len({codeloom.VERSION, mcp_version,
+                              pyproject_version}), 1,
+                         "VERSION/SERVER_VERSION/pyproject drift: "
+                         "%r / %r / %r" % (codeloom.VERSION, mcp_version,
+                                           pyproject_version))
+
+    def test_mcp_tool_registry_unique_and_complete(self):
+        # The MCP TOOLS registry is the server's contract with the agent.
+        # Guards that survive refactors: (a) every tool name is unique,
+        # (b) codeloom_ask is registered exactly once (a duplicate would
+        # make tool routing ambiguous), (c) the registry is exactly 77
+        # tools, and (d) every entry is a well-formed schema dict.
+        import ast
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "codeloom-mcp.py")) as f:
+            src = f.read()
+        tree = ast.parse(src)
+        names = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            target = (node.target if isinstance(node, ast.AnnAssign)
+                      else node.targets[0])
+            if not (isinstance(target, ast.Name) and target.id == "TOOLS"):
+                continue
+            for item in node.value.elts:
+                if not isinstance(item, ast.Dict):
+                    continue
+                nm = None
+                for k, v in zip(item.keys, item.values):
+                    if (isinstance(k, ast.Constant) and k.value == "name"
+                            and isinstance(v, ast.Constant)):
+                        nm = v.value
+                names.append(nm)
+        self.assertEqual(len(names), 77,
+                         "expected 77 MCP tools, got %d" % len(names))
+        self.assertEqual(len(set(names)), len(names),
+                         "duplicate MCP tool names: %s" % sorted(
+                             {n for n in names if names.count(n) > 1}))
+        self.assertEqual(names.count("codeloom_ask"), 1,
+                         "codeloom_ask must be registered exactly once")
+        for nm in names:
+            self.assertTrue(nm and nm.startswith("codeloom_"),
+                            "bad tool name: %r" % nm)
 
     def test_meta_envelope_reports_freshness(self):
         # freshness envelope: fresh right after build, stale after file drift

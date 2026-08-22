@@ -65,7 +65,7 @@ def _ts_grammar_for(ext: str):
     gets real AST depth automatically — no hardcoded per-language chain.
     Falls back to regex when the grammar isn't installed. If
     CODELOOM_AUTO_INSTALL_GRAMMARS=1, auto-installs just the grammar for this
-    extension on first use (opt-in, one grammar at a time)."""
+    extension on first use (opt-in, one grammar at a time, default OFF)."""
     if not _TS_AVAILABLE:
         return None
     # cache the resolved Language per extension (parser init is expensive)
@@ -278,20 +278,21 @@ def install_grammars(do_install: bool = False, only_ext: Optional[str] = None) -
         "parsing for those languages. No config needed.\n"
     )
 
-def _ensure_grammars_for_root(root: str) -> str:
+def _ensure_grammars_for_root(root: str, force: bool = False) -> str:
     """BEAT-THE-TRADEOFF: scan the repo for its actual code extensions and
     auto-install just the tree-sitter grammars those languages need, in one
     shot. No per-language manual trigger. Returns a summary. Only installs
     grammars that have a known package in _EXT_GRAMMAR_PKG.
 
-    INTEGRATED (default-on) since v0.58.0: it auto-installs only the *missing*
-    grammars for this repo's actual languages, so AST depth is automatic. It
-    only pip-installs the first time it encounters a language without a
-    grammar, then is a no-op. Set CODELOOM_AUTO_INSTALL_GRAMMARS=0 to disable
-    (fully opt-out), or =1 to force (the old opt-in behavior)."""
-    # opt-out via CODELOOM_AUTO_INSTALL_GRAMMARS=0; default is ON
-    if os.environ.get("CODELOOM_AUTO_INSTALL_GRAMMARS", "1").lower() in ("0", "false", "off"):
-        return "Auto-install off (set CODELOOM_AUTO_INSTALL_GRAMMARS=1 to enable).\n"
+    OPT-IN (security: this runs pip install with shell=True): it does NOT
+    auto-install on --index/--watch by default — the env var defaults to 0.
+    Set CODELOOM_AUTO_INSTALL_GRAMMARS=1 to enable auto-install, or pass
+    force=True (the explicit `--auto-grammars` flag) to install once."""
+    # opt-in via CODELOOM_AUTO_INSTALL_GRAMMARS=1 (or the explicit --auto-grammars
+    # flag); default is OFF so index/watch never pip-install without consent
+    if not force and os.environ.get("CODELOOM_AUTO_INSTALL_GRAMMARS", "0").lower() in ("0", "false", "off"):
+        return ("Auto-install off (set CODELOOM_AUTO_INSTALL_GRAMMARS=1 to enable "
+                "automatic grammar installs, or run `codeloom --auto-grammars` once).\n")
     if not _TS_AVAILABLE:
         return "tree-sitter not installed. Run: codeloom --install-grammars --yes\n"
     # discover the repo's extensions
@@ -1807,7 +1808,15 @@ def render_context_diff(root: str, base: str = "main", head: str = "HEAD") -> st
         buf.write("  Not a git repo.\n")
         return buf.getvalue()
     try:
-        r = subprocess.run(["git", "-C", root, "diff", "--name-only", f"{base}...{head}"],
+        # '--' guard: base/head are spliced into argv, so a branch name that
+        # starts with '-' could otherwise be parsed as a git option. Refuse
+        # leading-dash refs outright, and terminate the revspec with '--' so
+        # nothing after it can be interpreted as a flag either.
+        if base.startswith("-") or head.startswith("-"):
+            buf.write("  Invalid revision range (ref names must not start with '-').\n")
+            return buf.getvalue()
+        r = subprocess.run(["git", "-C", root, "diff", "--name-only",
+                            f"{base}...{head}", "--"],
                            capture_output=True, text=True, timeout=20)
         changed = [l for l in r.stdout.strip().splitlines() if l]
     except Exception:
@@ -5072,9 +5081,10 @@ def save_persistent_index(root: str, index: dict, files: List[str], kg: Optional
     refresh. Size is tracked because Windows mtime has ~2s resolution, so a
     quick append may not change mtime — but it always changes size.
     `kg` is the optional knowledge-graph edges (call + import).
-    Writes a binary (marshal) copy for fast load at scale. `skip_json=True`
-    (used by --engine c) omits the redundant JSON copy — the loader prefers
-    marshal anyway — for a real win on 3M-symbol repos."""
+    JSON-only persistence (SECURITY): marshal is never written — .bin files
+    are attacker-controlled and unsafe to load. `skip_json=True` (used by
+    --engine c) still writes the JSON copy (JSON is now the ONLY format);
+    it simply skips the duplicate binary blob entirely."""
     data = {
         "version": INDEX_VERSION,
         "root": root,
@@ -5105,31 +5115,76 @@ def save_persistent_index(root: str, index: dict, files: List[str], kg: Optional
                 json.dump(data, f)
         except OSError:
             pass
-    # binary copy for fast load (marshal is stdlib, ~10x faster than json)
-    try:
-        import marshal
-        with open(_index_bin_path(root), "wb") as f:
-            marshal.dump(data, f)
-    except OSError:
-        pass
+    # NOTE: no marshal .bin copy is written anymore (SECURITY: repo-supplied
+    # marshal data is attacker-controlled; JSON is the only persisted format).
+
+def _index_contain(root: str, data: Optional[dict]) -> Optional[dict]:
+    """Containment: drop any persisted index entry whose path escapes the
+    repo root. A repo-supplied index could otherwise smuggle absolute paths
+    (or ../ escapes) that later reads open outside the repo."""
+    if not data:
+        return data
+    root_abs = os.path.abspath(root)
+    files = data.get("files")
+    if isinstance(files, dict):
+        kept = {}
+        for f, meta in files.items():
+            if os.path.isabs(f):
+                if not os.path.abspath(f).startswith(root_abs + os.sep):
+                    continue
+            elif os.path.normpath(f).startswith(".."):
+                continue
+            kept[f] = meta
+        data["files"] = kept
+    symbols = data.get("symbols")
+    if isinstance(symbols, dict):
+        for name in list(symbols.keys()):
+            locs = symbols[name]
+            if not isinstance(locs, list):
+                continue
+            keep = []
+            for loc in locs:
+                if not isinstance(loc, dict):
+                    continue
+                p = loc.get("path")
+                if p is None:
+                    keep.append(loc)
+                    continue
+                if os.path.isabs(p):
+                    if os.path.abspath(p).startswith(root_abs + os.sep):
+                        keep.append(loc)
+                elif not os.path.normpath(p).startswith(".."):
+                    keep.append(loc)
+            symbols[name] = keep
+    kg = data.get("kg")
+    if isinstance(kg, dict):
+        for key in ("calls", "imports"):
+            edges = kg.get(key)
+            if isinstance(edges, dict):
+                for k in list(edges.keys()):
+                    v = edges[k]
+                    if isinstance(v, list):
+                        edges[k] = [x for x in v
+                                    if isinstance(x, str)
+                                    and (not os.path.isabs(x)
+                                         or os.path.abspath(x).startswith(root_abs + os.sep))]
+    return data
 
 def load_persistent_index(root: str) -> Optional[dict]:
-    """Load the persistent index if present and valid. Prefers the binary
-    (marshal) copy for speed; falls back to JSON."""
-    import marshal
-    # binary first — much faster at scale
-    try:
-        with open(_index_bin_path(root), "rb") as f:
-            data = marshal.load(f)
-        if data.get("version") == INDEX_VERSION:
-            return data
-    except (OSError, ValueError, EOFError):
-        pass
+    """Load the persistent index if present and valid. JSON only (SECURITY):
+    if a legacy .bin marshal file exists it is ignored with a warning — the
+    loader never unmarshals repo-supplied data. Index entries whose paths
+    escape the repo root are dropped (containment)."""
+    bin_path = _index_bin_path(root)
+    if os.path.isfile(bin_path):
+        print(f"codeloom: ignoring {bin_path} (marshal index is not trusted; "
+              f"delete it and re-run `codeloom --index` to rebuild as JSON).",
+              file=sys.stderr)
     try:
         with open(_index_path(root), "r", encoding="utf-8") as f:
             data = json.load(f)
         if data.get("version") == INDEX_VERSION:
-            return data
+            return _index_contain(root, data)
     except (OSError, json.JSONDecodeError):
         pass
     return None
@@ -5237,12 +5292,8 @@ def refresh_index_incremental(root: str, max_files: int) -> str:
             json.dump(data, f)
     except OSError:
         pass
-    try:
-        import marshal
-        with open(_index_bin_path(root), "wb") as f:
-            marshal.dump(data, f)
-    except OSError:
-        pass
+    # NOTE: no marshal .bin copy is written (SECURITY: JSON-only persistence;
+    # the loader never unmarshals repo-supplied data).
     try:
         save_lazy_index(root, merged)
     except Exception:
@@ -6601,52 +6652,95 @@ AGENTS_BLOCK = """<!-- codeloom: auto-generated. Run `codeloom` to refresh. -->
 Before editing anything, run `codeloom` and read the output to build a mental model of the repo.
 """
 
-# The codeloom-map CI workflow that --install-agents writes (set-and-forget).
-# Runs --pack on every PR and posts the task brief as a comment.
-CI_WORKFLOW = """name: codeloom-map
+# The PR-review CI workflow that --install-agents writes (set-and-forget).
+# Modeled on the repo's own .github/workflows/pr-bot.yml (the retired
+# codeloom-map.yml workflow has been removed): posts a deterministic
+# codeloom review summary + inline findings on every PR, and hands off to
+# Codex for the LLM pass.
+CI_WORKFLOW = """name: codeloom-pr-bot
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
   pull-requests: write
 
 jobs:
-  map:
+  review:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0   # full history so merge-base with the base branch exists
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Run codeloom --pack on the PR
-        id: pack
+
+      - name: Resolve merge base
+        id: base
         run: |
-          TASK="${{ github.event.pull_request.title }}"
-          if [ -z "$TASK" ]; then TASK="review this pull request"; fi
-          python codeloom.py --pack "$TASK" . > /tmp/codeloom-brief.md 2>&1 || true
-      - name: Post the brief as a PR comment
+          MB=$(git merge-base "origin/${{ github.base_ref }}" HEAD 2>/dev/null || echo HEAD~1)
+          echo "revspec=${MB}..HEAD" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble codeloom review (deterministic)
+        run: |
+          python codeloom.py --context-diff "${{ github.event.pull_request.base.sha }}" HEAD \
+            > /tmp/codeloom-review.md 2>&1 || true
+          python codeloom.py --risk "${{ steps.base.outputs.revspec }}" \
+            >> /tmp/codeloom-review.md 2>&1 || true
+
+      - name: Post / update sticky summary comment
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            let brief = fs.readFileSync('/tmp/codeloom-brief.md', 'utf8');
-            if (brief.length > 60000) brief = brief.slice(0, 60000) + '\\n... (truncated)';
-            const body = '## codeloom task brief\\n\\n' + brief;
-            await github.rest.issues.createComment({
-              issue_number: context.issue.number,
+            const MARKER = '<!-- codeloom-pr-bot -->';
+            let body = fs.readFileSync('/tmp/codeloom-review.md', 'utf8');
+            const cap = 60000;
+            if (body.length > cap) body = body.slice(0, cap) + '\\n… (truncated)';
+            const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: body
+              issue_number: context.issue.number,
+              per_page: 100,
             });
+            const mine = comments.find(c => c.body && c.body.includes(MARKER));
+            if (mine) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: mine.id, body,
+              });
+              console.log(`updated existing summary ${mine.id}`);
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body,
+              });
+              console.log('created new summary comment');
+            }
+
+      - name: Hand off to Codex for LLM review pass
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `🪄 codeloom deterministic pass complete.\\n\\n`
+                + `@codex review — please run your LLM review now. The deterministic `
+                + `codeloom context (architecture diff + risk band) is posted above; `
+                + `focus on semantics, logic, and design.`,
+            });
+            console.log('handed off to codex');
 """
 
 def install_agents(root: str) -> str:
     """Write or update AGENTS.md with a codeloom instruction block, and write
-    the codeloom-map CI workflow (set-and-forget onboarding)."""
+    the codeloom PR-review CI workflow (set-and-forget onboarding)."""
     path = os.path.join(root, "AGENTS.md")
     block = AGENTS_BLOCK
     if os.path.isfile(path):
@@ -6667,8 +6761,8 @@ def install_agents(root: str) -> str:
         with open(path, "w", encoding="utf-8") as f:
             f.write(block)
         msg = f"created {path}"
-    # write the codeloom-map CI workflow (set-and-forget)
-    ci_path = os.path.join(root, ".github", "workflows", "codeloom-map.yml")
+    # write the codeloom PR-review CI workflow (set-and-forget)
+    ci_path = os.path.join(root, ".github", "workflows", "codeloom-pr-bot.yml")
     try:
         os.makedirs(os.path.dirname(ci_path), exist_ok=True)
         with open(ci_path, "w", encoding="utf-8") as f:
@@ -6959,7 +7053,7 @@ def build_resume(files: List[str], root: str, max_files: int) -> dict:
         "top_calls": top_calls,
     }
 
-def render_resume(files: List[str], root: str, max_files: int) -> str:
+def render_resume(files: List[str], root: str, max_files: int, full: bool = False) -> str:
     r = build_resume(files, root, max_files)
     buf = io.StringIO()
     buf.write(f"# codeloom --resume (compaction-survival context restore)\n")
@@ -6977,8 +7071,57 @@ def render_resume(files: List[str], root: str, max_files: int) -> str:
     buf.write("\n## Top call sites (what runs what)\n")
     for n, caller in r["top_calls"]:
         buf.write(f"  {caller} -> {n} callees\n")
+    # the decisions half of the flagship promise: the working-state ledger
+    # (goal, decisions, actions, open items, hot set) + persistent memory.
+    # --resume --full additionally folds in the full memory files so the
+    # restored context carries structure AND decisions either way.
+    ledger = render_memory_ledger(root, full=full)
+    if ledger:
+        buf.write("\n## Decisions / working state\n")
+        buf.write(ledger)
     buf.write("\n# Paste this after a context compaction to restore your structural\n"
-              "# model of the repo in one shot. Re-run `codeloom --resume` any time.\n")
+              "# model of the repo — and the decisions you made — in one shot.\n"
+              "# Re-run `codeloom --resume` any time.\n")
+    return buf.getvalue()
+
+def render_memory_ledger(root: str, full: bool = False) -> str:
+    """Render the decision/working-state ledger for --resume: journal events
+    (goal, decisions, actions, open items, hot set), persistent memory files
+    (.codeloom-memory/*), and the latest checkpoint. `full=True` additionally
+    includes the richer memory files (ARCHITECTURE, PATTERNS, CONVENTIONS,
+    SUPERSEDED) so --resume --full carries the whole memory layer. Pure read —
+    never creates directories or writes files."""
+    buf = io.StringIO()
+    events = journal_read(root)
+    if events or get_hot_set(root):
+        summary = build_layered_summary(root, include_structural=full)
+        buf.write(summary)
+        if not summary.endswith("\n"):
+            buf.write("\n")
+    mem = os.path.join(root, ".codeloom-memory")
+    if os.path.isdir(mem):
+        names = ["DECISIONS", "LESSONS"]
+        if full:
+            names += ["SUPERSEDED", "ARCHITECTURE", "PATTERNS", "CONVENTIONS"]
+        for name in names:
+            p = os.path.join(mem, name + ".md")
+            if os.path.isfile(p):
+                try:
+                    with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                        content = fh.read().strip()
+                    if content:
+                        buf.write(f"### {name}\n{content}\n\n")
+                except OSError:
+                    pass
+    cp = _checkpoint_path(root)
+    if os.path.isfile(cp):
+        try:
+            with open(cp, "r", encoding="utf-8", errors="replace") as fh:
+                cptxt = fh.read().strip()
+            if cptxt:
+                buf.write("### Last checkpoint\n" + cptxt[:2000] + "\n")
+        except OSError:
+            pass
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
@@ -7030,6 +7173,8 @@ def render_checkpoint(root: str, note: Optional[str] = None) -> str:
     if "No session" not in seen and "nothing" not in seen.lower():
         buf.write("## Already explored\n")
         buf.write(seen)
+    # journal a checkpoint event so the working-state Status reflects it
+    journal_append(root, "checkpoint", "checkpoint saved", body=note or "")
     # write it to disk
     try:
         with open(_checkpoint_path(root), "w", encoding="utf-8") as f:
@@ -7206,7 +7351,18 @@ def build_layered_summary(root: str, include_structural: bool = False) -> str:
     if hot:
         lines += ["## Hot Set (already deeply understood)"] + [f"- {x}" for x in sorted(hot)] + [""]
     if include_structural:
-        lines += ["## Structural Focus", "(the codeloom map for hot files is injected by --resume --full)", ""]
+        # single Structural Focus section (deduped — render_working_state no
+        # longer appends a second copy)
+        hot_files = [x for x in sorted(hot) if x.endswith(
+            (".py", ".js", ".ts", ".tsx", ".go", ".rs", ".java", ".rb",
+             ".c", ".h", ".cpp", ".cc", ".cs"))]
+        if hot_files:
+            lines += ["## Structural Focus",
+                      "(files already deeply understood — the code map hot set)"] \
+                     + [f"- {x}" for x in hot_files[:15]] + [""]
+        else:
+            lines += ["## Structural Focus",
+                      "(the codeloom map for hot files is injected by --resume --full)", ""]
     summary = "\n".join(lines)
     try:
         with open(os.path.join(_wm_dir(root), "summary.md"), "w", encoding="utf-8") as fh:
@@ -7216,12 +7372,22 @@ def build_layered_summary(root: str, include_structural: bool = False) -> str:
     return summary
 
 def render_working_state(root: str, full: bool = False) -> str:
-    """--resume --full path: layered packet + (optionally) structural focus."""
-    summary = build_layered_summary(root, include_structural=full)
-    if full:
-        # append a short structural focus of the hot set if any files are mapped
-        summary += "\n## Structural Focus\n(re-run `codeloom --resume` or `codeloom --focus <hot-file>` for the code map.)\n"
-    return summary
+    """--working-state: the layered packet (goal, status, decisions, actions,
+    open items, hot set). full=True adds exactly one Structural Focus section.
+    Also the --resume --full path — a single source of truth after compaction."""
+    return build_layered_summary(root, include_structural=full)
+
+def wm_goal(root: str, goal: str) -> str:
+    """Record the session goal into the working journal (and GOALS.md)."""
+    _wm_dir(root); _wm_gitignore(root)
+    journal_append(root, "goal", goal)
+    md = os.path.join(_memory_dir(root), "GOALS.md")
+    try:
+        with open(md, "a", encoding="utf-8") as fh:
+            fh.write(f"- {goal}\n")
+    except OSError:
+        pass
+    return f"recorded goal: {goal}"
 
 def wm_decide(root: str, title: str, reason: str = "", status: str = "accepted") -> str:
     """Record a decision (or rejection) into the journal + persistent decisions.md."""
@@ -7331,9 +7497,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--list-decisions", action="store_true", help="list recorded decisions")
     p.add_argument("--list-open", action="store_true", help="list open items/hypotheses")
     p.add_argument("--lesson", metavar="TEXT", help="record a lesson/trap: something tried and why it failed")
+    p.add_argument("--lessons", dest="lesson", metavar="TEXT", help="alias for --lesson (README documents --lessons)")
     p.add_argument("--supersede", nargs=2, metavar=("OLD", "NEW"), help="mark decision OLD as superseded by NEW")
     p.add_argument("--query-memory", metavar="QUERY", help="search long-term memory for 'what do we already know about X'")
-    p.add_argument("--mark-seen", nargs="+", metavar="ITEM", help="mark files/symbols as already understood (hot set)")
+    p.add_argument("--mark-seen", nargs="+", metavar="ITEM", help="mark files/symbols as already understood (hot set); a trailing positional is treated as the repo root")
+    p.add_argument("--goal", metavar="TEXT", help="record the session goal (shown by --working-state and --resume)")
     p.add_argument("--working-state", action="store_true", help="emit the layered working-state packet (goal, decisions, actions, open items, hot set)")
     p.add_argument("--adr", metavar="TITLE", help="write an Architectural Decision Record (use --context and --decision)")
     p.add_argument("--context", metavar="TEXT", help="context for --adr")
@@ -7363,7 +7531,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--similar", metavar="SYMBOL", help="find structurally similar functions/classes (refactoring)")
     p.add_argument("--deadcode", action="store_true", help="find functions defined but never called")
     p.add_argument("--get-symbol", metavar="SYMBOL", help="token-counted symbol snippet (byte offsets + token estimate)")
-    p.add_argument("--summary", action="store_true", help="summary-first retrieval (signature+docstring+call graph, not full source)")
     p.add_argument("--full", action="store_true", help="with --get-symbol, return the full source (default is summary)")
     p.add_argument("--snippet", nargs=3, metavar=("PATH", "START", "END"), help="extract a byte-range snippet from a file")
     p.add_argument("--incremental", action="store_true", help="show files changed since last run (hash-based cache)")
@@ -7418,8 +7585,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     # --auto-grammars: beat-the-tradeoff — scan repo, install grammars for its langs
+    # (explicit opt-in flag: force=True so the env default of 0 does not block it)
     if args.auto_grammars:
-        print(_ensure_grammars_for_root(root))
+        print(_ensure_grammars_for_root(root, force=True))
         return 0
 
     # --index-status: show persistent index status
@@ -7810,6 +7978,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # --verify: checksum for security
     if args.verify:
         print(render_verify(args.verify))
+        if not sha256_file(args.verify):
+            return 1  # missing/unreadable file must exit non-zero
         return 0
 
     # --snippet: byte-range extraction
@@ -8039,7 +8209,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
     # --impact / --task / --plan / --pack: task-aware intelligence
-    if args.impact or args.task or args.plan or args.pack or args.cognitive_load or args.check_edit or args.check_delete or args.resume or args.loom or args.remember or args.checkpoint is not None or args.checkpoint_restore or args.adr or args.adr_list or args.decide or args.reject or args.hypothesis or args.list_decisions or args.list_open or args.mark_seen or args.working_state or args.lesson or args.supersede or args.query_memory:
+    if args.impact or args.task or args.plan or args.pack or args.cognitive_load or args.check_edit or args.check_delete or args.resume or args.loom or args.remember or args.checkpoint is not None or args.checkpoint_restore or args.adr or args.adr_list or args.decide or args.reject or args.hypothesis or args.list_decisions or args.list_open or args.mark_seen or args.working_state or args.lesson or args.supersede or args.query_memory or args.goal:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
@@ -8078,6 +8248,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(preflight_check(files, root, args.check_delete, "delete"))
             return 0
 
+        # --checkpoint is checked BEFORE --task/--impact/--plan/--pack so the
+        # documented combo `--checkpoint --task fix login bug` writes the
+        # checkpoint file even when a task string is also passed.
+        if args.checkpoint is not None:
+            note = args.checkpoint or ""
+            if args.task:
+                note = (note + " " if note else "") + args.task
+            print(render_checkpoint(root, note or None))
+            return 0
+
         if args.task:
             print(render_task(files, root, args.task))
             return 0
@@ -8095,15 +8275,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
         if args.resume:
-            print(render_resume(files, root, args.max_files))
+            print(render_resume(files, root, args.max_files, full=args.full))
             return 0
 
         if args.checkpoint_restore:
             print(render_checkpoint_restore(root))
-            return 0
-
-        if args.checkpoint is not None:
-            print(render_checkpoint(root, args.checkpoint or None))
             return 0
 
         if args.loom:
@@ -8112,6 +8288,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.remember:
             print(memory_remember(root, args.section, args.remember))
+            return 0
+
+        if args.goal:
+            print(wm_goal(root, args.goal))
             return 0
 
         if args.decide:
@@ -8147,7 +8327,19 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
         if args.mark_seen:
-            print(journal_mark_seen(root, args.mark_seen))
+            items = list(args.mark_seen)
+            mr_root = root
+            # positional-ambiguity fix: a trailing positional that resolves to
+            # an existing directory is treated as the repo root, not as a seen
+            # item — so `--mark-seen core/auth.py <repo>` journals into <repo>
+            # instead of the CWD.
+            if len(items) > 1:
+                cand = items[-1]
+                cand_abs = os.path.abspath(cand) if not os.path.isabs(cand) else cand
+                if os.path.isdir(cand_abs):
+                    mr_root = cand_abs
+                    items = items[:-1]
+            print(journal_mark_seen(mr_root, items))
             return 0
 
         if args.working_state:

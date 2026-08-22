@@ -33,7 +33,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.76.0"
+SERVER_VERSION = "0.77.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -600,7 +600,7 @@ TOOLS: List[Dict[str, Any]] = [
         "description": (
             "Single natural-language entry point. Ask in plain English and "
             "codeloom routes deterministically to the right tool — the agent "
-            "never has to pick among 22 tools. Examples: 'what matters for "
+            "never has to pick among 77 tools. Examples: 'what matters for "
             "fixing the login bug', 'what breaks if I change auth.py', 'where "
             "is the Agent class', 'what calls what across files', 'give me the "
             "whole context for adding retry'. This eliminates tool-routing "
@@ -856,24 +856,6 @@ TOOLS: List[Dict[str, Any]] = [
                 "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["old", "new"],
-        },
-    },
-    {
-        "name": "codeloom_ask",
-        "description": (
-            "One-shot complete task brief: layered context (overview -> important "
-            "files -> embedded code -> git -> memory) PLUS blast radius (what "
-            "breaks) PLUS a concrete files-to-touch checklist. The 'just tell me "
-            "what to do' call for an agent on a task."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
-                "task": {"type": "string", "description": "The task, in plain language"},
-                "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
-            },
-            "required": ["task"],
         },
     },
     {
@@ -1492,7 +1474,7 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
     always returns the map + task relevance — never an error. Even an ambiguous
     query yields something the agent can act on, so a 'wrong' pick is still
     helpful. This is the answer to jcodemunch's 91-tool routing problem: the
-    agent never picks among 23 tools, and codeloom never returns nothing."""
+    agent never picks among 77 tools, and codeloom never returns nothing."""
     q = (args.get("query") or "").strip().lower()
     if not q:
         # empty query -> still return the map (never an error)
@@ -1683,7 +1665,7 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     files = _collect_files(root, max_files)
 
     # codeloom_ask: single natural-language entry point that routes
-    # deterministically — the agent never has to pick among 22 tools.
+    # deterministically — the agent never has to pick among 77 tools.
     if name == "codeloom_ask":
         return _route_ask(args, root, max_files)
 
@@ -1718,12 +1700,6 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'old'/'new' arguments"}]}
         f = _collect_files(root, max_files)
         text = codeloom.render_rename(f, root, old, new)
-    elif name == "codeloom_ask":
-        task = args.get("task")
-        if not task:
-            return {"isError": True, "content": [{"type": "text", "text": "missing 'task' argument"}]}
-        f = _collect_files(root, max_files)
-        text = codeloom.render_ask(f, root, task, max_files)
     elif name == "codeloom_bug_predict":
         f = _collect_files(root, max_files)
         text = codeloom.render_bug_predict(f, root)
@@ -1780,78 +1756,78 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     elif name == "codeloom_session_report":
         return {"content": [{"type": "text", "text": codeloom.render_session_report(root)}]}
 
-    if name == "codeloom_watch":
+    elif name == "codeloom_watch":
         text = codeloom.refresh_index_incremental(root, max_files)
 
-    if name == "codeloom_resume":
+    elif name == "codeloom_resume":
         f = _collect_files(root, max_files)
         text = codeloom.render_resume(f, root, max_files)
 
-    if name == "codeloom_checkpoint":
+    elif name == "codeloom_checkpoint":
         note = args.get("note")
         text = codeloom.render_checkpoint(root, note)
 
-    if name == "codeloom_checkpoint_restore":
+    elif name == "codeloom_checkpoint_restore":
         text = codeloom.render_checkpoint_restore(root)
 
-    if name == "codeloom_get_working_state":
+    elif name == "codeloom_get_working_state":
         text = codeloom.render_working_state(root, full=True)
 
-    if name == "codeloom_record_decision":
+    elif name == "codeloom_record_decision":
         title = args.get("title")
         if not title:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'title' argument"}]}
         text = codeloom.wm_decide(root, title, args.get("reason", ""), args.get("status", "accepted"))
 
-    if name == "codeloom_record_hypothesis":
+    elif name == "codeloom_record_hypothesis":
         title = args.get("title")
         if not title:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'title' argument"}]}
         text = codeloom.wm_hypothesis(root, title, "open")
 
-    if name == "codeloom_mark_seen":
+    elif name == "codeloom_mark_seen":
         items = args.get("items") or []
         if not items:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'items' argument"}]}
         text = codeloom.journal_mark_seen(root, items)
 
-    if name == "codeloom_list_open_items":
+    elif name == "codeloom_list_open_items":
         text = codeloom.list_open_items(root)
 
-    if name == "codeloom_record_lesson":
+    elif name == "codeloom_record_lesson":
         lesson = args.get("lesson")
         if not lesson:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'lesson' argument"}]}
         text = codeloom.memory_lesson(root, lesson)
 
-    if name == "codeloom_query_memory":
+    elif name == "codeloom_query_memory":
         q = args.get("query")
         if not q:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'query' argument"}]}
         text = codeloom.memory_query(root, q)
 
-    if name == "codeloom_cognitive_load":
+    elif name == "codeloom_cognitive_load":
         topic = args.get("topic")
         if not topic:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'topic' argument"}]}
         f = _collect_files(root, max_files)
         text = codeloom.render_cognitive_load(f, root, topic)
 
-    if name == "codeloom_loom":
+    elif name == "codeloom_loom":
         task = args.get("task")
         if not task:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'task' argument"}]}
         f = _collect_files(root, max_files)
         text = codeloom.render_loom_context(f, root, task, max_files)
 
-    if name == "codeloom_remember":
+    elif name == "codeloom_remember":
         note = args.get("note")
         section = args.get("section", "DECISIONS")
         if not note:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'note' argument"}]}
         text = codeloom.memory_remember(root, section, note)
 
-    if name == "codeloom_adr":
+    elif name == "codeloom_adr":
         title = args.get("title")
         decision = args.get("decision")
         if not title or not decision:
@@ -1859,30 +1835,30 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         text = codeloom.render_adr(root, title, args.get("context", ""), decision,
                                    args.get("status", "Accepted"))
 
-    if name == "codeloom_adr_list":
+    elif name == "codeloom_adr_list":
         text = codeloom.render_adr_list(root)
 
-    if name == "codeloom_churn":
+    elif name == "codeloom_churn":
         f = _collect_files(root, max_files)
         text = codeloom.git_churn(root, f)
 
-    if name == "codeloom_hybrid_search":
+    elif name == "codeloom_hybrid_search":
         query = args.get("query")
         if not query:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'query' argument"}]}
         f = _collect_files(root, max_files)
         text = codeloom.render_hybrid_search(f, root, query)
 
-    if name == "codeloom_seen":
+    elif name == "codeloom_seen":
         text = codeloom.render_seen(root)
 
-    if name == "codeloom_cross_repo":
+    elif name == "codeloom_cross_repo":
         repos = args.get("repos", [])
         if not repos:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'repos' argument"}]}
         text = codeloom.render_cross_repo(repos, max_files)
 
-    if name == "codeloom_map":
+    elif name == "codeloom_map":
         m = codeloom.build_map(root, True, max_files)
         text = codeloom.render_text(m)
     elif name == "codeloom_graph":
