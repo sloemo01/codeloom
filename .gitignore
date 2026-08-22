@@ -8,6 +8,7 @@ demo-repo/
 frames_*.png
 build/
 # codeloom runtime artifacts (generated, never committed)
+.codeloom/
 .codeloom-index.*
 .codeloom-embeds.json
 .codeloom-checkpoint.md

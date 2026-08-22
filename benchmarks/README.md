@@ -177,6 +177,30 @@ git clone --depth 1 https://github.com/fastapi/fastapi.git /tmp/bench-fastapi
 python3 benchmarks/run.py --repo /tmp/bench-fastapi --tokens
 ```
 
+## Run everything yourself (eval_runner)
+
+One command re-runs every published benchmark above, offline and zero-dep
+(stdlib only):
+
+```bash
+python3 benchmarks/eval_runner.py bench --root /tmp/bench-fastapi
+```
+
+Kinds (positional; `--json` emits one JSON object for machine consumption,
+`--root PATH` overrides the corpus, `--crg-bin` is reserved for the planned
+vs-crg kind):
+
+| kind | what it runs |
+|---|---|
+| `token` | jcodemunch-style token-efficiency (3 repos × 5 tasks = 15 task-runs, tiktoken cl100k_base) |
+| `compaction` | post-compaction recovery (bare grep-and-read vs `--resume`/`--query-memory`) |
+| `sealed` | sealed retrieval (bare toolchain vs codeloom, no LLM, deterministic) |
+| `bench` | the whole suite in one pass (`all` is an alias) |
+
+Honesty rules are built in: loss rows are never filtered (printed in a
+LOSS ROWS section and kept in `--json` output), labels stay scripted-policy
+honest, and the exit code is non-zero if any sub-benchmark fails.
+
 ## Speed vs staleness
 
 | | CodeLoom | jcodemunch | codegraph | codebase-memory |

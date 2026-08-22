@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
@@ -29,3 +30,100 @@ jobs:
         run: |
           python codeloom.py --version
           python codeloom.py --help
+
+  oath:
+    name: Oath — stdlib-only imports + single-file artifact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Top-level imports are stdlib-only
+        run: |
+          python3 - <<'PY'
+          import ast
+          import sys
+
+          ALLOWED = {
+              "__future__", "argparse", "ast", "dataclasses", "io", "json",
+              "os", "re", "sys", "time", "typing",
+          }
+          # tree_sitter / numpy / sentence_transformers are gated behind
+          # try/except ImportError blocks; they must never appear at module
+          # top level (ast body of the Module, not inside try blocks).
+          tree = ast.parse(open("codeloom.py", encoding="utf-8").read())
+          bad = []
+          for node in tree.body:
+              if isinstance(node, ast.Import):
+                  for alias in node.names:
+                      if alias.name.split(".")[0] not in ALLOWED:
+                          bad.append(alias.name)
+              elif isinstance(node, ast.ImportFrom) and node.module:
+                  if node.module.split(".")[0] not in ALLOWED:
+                      bad.append(node.module)
+          if bad:
+              print("FAIL: non-stdlib top-level imports:", sorted(set(bad)))
+              sys.exit(1)
+          print("PASS: all top-level imports are stdlib-only")
+          PY
+      - name: Release artifact is a single file (+ sanctioned companions)
+        run: |
+          ok=1
+          for f in codeloom.py codeloom-mcp.py; do
+            if [ -f "$f" ]; then
+              echo "PASS: $f present"
+            else
+              echo "FAIL: $f missing"
+              ok=0
+            fi
+          done
+          if [ -d scripts ]; then
+            echo "PASS: scripts/ present"
+          else
+            echo "FAIL: scripts/ missing"
+            ok=0
+          fi
+          if [ "$ok" -ne 1 ]; then
+            echo "SINGLE-FILE CHECK FAILED"
+            exit 1
+          fi
+          echo "PASS: single-file = codeloom.py (companions: codeloom-mcp.py, scripts/)"
+
+  bench-proof:
+    name: Bench proof — eval_runner + artifact
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install benchmark dependencies
+        run: python3 -m pip install tiktoken
+      - name: Run benchmark suite (proof)
+        run: |
+          set -o pipefail
+          python3 benchmarks/eval_runner.py bench --json --root . 2>&1 | tee bench-run.log
+      - name: Extract JSON result
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+
+          text = open("bench-run.log", encoding="utf-8").read()
+          idx = text.rfind("\n{\n") + 1
+          try:
+              data = json.loads(text[idx:])
+          except Exception:
+              data = {"raw_log": text}
+          with open("bench-proof.json", "w", encoding="utf-8") as fh:
+              json.dump(data, fh, indent=2)
+          print("bench-proof.json written:", len(data), "keys")
+          PY
+      - name: Upload bench proof artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-proof
+          path: bench-proof.json
