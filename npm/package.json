@@ -1,0 +1,33 @@
+{
+  "name": "codeloom",
+  "version": "0.79.0",
+  "description": "A map of your repo for AI agents. One file, zero dependencies, no daemon, 100% local. npm wrapper for the Python single-file tool + MCP server.",
+  "license": "MIT",
+  "keywords": ["mcp", "ai", "agent", "codebase", "context", "compaction", "memory", "llm", "repo-map"],
+  "bin": {
+    "codeloom": "bin/codeloom.js",
+    "codeloom-mcp": "bin/codeloom-mcp.js"
+  },
+  "files": [
+    "bin",
+    "codeloom.py",
+    "codeloom-mcp.py",
+    "codeloom_mcp.py",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "scripts": {
+    "prepack": "bash sync.sh"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sloemo01/codeloom.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sloemo01/codeloom/issues"
+  },
+  "homepage": "https://github.com/sloemo01/codeloom"
+}
