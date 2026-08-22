@@ -73,6 +73,7 @@ jobs:
               await github.rest.pulls.createReview({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
+                pull_number: context.issue.number,
                 event: 'COMMENT',
                 body: 'codeloom deterministic review',
                 comments,
