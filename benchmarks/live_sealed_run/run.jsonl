@@ -1,13 +1,13 @@
-{"mode": "bare", "question": "Where is the File parameter class defined?", "truth": "fastapi/params.py", "found_answer_file": false, "calls": 3, "bytes": 20584, "tokens_est": 559}
-{"mode": "bare", "question": "Where is the HTTPException class defined?", "truth": "fastapi/exceptions.py", "found_answer_file": false, "calls": 3, "bytes": 23307, "tokens_est": 1511}
+{"mode": "bare", "question": "Where is the File parameter class defined?", "truth": "fastapi/params.py", "found_answer_file": false, "calls": 3, "bytes": 20588, "tokens_est": 574}
+{"mode": "bare", "question": "Where is the HTTPException class defined?", "truth": "fastapi/exceptions.py", "found_answer_file": false, "calls": 3, "bytes": 18228, "tokens_est": 602}
 {"mode": "bare", "question": "Where is the FastAPI application class defined?", "truth": "fastapi/applications.py", "found_answer_file": false, "calls": 3, "bytes": 246914, "tokens_est": 664}
-{"mode": "bare", "question": "Which module defines the APIRouter class?", "truth": "fastapi/routing.py", "found_answer_file": true, "calls": 3, "bytes": 20462, "tokens_est": 635}
-{"mode": "bare", "question": "Where is the Depends function defined?", "truth": "fastapi/params.py", "found_answer_file": false, "calls": 3, "bytes": 60008, "tokens_est": 654}
+{"mode": "bare", "question": "Which module defines the APIRouter class?", "truth": "fastapi/routing.py", "found_answer_file": true, "calls": 3, "bytes": 21347, "tokens_est": 777}
+{"mode": "bare", "question": "Where is the Depends function defined?", "truth": "fastapi/params.py", "found_answer_file": false, "calls": 3, "bytes": 64954, "tokens_est": 1539}
 {"mode": "bare", "question": "Where are the HTTP status codes defined?", "truth": "fastapi/status.py", "found_answer_file": false, "calls": 2, "bytes": 0, "tokens_est": 2}
 {"mode": "bare", "question": "What is the entry point of the fastapi command-line tool?", "truth": "fastapi/cli.py", "found_answer_file": false, "calls": 3, "bytes": 2962, "tokens_est": 730}
-{"mode": "bare", "question": "Where is the UploadFile class defined?", "truth": "fastapi/datastructures.py", "found_answer_file": true, "calls": 3, "bytes": 8688, "tokens_est": 640}
-{"mode": "bare", "question": "Where is the Request class defined?", "truth": "fastapi/requests.py", "found_answer_file": false, "calls": 3, "bytes": 17763, "tokens_est": 610}
-{"mode": "bare", "question": "Where is the JSONResponse class defined?", "truth": "fastapi/responses.py", "found_answer_file": true, "calls": 3, "bytes": 10270, "tokens_est": 597}
+{"mode": "bare", "question": "Where is the UploadFile class defined?", "truth": "fastapi/datastructures.py", "found_answer_file": true, "calls": 3, "bytes": 8684, "tokens_est": 634}
+{"mode": "bare", "question": "Where is the Request class defined?", "truth": "fastapi/requests.py", "found_answer_file": false, "calls": 3, "bytes": 17476, "tokens_est": 539}
+{"mode": "bare", "question": "Where is the JSONResponse class defined?", "truth": "fastapi/responses.py", "found_answer_file": true, "calls": 3, "bytes": 10270, "tokens_est": 595}
 {"mode": "codeloom", "question": "Where is the File parameter class defined?", "truth": "fastapi/params.py", "found_answer_file": false, "calls": 1, "bytes": 212, "tokens_est": 59}
 {"mode": "codeloom", "question": "Where is the HTTPException class defined?", "truth": "fastapi/exceptions.py", "found_answer_file": true, "calls": 1, "bytes": 200, "tokens_est": 56}
 {"mode": "codeloom", "question": "Where is the FastAPI application class defined?", "truth": "fastapi/applications.py", "found_answer_file": true, "calls": 1, "bytes": 203, "tokens_est": 58}

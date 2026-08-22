@@ -1,11 +1,13 @@
 # CodeLoom benchmarks
 
 Honest, reproducible numbers comparing CodeLoom to the heavyweight competitors
-(jcodemunch, codegraph, codebase-memory-mcp, code-review-graph). The point is not
+(code-review-graph, code-context-engine, claude-context, codeseek, jcodemunch,
+codegraph, codebase-memory-mcp, repowise). The point is not
 "CodeLoom is faster at everything" — it's that CodeLoom wins decisively on the
 axis that matters for everyday agent work: **token-efficient, task-oriented
 retrieval with zero setup and always-fresh context**, plus Linux-kernel-class
-index speed (~91s vs their ~3 min), and — uniquely — **measured compaction
+index speed (C-engine full graph ~89–113s vs their ~3 min), and — uniquely —
+**measured compaction
 recovery** (nobody else publishes a number here).
 
 ## Compaction recovery (the differentiator — measured 2026-08-22)
@@ -16,10 +18,10 @@ restores both the structural map and the decision ledger via `--resume`.
 
 | path | calls | KB | tokens (est) |
 |---|---|---|---|
-| **bare re-derive** (10 questions, fastapi) | **33** | **141.6** | **36,257** |
-| **codeloom** (`--resume` + `--query-memory`) | **2** | **3.0** | **777** |
+| **bare re-derive** (10 questions, fastapi) | **33** | **84.5** | **21,636** |
+| **codeloom** (`--resume` + `--query-memory`) | **2** | **3.8** | **985** |
 
-**97.9% fewer tokens, 16.5× fewer calls** to reach "ready to continue working"
+**95.4% fewer tokens, 16.5× fewer calls** to reach "ready to continue working"
 after a compaction. Scripted policy simulation (same caveat as bench/RESULTS.md
 — not a live-agent run); reproduce with:
 
@@ -48,7 +50,7 @@ answer lives? No LLM anywhere — fully reproducible offline.
 
 | toolchain | found | calls | tokens (est, cl100k_base) |
 |---|---|---|---|
-| **bare** | 3/10 | **29** | **6,602** |
+| **bare** | 3/10 | **29** | **6,656** |
 | **codeloom** | 4/10 | **10** | **731** |
 
 **The honest read:** codeloom finds answers with **2.9× fewer calls and
@@ -73,10 +75,10 @@ retrieval tokens (tiktoken cl100k_base):
 
 | symbol | codeloom | crg | winner |
 |---|---|---|---|
-| `Body` | 13 | 428 | codeloom (33×) |
-| `Cookie` | 13 | 440 | codeloom (34×) |
-| `File` | 13 | 462 | codeloom (36×) |
-| `Header` | 20 | 485 | codeloom (24×) |
+| `Body` | 10 | 428 | codeloom (43×) |
+| `Cookie` | 10 | 440 | codeloom (44×) |
+| `File` | 10 | 462 | codeloom (46×) |
+| `Header` | 9 | 485 | codeloom (54×) |
 
 **The honest caveat:** codeloom returns a summary (signature + docstring + call
 graph) by default; crg returns FTS JSON with file paths + line ranges and needs
@@ -89,19 +91,26 @@ tokens vs codeloom `--pack`'s 1,625 — because `--pack` embeds the actual
 crg's is a pointer card with graph stats and suggested tools. Different
 contracts: theirs is "orient the agent", ours is "hand the agent the code".
 
-**Setup-to-first-answer (the axis crg doesn't publish):**
+**Setup-to-first-answer (measured wall clock on the same fastapi clone):**
 
 | | codeloom | crg |
 |---|---|---|
-| Install | 0 (one stdlib file) | pip: 41s, **78 packages** |
-| Index | `--index`: 3MB disk | build: 4s → **42MB** `.code-review-graph/` |
-| First query | 3.0s cold / **0.105s warm** | 0.14s (after build) |
+| Install | 0 (one stdlib file) | pip: 8.6s, **75 packages** (fresh venv) |
+| Index | `--index`: 5.1s → 2.0MB `.codeloom-index.json` | build: 3.9s → **42.6MB** `.code-review-graph/` |
+| First query | 3.23s cold (`--answer`, no index) / **0.13s warm** (`--get-symbol` after `--index`) | 0.18s (after build) |
 | Semantic search | zero-dep subword hash, offline | `pip install code-review-graph[embeddings]` (sentence-transformers ~2GB) **or cloud API key** |
-| Background process | none | `crg-daemon`: 1 proc, 16MB RSS, TOML watch config |
-| MCP surface | 78 tools + `codeloom_ask` NL router | **30 tools, no router** (counted live via MCP handshake) |
+| Background process | none | `crg-daemon`: 1 proc, 16.3MB RSS, TOML watch config |
+| MCP surface | **77 tools + `codeloom_ask` NL router** (counted live via MCP handshake) | 30 tools, no router |
+
+The honest caveat on timing: codeloom's `--answer` hybrid search walks the
+tree on every call (~3.2s on fastapi, cold or warm) — its fast path is
+`--get-symbol`/`--search`, which load the persistent index in ~0.13s. crg is
+index-first: it pays 3.9s up front (and 8.6s to install 75 packages), then
+queries in ~0.18s. Two different trade-offs — codeloom is zero-setup and
+always-fresh, crg amortizes a graph build.
 
 The daemon is honest work — but it's the difference between "copy one file" and
-"pip install 78 packages + build a graph + run a daemon + configure embeddings".
+"pip install 75 packages + build a graph + run a daemon + configure embeddings".
 
 ## Scale / hardware scaling (Linux kernel)
 
@@ -111,23 +120,22 @@ The daemon is honest work — but it's the difference between "copy one file" an
 
 ## Token savings (vs grep-and-read baseline)
 
-Measured on the same repos jcodemunch benchmarks against. `--get-symbol` is
-summary-first by default (signature + docstring + call graph, not full source).
+`benchmarks/run.py --tokens` measures on a repo: baseline = grep for the term
+then open matching files whole (tiktoken cl100k_base); codeloom = one
+`--get-symbol` call. Measured on fastapi (query set: `Agent`, `click`,
+`extract` — the fastapi clone has no `Agent`/`click`/`extract` symbols, so
+codeloom returns a short not-found answer while the baseline still reads the
+matching files):
 
-| repo | symbols found | baseline (grep+read) | codeloom | savings |
-|---|---|---|---|---|
-| **fastapi** | 5/5 | 665,765 | 7,465 | **98.9%** |
-| **express** | 4/4 | 17,806 | ~210 | **98.8%** |
-| **gin** | 4/4 | 2,227 | ~93 | **95.8%** |
+| query | baseline (grep+read) | codeloom | savings |
+|---|---|---|---|
+| `Agent` | 3,997 | 30 | 99.2% |
+| `click` | 3,997 | 30 | 99.2% |
+| `extract` | 3,654 | 30 | 99.2% |
 
-Every queried symbol now resolves on all three repos (the earlier partial
-resolution was a bug — non-Python symbols lacked the `path` key and
-assignment-style JS methods like `res.append = function append(...)` were
-missed. Both are fixed). The `as` symbol on express was a bad query — it's a
-JS keyword, not a real symbol.
-
-**The honest headline: 95.8–98.9% token savings on all three repos** — a real,
-reproducible result now that codeloom resolves every queried symbol.
+For per-symbol retrieval on real symbols, see the 15-task-run table below
+(98.8% overall on express/fastapi/gin) — that is the apples-to-apples
+jcodemunch-style benchmark.
 
 ## Side-by-side: codeloom vs jcodemunch (same repo, same symbols)
 
@@ -145,10 +153,10 @@ Measured on fastapi (329 files):
 
 | symbol | codeloom | jcodemunch | codeloom wins |
 |---|---|---|---|
-| `Body` | 13 | 89 | YES |
-| `Cookie` | 13 | 810 | YES |
-| `File` | 13 | 821 | YES |
-| `Header` | 5 | 95 | YES |
+| `Body` | 10 | 92 | YES |
+| `Cookie` | 10 | 813 | YES |
+| `File` | 10 | n/a (no clean match) | — |
+| `Header` | 9 | 98 | YES |
 
 **The honest caveat:** this measures *retrieval tokens* — codeloom returns a
 summary (signature + docstring + call graph) by default, while jcodemunch's
@@ -156,8 +164,8 @@ summary (signature + docstring + call graph) by default, while jcodemunch's
 by design: summary-first is the whole point. The tradeoff is that jcodemunch
 gives you the complete source in one call, while codeloom gives you the summary
 and you opt into `--full` when you need the implementation. Some symbols
-(`Depends`) were excluded because jcodemunch's fuzzy search didn't return a
-clean match — we only report symbols both tools resolved.
+(`File`, `Depends`) were excluded because jcodemunch's fuzzy search didn't
+return a clean match — we only report symbols both tools resolved.
 
 ## How to reproduce
 
@@ -195,17 +203,17 @@ reduction vs traditional grep-and-read, encoded with **tiktoken cl100k_base**
 (the standard used by Claude and GPT-4 — the same encoder jcodemunch uses).
 
 ```bash
-python3 benchmarks/token_efficiency.py
+python3 benchmarks/token_efficiency.py   # auto-clones the 3 repos into /tmp if missing
 ```
 
-Result — **15/15 task-runs, 97.9% overall token reduction**:
+Result — **15/15 task-runs, 98.8% overall token reduction**:
 
 | repo | baseline | codeloom | savings |
 |---|---|---|---|
 | express | 13,871t | 306t | 97.8% |
-| fastapi | 28,775t | 987t | 96.6% |
+| fastapi | 28,775t | 237t | 99.2% |
 | gin | 39,461t | 438t | 98.9% |
-| **TOTAL** | **82,107t** | **1,731t** | **97.9%** |
+| **TOTAL** | **82,107t** | **981t** | **98.8%** |
 
 **This beats jcodemunch's claimed range of 95.0–96.4%** on the same repos, same
 baseline, same tokenizer. Summary-first retrieval (signature + docstring +
@@ -226,7 +234,7 @@ python3 benchmarks/load_once.py --repo /path/to/repo --task "fix the login bug"
 Result on fastapi (`fix the login bug`):
 
 ```
-brief size: 6622 chars, ~1655 tokens
+brief size: 6164 chars, ~1541 tokens
 embedded code blocks: 10
 oversized-symbol pointers (--full): 10
 RESULT: PASS — the brief embeds the task's core code and only points to

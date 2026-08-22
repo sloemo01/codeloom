@@ -10,6 +10,7 @@ present replay numbers as agent-token savings.
 Usage: python3 bench/run_bench.py <repo_root> [questions.jsonl]
 Writes bench/RESULTS.md with wins AND loss rows.
 """
+import datetime
 import json
 import os
 import subprocess
@@ -77,6 +78,9 @@ def bare_arm(root, question):
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else REPO
     qfile = sys.argv[2] if len(sys.argv) > 2 else None
+    if not os.path.isdir(root):
+        sys.exit("ERROR: repo root does not exist: %r (usage: %s <repo_root> [questions.jsonl])"
+                 % (root, sys.argv[0]))
     questions = DEFAULT_QUESTIONS
     if qfile and os.path.isfile(qfile):
         with open(qfile, encoding="utf-8") as f:
@@ -106,8 +110,11 @@ def main():
         "> protocol described in TECHNICAL_REPORT.md §7. Never cite these as",
         "> agent-token savings.",
         "",
-        "Repo: `%s` · %d questions · %d codeloom wins / %d bare wins / %d ties"
-        % (os.path.abspath(root), len(rows), win_c, win_b, tie),
+        ("Repo: `%s` · %d questions · %d codeloom wins / %d bare wins / %d ties"
+         % (os.path.abspath(root), len(rows), win_c, win_b, tie)),
+        "",
+        "Generated %s by `python3 bench/run_bench.py <repo_root>` — re-run to reproduce."
+        % datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "",
         "| question | codeloom calls | codeloom bytes | bare calls | bare bytes | winner |",
         "|---|---|---|---|---|---|",

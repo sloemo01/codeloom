@@ -8,6 +8,10 @@ Reproduces jcodemunch's official benchmark structure:
 
 Usage:
     python3 benchmarks/token_efficiency.py
+
+Clones the three canonical repos (expressjs/express, fastapi/fastapi,
+gin-gonic/gin) into /tmp on first run if they are missing — the documented
+command works end-to-end with no manual setup.
 """
 import os
 import re
@@ -27,17 +31,37 @@ LOOM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "codeloom.
 REPOS = {
     "express": {
         "path": "/tmp/bench-express",
+        "url": "https://github.com/expressjs/express.git",
         "symbols": ["View", "acceptParams", "append", "all", "accepts"],
     },
     "fastapi": {
         "path": "/tmp/bench-fastapi",
+        "url": "https://github.com/fastapi/fastapi.git",
         "symbols": ["Body", "Cookie", "File", "Header", "Depends"],
     },
     "gin": {
         "path": "/tmp/bench-gin",
+        "url": "https://github.com/gin-gonic/gin.git",
         "symbols": ["Abort", "AddParam", "Engine", "Default", "New"],
     },
 }
+
+SHALLOW = ["--depth", "1"]
+
+
+def ensure_repo(name, cfg):
+    """Clone the repo if missing so `python3 benchmarks/token_efficiency.py`
+    works end-to-end. The fastapi clone is shared with the other benchmarks
+    (compaction_recovery, harness, vs_crg), so a pre-existing checkout at the
+    same path is reused as-is."""
+    path = cfg["path"]
+    if os.path.isdir(os.path.join(path, ".git")):
+        print(f"[setup] {name}: using existing checkout at {path}")
+        return path
+    print(f"[setup] {name}: cloning {cfg['url']} -> {path} ...")
+    subprocess.run(["git", "clone", "-q", *SHALLOW, cfg["url"], path], check=True)
+    print(f"[setup] {name}: cloned.")
+    return path
 
 
 def tk(text):
@@ -82,10 +106,11 @@ def main():
     total_base = 0
     total_loom = 0
     for repo, cfg in REPOS.items():
-        print(f"=== {repo} ===")
+        path = ensure_repo(repo, cfg)
+        print(f"=== {repo} ({path}) ===")
         for sym in cfg["symbols"]:
-            baseline = grep_read_baseline(cfg["path"], sym)
-            loom = codeloom_tokens(cfg["path"], sym)
+            baseline = grep_read_baseline(path, sym)
+            loom = codeloom_tokens(path, sym)
             pct = (1 - loom / max(baseline, 1)) * 100
             rows.append((repo, sym, baseline, loom, pct))
             total_base += baseline

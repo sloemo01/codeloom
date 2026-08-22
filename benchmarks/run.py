@@ -39,7 +39,16 @@ def time_op(cmd, cwd, runs):
 def token_consumption(repo, queries):
     """Measure tokens sent to the LLM for each retrieval strategy.
     Baseline: grep-and-read (open whole files). codeloom: --get-symbol.
-    Returns (baseline_tokens, codeloom_tokens) per query."""
+    codeloom tokens = tiktoken count of its actual output (honest; a plain
+    'not found' answer is a few tokens, not 0)."""
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("cl100k_base")
+        def tk(t):
+            return len(enc.encode(t))
+    except ImportError:
+        def tk(t):
+            return len(t) // 4
     import re
     results = []
     for q in queries:
@@ -62,14 +71,13 @@ def token_consumption(repo, queries):
         for f in matching[:3]:
             try:
                 with open(f, "r", encoding="utf-8", errors="replace") as fh:
-                    baseline_tokens += len(fh.read()) // 4
+                    baseline_tokens += tk(fh.read())
             except OSError:
                 pass
-        # codeloom: --get-symbol returns just the symbol + token count
+        # codeloom: --get-symbol returns just the symbol summary
         cmd = [sys.executable, CodeLoom, "--get-symbol", q, "."]
         r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
-        m = re.search(r"~(\d+) tokens", r.stdout)
-        codeloom_tokens = int(m.group(1)) if m else 0
+        codeloom_tokens = tk(r.stdout)
         results.append({"query": q, "baseline_tokens": baseline_tokens,
                         "codeloom_tokens": codeloom_tokens})
     return results

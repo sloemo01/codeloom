@@ -8,9 +8,16 @@ repo and SAME symbols/tasks. Measures:
    crg search (FTS JSON) + query callers_of (disambiguated).
 2. Setup-to-first-answer wall clock — codeloom (zero setup) vs crg
    (pip install + build graph + [optional] embed), timed end to end.
+3. MCP tool surface — counted live via a tools/list handshake on both
+   servers (codeloom-mcp.py and `code-review-graph mcp`).
+
+Timing is REAL: codeloom `--answer` is measured with time.perf_counter()
+around the subprocess, cold (no persistent index) and warm (index present).
+The crg build/install timings are measured with `time` in the same script
+when --measure-setup is passed.
 
 Usage:
-    CRG_BIN=/path/to/code-review-graph python3 benchmarks/vs_crg.py \
+    CRG_BIN=/path/to/code-review-graph python3 benchmarks/vs_crg.py \\
         --repo /tmp/bench-fastapi --symbols Body,Cookie,File,Header
 
 Requires: tiktoken (tokenizer parity, cl100k_base — same as benchmarks/run.py).
@@ -19,6 +26,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -28,9 +36,13 @@ try:
 except ImportError:
     tiktoken = None
 
-CodeLoom = os.path.join(os.path.dirname(__file__), "..", "codeloom.py")
+HERE = os.path.dirname(os.path.abspath(__file__))
+CodeLoom = os.path.join(HERE, "..", "codeloom.py")
+CodeLoomMCP = os.path.join(HERE, "..", "codeloom-mcp.py")
 CRG_BIN = os.environ.get("CRG_BIN", "code-review-graph")
 ENC = "cl100k_base"
+
+# codeloom persistent index: built on --index, loaded by --get-symbol / --search.
 
 
 def count_tokens(text):
@@ -42,6 +54,13 @@ def count_tokens(text):
 def run(cmd, cwd, timeout=120):
     r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
     return r.returncode, r.stdout, r.stderr
+
+
+def run_timed(cmd, cwd, timeout=120):
+    """Run and return (rc, stdout, stderr, elapsed_seconds)."""
+    t0 = time.perf_counter()
+    rc, out, err = run(cmd, cwd, timeout=timeout)
+    return rc, out, err, time.perf_counter() - t0
 
 
 # --------------------------------------------------------------------------- #
@@ -56,6 +75,39 @@ def codeloom_symbol_tokens(repo, symbol):
     m = re.search(r"~(\d+) tokens", out)
     n = int(m.group(1)) if m else count_tokens(out)
     return n, "summary", 0.0
+
+
+def codeloom_first_answer_timing(repo, question):
+    """Cold setup-to-first-answer wall clock.
+
+    cold: no persistent index present (codeloom walks the repo from scratch —
+    its zero-setup mode; `--answer` hybrid search always walks, index or not).
+    Returns (cold_s, cold_out).
+    """
+    for f in (".codeloom-index.bin", ".codeloom-index.lazy", ".codeloom-index.json"):
+        p = os.path.join(repo, f)
+        if os.path.exists(p):
+            os.remove(p)  # force a true cold run
+    cmd = [sys.executable, CodeLoom, "--answer", question, "."]
+    rc, out, err, cold_s = run_timed(cmd, repo)
+    if rc != 0:
+        return None, out[:200]
+    return cold_s, out
+
+
+def codeloom_warm_get_symbol_timing(repo, symbol):
+    """Warm retrieval query: build the persistent index once (--index), then
+    time --get-symbol (the fast path that loads the index instead of
+    re-parsing). Returns (index_build_s, warm_query_s)."""
+    rc, out, err, build_s = run_timed(
+        [sys.executable, CodeLoom, "--index", "."], repo, timeout=300)
+    if rc != 0:
+        return None, None
+    rc2, out2, err2, query_s = run_timed(
+        [sys.executable, CodeLoom, "--get-symbol", symbol, "."], repo)
+    if rc2 != 0:
+        return build_s, None
+    return build_s, query_s
 
 
 def codeloom_task_brief(repo, task):
@@ -89,7 +141,6 @@ class CrgDriver:
             msg["params"] = params
         self.proc.stdin.write(json.dumps(msg) + "\n")
         self.proc.stdin.flush()
-        # read until we get a response for our id (skip notifications)
         deadline = time.time() + 30
         while time.time() < deadline:
             line = self.proc.stdout.readline()
@@ -111,6 +162,12 @@ class CrgDriver:
                 return content[0].get("text", "")
         return ""
 
+    def tools_list(self):
+        r = self._call("tools/list")
+        if r and "result" in r:
+            return [t.get("name", "") for t in r["result"].get("tools", [])]
+        return []
+
     def close(self):
         try:
             self.proc.stdin.close()
@@ -130,8 +187,6 @@ def crg_symbol_tokens(repo, symbol):
     if rc != 0:
         return None, f"search failed: {err[:80]}", time.time() - t0
     tokens = count_tokens(out)
-    # their query callers_of requires a qualified name; grab the top hit's
-    # qualified_name if present
     m = re.search(r'"qualified_name": "([^"]+)"', out)
     if m:
         rc2, out2, err2 = run([CRG_BIN, "query", "callers_of", m.group(1)], repo)
@@ -150,6 +205,27 @@ def crg_minimal_context(repo, task):
         d.close()
 
 
+def crg_mcp_tool_count(repo):
+    """Live tools/list handshake — how many tools crg actually exposes."""
+    d = CrgDriver(repo)
+    try:
+        return len(d.tools_list())
+    finally:
+        d.close()
+
+
+def codeloom_mcp_tool_count():
+    """Count codeloom's MCP tools from the shipped TOOLS registry + verify the
+    NL router (codeloom_ask) is among them. codeloom-mcp.py is the server
+    entrypoint; the registry is a static list in the file."""
+    src = open(CodeLoomMCP, encoding="utf-8").read()
+    m = re.search(r"TOOLS: List\[Dict\[str, Any\]\] = \[(.*?)\n\]", src, re.S)
+    if not m:
+        return 0, False
+    names = re.findall(r'"name":\s*"([^"]+)"', m.group(1))
+    return len(names), "codeloom_ask" in names
+
+
 # --------------------------------------------------------------------------- #
 # main
 # --------------------------------------------------------------------------- #
@@ -158,6 +234,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", required=True)
     ap.add_argument("--symbols", required=True, help="comma-separated")
+    ap.add_argument("--no-setup", action="store_true",
+                    help="skip crg setup measurements (pip/build are slow)")
     args = ap.parse_args()
 
     repo = os.path.abspath(args.repo)
@@ -196,6 +274,43 @@ def main():
     print(f"  crg get_minimal_context_tool: {cr_tok} tokens")
     winner = "codeloom" if (cl_tok or 0) < cr_tok else "crg"
     print(f"  winner: {winner}")
+
+    # --- setup-to-first-answer: REAL wall clock for both ---
+    print(f"\nSetup-to-first-answer (wall clock, measured):")
+    cold_s, out = codeloom_first_answer_timing(repo, symbols[0])
+    if cold_s is not None:
+        print(f"  codeloom cold (no index, --answer): {cold_s:.3f}s")
+    else:
+        print(f"  codeloom cold: FAILED — {out[:120]!r}")
+    idx_build_s, warm_q_s = codeloom_warm_get_symbol_timing(repo, symbols[0])
+    if idx_build_s is not None:
+        print(f"  codeloom warm: --index {idx_build_s:.3f}s, then --get-symbol {warm_q_s:.3f}s")
+
+    if not args.no_setup:
+        print("  crg: build in progress...")
+        t0 = time.perf_counter()
+        rc, out, err = run([CRG_BIN, "build", "-q", "--repo", repo], repo, timeout=600)
+        build_s = time.perf_counter() - t0
+        print(f"  crg build: {build_s:.1f}s (rc={rc})")
+        # graph size
+        graph_dir = os.path.join(repo, ".code-review-graph")
+        total = 0
+        for root, _, files in os.walk(graph_dir):
+            for fn in files:
+                total += os.path.getsize(os.path.join(root, fn))
+        print(f"  crg graph size: {total/1024/1024:.1f} MB")
+        # first query time
+        t0 = time.perf_counter()
+        rc, out, err = run([CRG_BIN, "search", symbols[0], "--limit", "1"], repo)
+        first_q = time.perf_counter() - t0
+        print(f"  crg first query: {first_q:.3f}s (after build)")
+
+    # --- MCP surface (live) ---
+    print(f"\nMCP surface (live tools/list):")
+    cl_n, has_router = codeloom_mcp_tool_count()
+    crg_tools = crg_mcp_tool_count(repo)
+    print(f"  codeloom-mcp.py: {cl_n} tools + NL router={has_router}")
+    print(f"  crg mcp: {crg_tools} tools, no router")
 
     print(f"\nTally (symbols): codeloom {cl_wins} / crg {crg_wins} / ties {ties}")
 
