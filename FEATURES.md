@@ -15,7 +15,7 @@ design. Statuses: ✅ shipped · 🚧 in progress · ⬜ planned.
 ### 1. Intent Engine — `loom_context(task)` ⭐⭐⭐⭐⭐ — 🚧
 **Status: partial — `codeloom_ask` routes; `loom_context` orchestrates layered context.**
 
-Instead of exposing 78 tools, expose **ONE**: `loom_context(task)`. Given "fix
+Instead of exposing 79 tools, expose **ONE**: `loom_context(task)`. Given "fix
 the auth bug", CodeLoom internally decides search → graph → embeddings → git →
 tests → docs, then returns **layered context**, not one tool's output.
 
@@ -51,6 +51,11 @@ related discussions — not just code.
 - **Design:** `.codeloom-memory/` with `ARCHITECTURE.md`, `DECISIONS.md`,
   `PATTERNS.md`, `CONVENTIONS.md`. Auto-extracted from docs/AGENTS.md/README at
   index time; appended via `codeloom --remember "decision: use X"`.
+- **Growth bounds (v0.78):** each ledger file caps at 200KB, then rotates
+  losslessly and deterministically to `.codeloom-memory/archive/` — byte-exact,
+  nothing dropped. codeloom **never auto-deletes**; `--memory-prune` is the
+  only shrink path and it is user-initiated, with `--dry-run` to preview
+  before applying.
 
 ### 4. Live File Watching 🚧
 Every save → incremental AST update → incremental graph update → incremental
@@ -196,12 +201,45 @@ files in the repo, so a wiped agent resumes mid-work, not from zero.)
 
 ### 29. Single-Entry-Point Router ✅
 `codeloom_ask` routes deterministically across the entire tool surface — the
-agent's effective surface is **1 tool** (~50 tokens) instead of 78 schemas
+agent's effective surface is **1 tool** (~50 tokens) instead of 79 schemas
 (~3,000 tokens). Token efficiency + precision + full coverage.
 
 ### 30. Integrated C Engine + LSP ✅
 `codeloom_core.c` auto-builds on first use (no manual step, no download); LSP
 auto-detects + auto-starts an installed server for real cross-file resolution.
+
+### 31. Post-Edit Integrity Oracle — `--verify-edit` 🚧 (landing v0.78)
+Preflight (`--check-edit`) answers *before*; `--verify-edit` answers *after*.
+Run it on a just-edited file and get a terminal **GO / CHECK / STOP** verdict
+re-deriving structural integrity (symbols resolvable, call sites intact,
+nothing the edit orphaned). This closes the edit loop: preflight → edit →
+verify → commit.
+
+### 32. Blindspot Detection — `--blindspot` 🚧 (landing v0.78)
+Before an edit, list the files you have **never read** that the change
+touches or that depend on it — the unread-file warning that stops "it worked
+here" surprises. Pairs with `--seen` (what was read) to expose what wasn't.
+
+### 33. Local Savings Ledger — `--savings-report` 🚧 (landing v0.78)
+Token-savings accounting that stays on your machine: `--session` log +
+`--session-report` metrics compiled into a per-repo ledger of calls saved,
+tokens saved, and estimated cost avoided. **No telemetry** — the receipts
+are files in your repo, not claims in our README.
+
+### 34. Benchmark Runner — `--eval` 🚧 (landing v0.78)
+Deterministic benchmark runner: run the retrieval/efficiency corpus against a
+repo and get comparable numbers on your own machine (seeds the same
+reproducibility discipline as `benchmarks/`, but self-serve).
+
+### 35. Pre-Commit Risk Hook — `--install-hook` / `--uninstall-hook` 🚧 (landing v0.78)
+Install a git pre-commit hook that runs the deterministic risk screen before
+every commit. **Warn-only by design** — it never blocks, never rewrites your
+commit; it prints the risk verdict and lets you decide.
+
+### 36. MCP Loop-Closure Pair + Resources 🚧 (landing v0.78)
+`verify_edit` and `blindspot` join the MCP surface (79 tools + 1 router), and
+`loom://resources` exposes state/delta/hotset/resume as first-class MCP
+resources — so agents can *read* working state without calling a tool.
 
 ---
 
@@ -216,3 +254,6 @@ auto-detects + auto-starts an installed server for real cross-file resolution.
 7. **Plugin SDK** — framework-aware extraction for other ecosystems
 8. **Visual graph** — local, built-in, zoomable
 9. **Bug prediction + repository timeline** — the "nobody has" differentiators
+10. **v0.78 loop-closure set** — `--verify-edit` + `--blindspot` (post-edit
+    integrity), `--savings-report` (local ledger), `--memory-prune`
+    (bounded memory), `--eval` (self-serve benchmarks), hooks, MCP pair.

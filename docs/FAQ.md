@@ -61,7 +61,7 @@ work — an incremental graph, a watch daemon, a GitHub Action, 5 translated
 READMEs. We measured them live on the same repo. Where we win:
 
 - **30 tools, no router.** Their agent must pick from 30 MCP tools. Ours
-  has 78 behind *one* deterministic NL router (`codeloom_ask`) — no
+  has 79 behind *one* deterministic NL router (`codeloom_ask`) — no
   tool-selection misfires, which is the "it loves to just grep" adherence
   problem every tree-sitter tool hits.
 - **Compaction survival is a feature, not an afterthought.** Their "memory
@@ -96,6 +96,29 @@ decision ledger in one call. No server, no embedding, no prompt engineering
 — the file *is* the memory. That's the same reason `AGENTS.md` works; we
 make the agent's memory survivable the same way: as plain text it can
 re-read.
+
+## Does memory keep stacking forever?
+
+No — memory is bounded by design (landing in v0.78). Each ledger file caps
+at **200KB**, then rotates **losslessly and deterministically** to
+`.codeloom-memory/archive/`: the rotation is byte-exact, nothing is dropped
+or summarized away, and the same content is always archived the same way,
+so restore is reproducible.
+
+codeloom **never auto-deletes** your memory. The only shrink path is
+explicit and user-initiated: `--memory-prune` with `--dry-run` first shows
+exactly what would be removed, and nothing is deleted until you apply it.
+Unbounded growth, silent deletion, and opaque summarization are all off the
+table by design.
+
+## Does codeloom phone home? Where do the savings numbers come from?
+
+No telemetry, ever — but with the v0.78 `--savings-report` you get a
+**local-only** token-savings ledger: it compiles your `--session` log and
+`--session-report` metrics into a per-repo report of calls saved, tokens
+saved, and estimated cost avoided. The receipts are **files in your repo**,
+not claims in our README — you can audit every number locally, and nothing
+leaves your machine.
 
 ## Is there a catch?
 

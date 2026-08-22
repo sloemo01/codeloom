@@ -16,7 +16,7 @@
 <p align="center">
   <a href="#quickstart">Quickstart</a> ·
   <a href="#what-it-gives-your-agent">Features</a> ·
-  <a href="#mcp-server-78-tools--1-router">MCP</a> ·
+  <a href="#mcp-server-79-tools--1-router">MCP</a> ·
   <a href="#pr-review-bot">PR Bot</a> ·
   <a href="#why-its-different">vs competitors</a> ·
   <a href="#documentation">Docs</a>
@@ -87,6 +87,13 @@ codeloom --resume                                 # restore after compaction
 Also: `--remember`, `--seen`, `--working-state`, `--lessons`, `--supersede`,
 `--adr`, `--query-memory`.
 
+**Growth bounds (landing in v0.78).** Memory can't stack forever: each ledger
+file caps at **200KB**, then rotates **losslessly and deterministically** to
+`.codeloom-memory/archive/` (rotation is byte-exact — nothing is dropped).
+codeloom **never auto-deletes** memory; the only way to shrink it is
+`--memory-prune --dry-run` (see what would be removed, then apply) — the
+agent's explicit choice, never the tool's.
+
 ### Structural intelligence
 
 | Command | Result |
@@ -111,11 +118,12 @@ Also: `--remember`, `--seen`, `--working-state`, `--lessons`, `--supersede`,
 | `--watch` → `--watch-merge` | Live freshness: native watcher pipes into the persistent index |
 | `--engine c` | Auto-building C core: Linux-kernel full graph (C engine) ~89-113s |
 | `--verify FILE` | SHA-256 checksum verification |
+| `--verify-edit` (v0.78) | **Post-edit integrity oracle** — GO/CHECK/STOP verdict after an edit |
 
 **50 tree-sitter languages dispatched · 46 fixture-proven** (golden-file parity
 tests gate CI on every grammar) · **130+ extensions via regex fallback**.
 
-## MCP server (78 tools + 1 router)
+## MCP server (79 tools + 1 router)
 
 ```json
 {"command": "python3", "args": ["-m", "codeloom_mcp"]}
@@ -123,10 +131,15 @@ tests gate CI on every grammar) · **130+ extensions via regex fallback**.
 
 Or auto-wire any of 17 agents: `codeloom --install-agent <name>`.
 
-78 tools total, but the agent's effective surface is **one tool**:
+79 tools total, but the agent's effective surface is **one tool**:
 `codeloom_ask` takes natural language and routes deterministically —
 no tool-selection misfires. Full listing:
 [`docs/mcp-listing.md`](docs/mcp-listing.md).
+
+The v0.78 MCP surface adds the same loop-closure pair the CLI ships:
+`verify_edit` (post-edit integrity oracle) and `blindspot` (unread-file
+warning), plus `loom://resources` exposing state/delta/hotset/resume as
+resources, not just tools.
 
 ## PR review bot
 
@@ -157,7 +170,7 @@ claude-context, codeseek, jcodemunch, codegraph, codebase-memory-mcp, repowise
 | Install | **one stdlib file** | pip: **75 packages** + daemon + TOML config | pip + ONNX + server | npm |
 | Background process | **none** | `crg-daemon` (16MB RSS, health checks) | `cce serve` + resource governor | — |
 | Compaction memory | ✅ **decision ledger, measured: 2 calls / ~985 tok to recover** (95.4% fewer) | ⚠️ markdown Q&A journal, zero compaction mentions | ⚠️ agent-called `record_decision` MCP | memsearch plugin |
-| MCP surface | **78 + 1 NL router** | 30, no router | 22 | many |
+| MCP surface | **79 + 1 NL router** | 30, no router | 22 | many |
 | Semantic search | ✅ zero-dep, offline | ❌ `[embeddings]` extra (~2GB) or cloud key | ❌ ONNX required | ✅ (Zilliz) |
 | Language proof | **46 fixture-proven in CI** | not published | — | — |
 | Setup→answer | **0.13s warm** | 41s pip + 4s build + daemon | after indexing | after indexing |
@@ -171,6 +184,13 @@ preflight (edit/delete-safe, SCIP compiler verification); codegraph has 67k★
 community scale; codebase-memory ships 158 grammars and an arXiv-published
 eval; repowise (AGPL) has defect-validated risk scoring. We claim speed +
 shape + proof-per-grammar + memory depth — not their moats.
+
+Landing in v0.78, we close the loop they leave open: `--verify-edit` gives
+the post-edit GO/CHECK/STOP verdict (their preflight stops at *before*),
+`--blindspot` warns when files you never read are about to break,
+`--savings-report` publishes a **local-only** token-savings ledger (no
+telemetry — receipts live in the repo, not in our README), and
+`--install-hook`/`--uninstall-hook` add a warn-only pre-commit risk hook.
 
 ## Known limits (honest)
 
@@ -218,7 +238,7 @@ one file, honest claims.
 
 [简体中文](docs/translations/README.zh-CN.md) · [日本語](docs/translations/README.ja.md) · [Español](docs/translations/README.es.md) · [हिन्दी](docs/translations/README.hi.md)
 
-Generated with v0.77 — may lag after upgrades.
+Generated with v0.77 — may lag after upgrades (v0.78 docs marked inline).
 
 ## Agent skill
 

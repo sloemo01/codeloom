@@ -25,7 +25,7 @@ marked. Last updated: 2026-08-22.
 
 | Capability | codeloom | crg | claude-context | jcodemunch | codegraph | codebase-memory | CCE | repowise |
 |---|---|---|---|---|---|---|---|---|
-| MCP tools | **78 + `codeloom_ask` NL router** | 30, no router (counted live) | many (code-search) | 90+, 6 routers | 1 + 7 unlisted | 15 | 22 | 10 task-shaped |
+| MCP tools | **79 + `codeloom_ask` NL router** | 30, no router (counted live) | many (code-search) | 90+, 6 routers | 1 + 7 unlisted | 15 | 22 | 10 task-shaped |
 | Tree-sitter languages | **50 dispatched / 46 fixture-proven** | claims (not per-grammar proven) | — | 70+ claimed | 20 byte-verified | 158 vendored | — | n/a |
 | Per-language CI proof | ✅ golden fixtures gate CI | not seen | — | not seen | ✅ byte-for-byte | tests badge, no per-grammar | not seen | n/a |
 | Cold index | <1s first result; ~89–113s kernel full graph (C engine) | build 4s (fastapi) → 42MB graph; needs pip install first | after indexing | after indexing | ~100s | 3min claim | after indexing | "slowest indexer" |
@@ -41,10 +41,12 @@ marked. Last updated: 2026-08-22.
 Where codeloom leads:
 - **Zero-dependency single file under MIT** — none of the eight match all three.
 - **Compaction-survival decision ledger** — measured (95.4% fewer tokens to recover, `benchmarks/compaction_recovery.py`); code-review-graph has zero mentions of compaction/session/resume in its README; CCE requires agent-called MCP tools + running server.
-- **78 tools behind 1 NL router** — crg's 30 tools have no router (adherence problem the CodeRLM thread hit).
+- **78→79 tools behind 1 NL router** — crg's 30 tools have no router (adherence problem the CodeRLM thread hit); v0.78 adds `verify_edit` + `blindspot` and `loom://resources`.
 - **Fixture-gated grammar claims** — 46 languages golden-file parity in CI.
 - **Zero-dep offline semantic search** — crg needs a 2GB model extra or cloud key; CCE needs ONNX.
 - **Setup-to-first-answer** — measured: 0.13s warm vs crg 41s pip + 4s build + daemon.
+- **Local savings ledger, all-local, no telemetry** — `--savings-report` (v0.78) compiles your own `--session` log into per-repo token/cost receipts; the numbers live in your repo, not in our README. CCE's sealed 94% ledger is better evidence discipline — ours is local-first and independently auditable.
+- **Post-edit loop closure** — `--verify-edit` (v0.78) re-derives a GO/CHECK/STOP verdict *after* an edit; jcodemunch's preflight (the strongest in the field) stops at *before*. `--blindspot` (v0.78) adds the unread-file warning — the files your edit breaks that you never read. That's the loop-closure differentiator: preflight → edit → verify → commit.
 
 Where competitors lead (stated plainly):
 - **crg**: community scale, 5 translated READMEs, eval runner, multi-repo registry, incremental rebuilds.
