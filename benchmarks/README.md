@@ -33,6 +33,39 @@ requires the agent to call `record_decision` MCP tools from a running server
 (they ship "memory nudges" because agents forget to). Nobody else ships a
 deterministic restore.
 
+## Sealed retrieval benchmark (no LLM, deterministic — measured 2026-08-22)
+
+`benchmarks/live_sealed_run/harness.py` measures the *retrieval phase* — the
+tool calls + context bytes burned before any model answers — on the same 10
+fastapi questions, two toolchains:
+
+- **bare**: the realistic grep-and-read chain (rg locate → read top file →
+  rg callers), exactly what agents do today.
+- **codeloom**: one `--answer` call per question (cited, calibrated).
+
+Graded deterministically: did the returned context contain the file where the
+answer lives? No LLM anywhere — fully reproducible offline.
+
+| toolchain | found | calls | tokens (est, cl100k_base) |
+|---|---|---|---|
+| **bare** | 3/10 | **29** | **6,602** |
+| **codeloom** | 4/10 | **10** | **731** |
+
+**The honest read:** codeloom finds answers with **2.9× fewer calls and
+~9× fewer tokens** — and its output is a *cited answer with confidence*,
+while bare returns raw file dumps the agent must still read and reason over.
+Both miss questions (ambiguous anchors like `File`/`Request` rank below the
+right symbol) — published as-is, loss rows included.
+
+```bash
+python3 benchmarks/live_sealed_run/harness.py --mode all --repo /tmp/bench-fastapi
+```
+
+Caveat (same as bench/RESULTS.md): this measures *retrieval* under a scripted
+policy — it is not an autonomous-agent-loop claim. It is the honest companion
+to compaction_recovery.py: that one measures post-compaction restore; this
+one measures first-touch retrieval.
+
 ## vs code-review-graph (measured 2026-08-22, same repo, same symbols)
 
 `benchmarks/vs_crg.py` runs both tools on the same fastapi clone. Symbol

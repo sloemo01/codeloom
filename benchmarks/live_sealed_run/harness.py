@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
-"""Sealed live-model benchmark: bare retrieval vs codeloom retrieval.
+"""Sealed retrieval benchmark: bare toolchain vs codeloom (no LLM required).
 
-The protocol (honest scope):
-  - ONE pinned local model (Qwen3-4B-Q4_K_M via llama-server) — reproducible,
-    offline, no API drift. The SAME model sees BOTH toolchains.
-  - 10 fixed tasks on the same repo (fastapi clone), graded against
-    ground-truth file paths.
-  - Retrieval is scripted policy (identical to bench/RESULTS.md's stance):
-    bare = the realistic grep-and-read chain; codeloom = `--ask`/`--read`.
-    The MODEL then answers the task from the retrieved context. This is a
-    live-model end-to-end measurement (retrieval tokens + real answer
-    quality), not a claim about autonomous agent loop behavior.
-  - Token counts come from llama-server usage stats (prompt + completion).
+Measures the RETRIEVAL phase of agent work — the part that burns tokens before
+any model even answers. Two toolchains on the SAME repo and SAME 10 questions:
+
+  - bare: the realistic grep-and-read chain (rg locate -> read top file ->
+          grep callers) — what every agent does today.
+  - codeloom: one `--ask` call (cited answer with calibrated confidence).
+
+Counts per question: tool CALLS and context BYTES returned (tokens = bytes/4
+estimate, matching the static-replay convention). Retrieval correctness is
+checked deterministically: did the retrieved context contain the file where
+the answer lives? No LLM involved anywhere — fully reproducible offline.
+
+This is the honest companion to compaction_recovery.py: that one measures
+post-compaction restore; this one measures first-touch retrieval.
 
 Usage:
-    python3 benchmarks/live_sealed_run/harness.py --mode bare   --repo /tmp/bench-fastapi
+    python3 benchmarks/live_sealed_run/harness.py --mode bare    --repo /tmp/bench-fastapi
     python3 benchmarks/live_sealed_run/harness.py --mode codeloom --repo /tmp/bench-fastapi
-    python3 benchmarks/live_sealed_run/harness.py --mode all    --repo /tmp/bench-fastapi
-
-Requires: llama-server running with the pinned model, or pass --spawn.
+    python3 benchmarks/live_sealed_run/harness.py --mode all     --repo /tmp/bench-fastapi
 """
 import argparse
 import json
@@ -26,17 +27,20 @@ import os
 import re
 import subprocess
 import sys
-import time
-import urllib.request
 
-MODEL = "qwen3-4b-q4_k_m"
-SERVER_URL = os.environ.get("LLAMA_URL", "http://127.0.0.1:8080/v1")
-BASE = "qwen3"  # llama-server model name for OpenAI-compat endpoint
-MODEL_GGUF = os.path.expanduser("~/.hermes/models/qwen3-4b/Qwen3-4B-Q4_K_M.gguf")
+try:
+    import tiktoken
+    ENC = tiktoken.get_encoding("cl100k_base")
+
+    def count_tokens(t):
+        return len(ENC.encode(t))
+except ImportError:
+    def count_tokens(t):
+        return len(t) // 4
 
 CodeLoom = os.path.join(os.path.dirname(__file__), "..", "..", "codeloom.py")
 
-# 10 fixed tasks with ground-truth answers (file paths in fastapi)
+# 10 fixed tasks on fastapi, with the file that holds the answer
 TASKS = [
     ("Where is the File parameter class defined?", "fastapi/params.py"),
     ("Where is the HTTPException class defined?", "fastapi/exceptions.py"),
@@ -50,79 +54,85 @@ TASKS = [
     ("Where is the JSONResponse class defined?", "fastapi/responses.py"),
 ]
 
-SYSTEM = ("You are a coding agent working in a git repository. Answer the "
-          "question with the exact file path where the answer lives. Reply "
-          "with ONLY the file path, nothing else.")
 
-
-def chat(prompt, sys=SYSTEM):
-    """One chat completion against llama-server. Returns (text, usage)."""
-    body = json.dumps({
-        "model": BASE,
-        "messages": [{"role": "system", "content": sys},
-                     {"role": "user", "content": prompt}],
-        "temperature": 0.2,
-        "max_tokens": 96,
-    }).encode()
-    req = urllib.request.Request(SERVER_URL + "/chat/completions", body,
-                                 {"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        data = json.load(r)
-    return data["choices"][0]["message"]["content"], data.get("usage", {})
+STOPWORDS = {"Where", "Which", "What", "How", "Why", "Is", "Are", "The",
+             "In", "On", "At", "A", "An", "HTTP", "Entry", "Point"}
 
 
 def bare_retrieve(repo, question):
-    """Realistic grep-and-read chain; returns context text + bytes."""
-    # anchor: first noun-ish token that looks like an identifier
-    m = re.search(r"\b([A-Z][A-Za-z0-9_]+)\b", question)
-    anchor = m.group(1) if m else "class"
-    rc = subprocess.run(["rg", "-l", anchor, "--type", "py", "."],
+    """Realistic grep-and-read chain. Returns (calls, bytes, context)."""
+    calls = 0
+    total = 0
+    anchor_m = re.search(r"\b([A-Z][A-Za-z0-9_]+)\b", question)
+    anchor = anchor_m.group(1) if anchor_m else "class"
+    if anchor in STOPWORDS:
+        # re-grab: first capitalized identifier that is not a stopword
+        for m in re.finditer(r"\b([A-Z][A-Za-z0-9_]+)\b", question):
+            if m.group(1) not in STOPWORDS:
+                anchor = m.group(1)
+                break
+    # 1. locate the anchor (rg with explicit python glob — portable)
+    rc = subprocess.run(["rg", "-l", anchor, "-g", "*.py", "."],
                         cwd=repo, capture_output=True, text=True)
+    calls += 1
     files = [f for f in rc.stdout.splitlines() if f][:2]
     ctx = "\n".join(files)
-    if files:
+    total += len(ctx.encode())
+    # 2. read the top candidate file (the thing that costs tokens)
+    for f in files[:1]:
         try:
-            with open(os.path.join(repo, files[0]), "r", encoding="utf-8",
+            with open(os.path.join(repo, f), "r", encoding="utf-8",
                       errors="replace") as fh:
-                ctx += "\n---\n" + fh.read()[:4000]
+                content = fh.read()
+            calls += 1
+            total += len(content.encode())
+            ctx += "\n---\n" + content[:4000]
         except OSError:
             pass
-    return ctx, len(ctx.encode())
+    # 3. grep for callers of the anchor
+    rc = subprocess.run(["rg", "-n", rf"\b{anchor}\w*", "-g", "*.py", "."],
+                        cwd=repo, capture_output=True, text=True)
+    calls += 1
+    total += len(rc.stdout.encode())
+    ctx += "\n---\n" + rc.stdout[:2000]
+    return calls, total, ctx
 
 
 def codeloom_retrieve(repo, question):
-    """codeloom --ask returns a cited answer; also give the top candidate file."""
-    rc = subprocess.run([sys.executable, CodeLoom, "--ask", question, "."],
+    """One codeloom --answer call (cited, calibrated). Returns (calls, bytes, ctx)."""
+    rc = subprocess.run([sys.executable, CodeLoom, "--answer", question, "."],
                         cwd=repo, capture_output=True, text=True)
-    out = rc.stdout[:6000]
-    return out, len(out.encode())
+    return 1, len(rc.stdout.encode()), rc.stdout
+
+
+def normalize(s):
+    """fastapi/datastructures.py -> fastapi.datastructures (module notation)."""
+    return s.replace("/", ".").replace(".py", "").lower()
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["bare", "codeloom", "all"], required=True)
     ap.add_argument("--repo", required=True)
-    ap.add_argument("--jsonl", default=os.path.join(os.path.dirname(__file__), "run.jsonl"))
+    ap.add_argument("--jsonl",
+                    default=os.path.join(os.path.dirname(__file__), "run.jsonl"))
     args = ap.parse_args()
 
     modes = ["bare", "codeloom"] if args.mode == "all" else [args.mode]
     results = []
     for mode in modes:
-        print(f"\n=== MODE: {mode} ===")
+        print(f"\n=== RETRIEVAL MODE: {mode} ===")
         for q, truth in TASKS:
-            t0 = time.time()
             if mode == "bare":
-                ctx, nb = bare_retrieve(args.repo, q)
+                calls, nbytes, ctx = bare_retrieve(args.repo, q)
             else:
-                ctx, nb = codeloom_retrieve(args.repo, q)
-            ans, usage = chat(f"{q}\n\nRepo context:\n{ctx[:4000]}")
-            ok = truth in (ans or "")
-            row = {"mode": mode, "question": q, "truth": truth,
-                   "answer": (ans or "")[:200], "correct": ok,
-                   "retrieval_bytes": nb, "tokens": usage,
-                   "latency_s": round(time.time() - t0, 2)}
-            results.append(row)
-            print(f"  {'PASS' if ok else 'FAIL'} {q[:50]:<52} {ans[:60]!r}")
+                calls, nbytes, ctx = codeloom_retrieve(args.repo, q)
+            found = normalize(truth) in normalize(ctx)
+            results.append({"mode": mode, "question": q, "truth": truth,
+                            "found_answer_file": found, "calls": calls,
+                            "bytes": nbytes, "tokens_est": count_tokens(ctx)})
+            print(f"  {'HIT ' if found else 'MISS'} calls={calls} "
+                  f"tok={count_tokens(ctx):>6}  {q[:52]}")
 
     with open(args.jsonl, "w") as fh:
         for r in results:
@@ -131,10 +141,11 @@ def main():
     print(f"\n===== SUMMARY =====")
     for mode in modes:
         rows = [r for r in results if r["mode"] == mode]
-        ok = sum(1 for r in rows if r["correct"])
-        tok = sum((r["tokens"] or {}).get("total_tokens", 0) for r in rows)
-        print(f"{mode}: {ok}/{len(rows)} correct, {tok} total tokens, "
-              f"{round(sum(r['latency_s'] for r in rows),1)}s")
+        found = sum(1 for r in rows if r["found_answer_file"])
+        calls = sum(r["calls"] for r in rows)
+        tok = sum(r["tokens_est"] for r in rows)
+        print(f"{mode}: {found}/{len(rows)} found answer file, {calls} calls, "
+              f"{tok} tokens (est)")
 
 
 if __name__ == "__main__":
