@@ -10,7 +10,7 @@ Every code-intel MCP server does retrieval. codeloom also does **task orientatio
 
 - **Working memory across compaction** — `--decide/--checkpoint/--resume/--working-state` record the agent's decision stream and replay it after a context wipe. No competitor ships this.
 - **Structural pattern search** — `codeloom_pattern`: ast-grep-style `$F($$$ARGS)` matching over real ASTs, zero external binaries.
-- **1 natural-language entry point** (`codeloom_ask`) routing deterministically to 77 tools — no tool-selection misfires.
+- **1 natural-language entry point** (`codeloom_ask`) routing deterministically to 78 tools — no tool-selection misfires.
 - **48 tree-sitter grammars, 41 fixture-proven** — golden-file parity tests gate CI on every grammar.
 - **Sub-second everything**: cold index <1s to first result, health screen 0.2s, Linux-kernel full graph ~91s via the auto-built C core.
 - **Zero dependencies**: one MIT-licensed Python file, stdlib only, auditable in one sitting. Accelerators (C/Rust) compile from committed source on demand — never downloaded.
