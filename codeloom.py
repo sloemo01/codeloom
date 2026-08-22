@@ -28,9 +28,9 @@ import re
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
-VERSION = "0.78.0"
+VERSION = "0.79.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -6031,8 +6031,10 @@ def memory_supersede(root: str, old: str, new: str) -> str:
 
 def memory_query(root: str, query: str) -> str:
     """Search long-term memory (DECISIONS/PATTERNS/CONVENTIONS/LESSONS/SUPERSEDED/
-    ADRs) for items relevant to `query`. Full-text term match over the plain-text
-    memory — the 'what do we already know about X' primitive."""
+    ADRs + typed memory.jsonl entries) for items relevant to `query`. Full-text
+    term match over the plain-text memory AND the typed JSONL layer (type +
+    title + body keywords), typed hits ranked by priority desc — the 'what do
+    we already know about X' primitive."""
     import re as _re
     q = _re.escape(query.lower())
     d = _memory_dir(root)
@@ -6056,6 +6058,15 @@ def memory_query(root: str, query: str) -> str:
             if _re.search(q, line.lower()):
                 buf.write(f"  [{rel}] {line.strip()}\n")
                 hits += 1
+    # typed JSONL layer: match type/title/body keywords, ranked by priority desc
+    typed = [e for e in _memory_entries(root)
+             if _re.search(q, ((e.get("type") or "") + " "
+                               + (e.get("title") or "") + " "
+                               + (e.get("body") or "")).lower())]
+    typed.sort(key=_memory_sort_key)
+    for e in typed:
+        buf.write("  [memory.jsonl] %s\n" % _memory_line(e))
+        hits += 1
     if not hits:
         buf.write("  No long-term memory matches. Record some with --remember/--lesson/--decide.\n")
     return buf.getvalue()
@@ -7600,6 +7611,423 @@ def render_memory_line(root: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Memory OS: typed, graph-linked repository memory (memory.jsonl)
+# --------------------------------------------------------------------------- #
+# The differentiator layer: every memory write ALSO appends a typed JSON entry
+# to .codeloom-memory/memory.jsonl (append-only JSONL, one JSON object per
+# line), while the legacy markdown files keep working unchanged. memory.jsonl
+# obeys the same 200 KB cap via lossless rotation into
+# archive/memory-<date>.jsonl (pure JSONL lines, no header — every line stays
+# parseable). --memory <symbol> is the graph-linked retrieval superpower:
+# entries pinned to a symbol plus entries pinned to its call/import-graph
+# neighbors. Deterministic everywhere: zero deps, no daemon, no telemetry.
+# --------------------------------------------------------------------------- #
+MEMORY_JSONL = "memory.jsonl"
+MEMORY_TYPES = ("decision", "bug", "question", "architecture", "api",
+                "constraint", "lesson", "todo", "warning", "goal",
+                "hypothesis")
+MEMORY_CREATED_SOURCES = ("decide", "lesson", "adr", "goal", "hypothesis",
+                          "checkpoint", "extract", "memory")
+MEMORY_TYPE_WEIGHT = {"bug": 20, "architecture": 15, "constraint": 15,
+                      "warning": 15, "decision": 10, "todo": 5, "goal": 5,
+                      "hypothesis": 5, "lesson": 5, "question": 5, "api": 5}
+MEMORY_KEYWORDS = ("always", "never", "must", "critical", "important",
+                   "security", "do not", "dont")
+MEMORY_CONFIDENCE = {"decision": 0.9, "bug": 0.8, "lesson": 0.8,
+                     "architecture": 0.8, "constraint": 0.8, "api": 0.7,
+                     "goal": 0.7, "warning": 0.6, "todo": 0.5,
+                     "hypothesis": 0.5, "question": 0.4}
+MEMORY_IMPORTANCE_CAP = 100
+MEMORY_IMPORTANCE_HELP = (
+    "importance = 10 base +30 if title/body contains "
+    "always|never|must|critical|important|security|do not|dont + type_weight "
+    "(bug 20, architecture 15, constraint 15, warning 15, decision 10, todo 5, "
+    "others 5) + graph_centrality (0 affected symbols -> 0, 1-2 -> 5, 3+ -> 10) "
+    "+ recency (+10 within 7 days, +5 within 30); capped at 100. "
+    "--priority N overrides the computed value.")
+
+
+def _memory_jsonl_path(root: str) -> str:
+    return os.path.join(_memory_dir(root), MEMORY_JSONL)
+
+
+def _memory_entries(root: str, include_archive: bool = False) -> List[dict]:
+    """Read typed memory entries from memory.jsonl (+ archive/memory-*.jsonl
+    when include_archive). Corrupt lines are skipped, never fatal."""
+    import json as _json
+    out: List[dict] = []
+
+    def _read(p: str) -> None:
+        try:
+            with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        e = _json.loads(line)
+                    except _json.JSONDecodeError:
+                        continue
+                    if isinstance(e, dict):
+                        out.append(e)
+        except OSError:
+            pass
+
+    _read(_memory_jsonl_path(root))
+    if include_archive:
+        arch = _memory_archive_dir(root)
+        if os.path.isdir(arch):
+            for fn in sorted(os.listdir(arch)):
+                if fn.startswith("memory") and fn.endswith(".jsonl"):
+                    _read(os.path.join(arch, fn))
+    return out
+
+
+def memory_importance(title: str, body: str = "", type_: str = "",
+                      symbols: Optional[List[str]] = None) -> int:
+    """Deterministic importance score (documented in MEMORY_IMPORTANCE_HELP):
+    10 base + 30 keyword bonus + type weight + graph centrality (affected
+    symbols) + recency (a fresh write is within 7 days -> +10). Cap 100."""
+    text = ("%s %s" % (title or "", body or "")).lower()
+    score = 10
+    if any(k in text for k in MEMORY_KEYWORDS):
+        score += 30
+    score += MEMORY_TYPE_WEIGHT.get((type_ or "").strip().lower(), 5)
+    n = len([s for s in (symbols or []) if s and s.strip()])
+    if n >= 3:
+        score += 10
+    elif n >= 1:
+        score += 5
+    score += 10  # recency: a just-written entry is within 7 days
+    return min(MEMORY_IMPORTANCE_CAP, score)
+
+
+def _memory_tier(importance: int) -> str:
+    if importance >= 70:
+        return "hot"
+    if importance >= 40:
+        return "active"
+    return "archive"
+
+
+def _memory_recency(entry: dict) -> int:
+    """Read-time recency bonus: +10 within 7 days, +5 within 30, else 0.
+    Used as the deterministic tiebreaker for retrieval ranking."""
+    import datetime as _dt
+    ts = entry.get("timestamp", "")
+    if not ts:
+        return 0
+    try:
+        t = _dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        days = (_dt.datetime.now(_dt.timezone.utc) - t).total_seconds() / 86400.0
+    except (ValueError, TypeError):
+        return 0
+    if days <= 7:
+        return 10
+    if days <= 30:
+        return 5
+    return 0
+
+
+def _memory_next_id(root: str, type_: str) -> str:
+    """Deterministic '<slug>-NNN' id: slug from the type, NNN = next per-type
+    counter across live + archived entries (lossless rotation keeps counts
+    stable)."""
+    n = 1 + sum(1 for e in _memory_entries(root, include_archive=True)
+                if e.get("type") == type_)
+    return "%s-%03d" % (type_, n)
+
+
+def memory_append(root: str, type_: str, title: str, body: str = "",
+                  reason: str = "", symbols: Optional[List[str]] = None,
+                  priority: Optional[int] = None,
+                  created: str = "memory") -> dict:
+    """Append one typed entry to memory.jsonl (append-only, capped by the
+    existing memory_rotate path into archive/memory-<date>.jsonl). Returns the
+    entry dict. Never raises on disk errors: the entry dict carries an
+    'error' key instead, so callers can still report the attempt."""
+    import datetime as _dt
+    import json as _json
+    type_ = (type_ or "goal").strip().lower()
+    if type_ not in MEMORY_TYPES:
+        type_ = "goal"
+    if created not in MEMORY_CREATED_SOURCES:
+        created = "memory"
+    syms = [s.strip() for s in (symbols or []) if s and s.strip()]
+    title = (title or "").strip()
+    entry: dict = {
+        "type": type_,
+        "id": _memory_next_id(root, type_),
+        "title": title,
+        "body": (body or "").strip(),
+        "reason": (reason or "").strip(),
+        "affected_symbols": syms,
+        "importance": 0,
+        "confidence": MEMORY_CONFIDENCE.get(type_, 0.5),
+        "tier": "active",
+        "timestamp": _dt.datetime.now(_dt.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"),
+        "created": created,
+    }
+    imp = memory_importance(title, entry["body"], type_, syms)
+    if priority is not None:
+        try:
+            imp = max(0, min(MEMORY_IMPORTANCE_CAP, int(priority)))
+        except (ValueError, TypeError):
+            pass
+    entry["importance"] = imp
+    entry["tier"] = _memory_tier(imp)
+    try:
+        with open(_memory_jsonl_path(root), "a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(entry, ensure_ascii=False) + "\n")
+        memory_rotate_jsonl(root)
+    except OSError as e:
+        entry["error"] = str(e)
+    return entry
+
+
+def memory_rotate_jsonl(root: str) -> bool:
+    """Rotate the OLDEST lines out of memory.jsonl into
+    archive/memory-YYYY-MM-DD.jsonl when the cap is exceeded (lossless move —
+    lines are copied, never deleted, never summarized). Archive files are
+    pure JSONL (no header) so every line stays machine-parseable."""
+    p = _memory_jsonl_path(root)
+    if not os.path.isfile(p):
+        return False
+    try:
+        with open(p, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return False
+    cap = _memory_cap(root, MEMORY_JSONL)
+    size = sum(len(l.encode("utf-8")) for l in lines)
+    if size <= cap:
+        return False
+    removed = []
+    while lines and sum(len(l.encode("utf-8")) for l in lines) > cap:
+        removed.append(lines.pop(0))
+    if not removed:
+        return False
+    import datetime as _dt
+    stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+    arch = os.path.join(_memory_archive_dir(root), f"memory-{stamp}.jsonl")
+    try:
+        with open(arch, "a", encoding="utf-8") as fh:
+            fh.writelines(removed)
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.writelines(lines)
+        return True
+    except OSError:
+        return False
+
+
+def _memory_sort_key(entry: dict) -> Tuple:
+    """Deterministic retrieval ranking: importance desc, then recency desc,
+    then timestamp desc (newest first), then id for a stable total order."""
+    import datetime as _dt
+    ts = entry.get("timestamp", "")
+    return (-int(entry.get("importance", 0) or 0),
+            -_memory_recency(entry),
+            ts,
+            entry.get("id", ""))
+
+
+def _memory_line(entry: dict) -> str:
+    """One retrieval line: 'T [priority] type: title — body[:200]'."""
+    t = (entry.get("title") or "").strip()
+    b = (entry.get("body") or "").strip()
+    out = "%s [%s] %s: %s" % (entry.get("tier", "?"),
+                              entry.get("importance", 0),
+                              entry.get("type", "?"),
+                              t or "(untitled)")
+    if b:
+        out += " — " + b[:200]
+    return out
+
+
+def _memory_symbols(files: List[str], root: str) -> Tuple[Set[str], Dict[str, Set[str]]]:
+    """{module names} and {symbol -> modules} for the codebase (Python ast).
+    Deterministic; empty sets for non-Python-only repos."""
+    modules: Set[str] = set()
+    symbols: Dict[str, Set[str]] = {}
+    for f in files:
+        if not f.endswith(".py"):
+            continue
+        mod = module_name_of(f, root)
+        modules.add(mod)
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                tree = ast.parse(fh.read())
+        except (SyntaxError, OSError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                 ast.ClassDef)):
+                symbols.setdefault(node.name, set()).add(mod)
+    return modules, symbols
+
+
+def _memory_resolve(sym: str, modules: Set[str],
+                    symbols: Dict[str, Set[str]]) -> Optional[str]:
+    """Resolve a symbol to its defining module: exact module, exact symbol,
+    then case-insensitive matches. None when not in the codebase."""
+    if sym in modules:
+        return sym
+    if sym in symbols:
+        return min(symbols[sym])
+    low = sym.lower()
+    for m in sorted(modules):
+        if m.lower() == low:
+            return m
+    for name, mods in symbols.items():
+        if name.lower() == low:
+            return min(mods)
+    return None
+
+
+def memory_symbol_resolve(files: List[str], root: str, sym: str) -> bool:
+    """True when `sym` names a module/symbol in the repo OR is pinned in
+    memory.jsonl — used by --remember's smart dispatch (retrieval vs the
+    legacy append-to-section write)."""
+    modules, symbols = _memory_symbols(files, root)
+    if _memory_resolve(sym.strip(), modules, symbols) is not None:
+        return True
+    low = sym.strip().lower()
+    return any(low in [s.lower() for s in (e.get("affected_symbols") or [])]
+               for e in _memory_entries(root))
+
+
+def render_memory_graph(files: List[str], root: str, symbol: str,
+                        target_root: Optional[str] = None,
+                        include_archive: bool = False) -> str:
+    """--memory <symbol>: graph-linked memory retrieval. Direct entries
+    (affected_symbols contain the symbol), ranked importance desc then
+    recency, then a 'reachable via graph' section: entries whose
+    affected_symbols match graph NEIGHBORS of the symbol — modules that
+    import it or that it imports (build_graph) plus modules whose functions
+    call it (build_call_graph). Deterministic ordering throughout."""
+    buf = io.StringIO()
+    sym = symbol.strip()
+    buf.write(f"# memory: {sym}\n")
+    entries = _memory_entries(root, include_archive=include_archive)
+    if not entries:
+        buf.write("  no typed memory yet — add some with "
+                  "--decide/--lesson/--adr/--goal/--hypothesis/--memory-add.\n")
+        return buf.getvalue()
+    tgt = os.path.abspath(target_root or root)
+    modules, symbols = _memory_symbols(files, tgt)
+    low = sym.lower()
+    direct = [e for e in entries
+              if any(s.lower() == low for s in (e.get("affected_symbols") or []))]
+    direct.sort(key=_memory_sort_key)
+    buf.write("\n## entries linked to %s\n" % sym)
+    if direct:
+        for e in direct:
+            buf.write("  " + _memory_line(e) + "\n")
+    else:
+        buf.write("  no entries linked directly to %s.\n" % sym)
+
+    buf.write("\n## reachable via graph\n")
+    mod = _memory_resolve(sym, modules, symbols)
+    if mod is None:
+        buf.write(f"  {sym} is not a known module/symbol in the codebase "
+                  f"({tgt}) — no graph to expand.\n")
+        return buf.getvalue()
+    try:
+        graph = build_graph(files, tgt)
+    except Exception:
+        graph = {}
+    neighbors: Set[str] = set()
+    for m, deps in graph.items():
+        if mod in deps:
+            neighbors.add(m)
+    for dep in graph.get(mod, set()):
+        neighbors.add(dep)
+    try:
+        calls = build_call_graph(files, tgt)
+        for m, fns in calls.items():
+            for _caller, callees in fns.items():
+                if sym in callees and m != mod:
+                    neighbors.add(m)
+    except Exception:
+        pass
+    if neighbors:
+        buf.write("  graph neighbors of %s (import/call graph): %s\n" % (
+            sym, ", ".join(sorted(neighbors))))
+    else:
+        buf.write(f"  no graph neighbors of {sym} found.\n")
+    neigh_symbols: Set[str] = set(neighbors)
+    for name, mods in symbols.items():
+        if mods & neighbors:
+            neigh_symbols.add(name)
+    reach = [e for e in entries
+             if any(s.lower() in {x.lower() for x in neigh_symbols}
+                    for s in (e.get("affected_symbols") or []))]
+    direct_ids = {id(e) for e in direct}
+    reach = [e for e in reach if id(e) not in direct_ids]
+    reach.sort(key=_memory_sort_key)
+    if reach:
+        for e in reach:
+            buf.write("  " + _memory_line(e) + "\n")
+    else:
+        buf.write("  no entries reachable via graph neighbors of %s.\n" % sym)
+    return buf.getvalue()
+
+
+def render_memory_stats(root: str) -> str:
+    """--memory-stats: one-screen counts by type, by tier, total bytes,
+    archive size, and top-5 symbols by linked-memory count."""
+    entries = _memory_entries(root)
+    buf = io.StringIO()
+    buf.write(f"# codeloom --memory-stats ({root})\n")
+    if not entries:
+        buf.write("  no typed memory yet — add some with "
+                  "--decide/--memory-add/--lesson/--adr/--goal/--hypothesis.\n")
+        return buf.getvalue()
+    by_type: Dict[str, int] = {}
+    by_tier: Dict[str, int] = {}
+    for e in entries:
+        by_type[e.get("type", "?")] = by_type.get(e.get("type", "?"), 0) + 1
+        by_tier[e.get("tier", "?")] = by_tier.get(e.get("tier", "?"), 0) + 1
+    buf.write(f"total entries: {len(entries)}\n\n")
+    buf.write("by type:\n")
+    for t in sorted(by_type):
+        buf.write(f"  {t}: {by_type[t]}\n")
+    buf.write("\nby tier:\n")
+    for t in ("hot", "active", "archive"):
+        if t in by_tier:
+            buf.write(f"  {t}: {by_tier[t]}\n")
+    total_bytes = 0
+    archive_bytes = 0
+    for dirpath, _, fnames in os.walk(_memory_dir(root)):
+        for fn in fnames:
+            if fn.startswith("."):
+                continue
+            p = os.path.join(dirpath, fn)
+            try:
+                sz = os.path.getsize(p)
+            except OSError:
+                continue
+            total_bytes += sz
+            if os.path.basename(dirpath) == "archive":
+                archive_bytes += sz
+    buf.write(f"\ntotal bytes: {total_bytes}\narchive bytes: {archive_bytes}\n")
+    counts: Dict[str, int] = {}
+    for e in entries:
+        for s in (e.get("affected_symbols") or []):
+            s = s.strip()
+            if s:
+                counts[s] = counts.get(s, 0) + 1
+    buf.write("\ntop linked symbols:\n")
+    if counts:
+        for s, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:5]:
+            buf.write(f"  {s}: {n}\n")
+    else:
+        buf.write("  (no affected_symbols linked yet — pass --symbols on write)\n")
+    return buf.getvalue()
+
+
+# --------------------------------------------------------------------------- #
 # --eval plumbing: shell out to benchmarks/eval_runner.py (argv-style)
 # --------------------------------------------------------------------------- #
 def run_eval(kind: str, root: str, as_json: bool = False) -> int:
@@ -8207,6 +8635,32 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--query-memory", metavar="QUERY", help="search long-term memory for 'what do we already know about X'")
     p.add_argument("--mark-seen", nargs="+", metavar="ITEM", help="mark files/symbols as already understood (hot set); a trailing positional is treated as the repo root")
     p.add_argument("--goal", metavar="TEXT", help="record the session goal (shown by --working-state and --resume)")
+    p.add_argument("--memory", metavar="SYMBOL",
+                   help="graph-linked memory retrieval: entries pinned to SYMBOL plus entries "
+                        "reachable via its import/call-graph neighbors (retrieval; the legacy "
+                        "--remember NOTE appends)")
+    p.add_argument("--target-root", metavar="ROOT", default=None,
+                   help="with --memory: build the call/import graph against ROOT instead of the "
+                        "memory root (retrieval in one repo, graph expansion in another)")
+    p.add_argument("--include-archive", action="store_true",
+                   help="with --memory: also search archived memory-*.jsonl entries")
+    p.add_argument("--memory-add", action="store_true",
+                   help="generic typed memory write: --type TYPE --title T [--body B] "
+                        "[--symbols S,S] [--priority N] appends to memory.jsonl")
+    p.add_argument("--type", metavar="TYPE", default=None,
+                   help="with --memory-add: decision|bug|question|architecture|api|constraint|"
+                        "lesson|todo|warning|goal|hypothesis (default goal)")
+    p.add_argument("--title", metavar="T", default=None, help="with --memory-add: title")
+    p.add_argument("--body", metavar="B", default=None, help="with --memory-add: body text")
+    p.add_argument("--symbols", metavar="S", default=None,
+                   help="with --memory-add/--decide/--lesson/--adr: comma-separated "
+                        "affected symbols/modules to link in the memory graph")
+    p.add_argument("--priority", metavar="N", type=int, default=None,
+                   help="with --memory-add: override the computed importance (0-100); "
+                        "default: deterministic importance formula — " + MEMORY_IMPORTANCE_HELP)
+    p.add_argument("--memory-stats", action="store_true",
+                   help="typed memory statistics: counts by type/tier, bytes, archive size, "
+                        "top-5 linked symbols")
     p.add_argument("--working-state", action="store_true", help="emit the layered working-state packet (goal, decisions, actions, open items, hot set)")
     p.add_argument("--adr", metavar="TITLE", help="write an Architectural Decision Record (use --context and --decision)")
     p.add_argument("--context", metavar="TEXT", help="context for --adr")
@@ -8988,7 +9442,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
     # --impact / --task / --plan / --pack: task-aware intelligence
-    if args.impact or args.task or args.plan or args.pack or args.cognitive_load or args.check_edit or args.check_delete or args.resume or args.loom or args.remember or args.checkpoint is not None or args.checkpoint_restore or args.adr or args.adr_list or args.decide or args.reject or args.hypothesis or args.list_decisions or args.list_open or args.mark_seen or args.working_state or args.lesson or args.supersede or args.query_memory or args.goal:
+    if args.impact or args.task or args.plan or args.pack or args.cognitive_load or args.check_edit or args.check_delete or args.resume or args.loom or args.remember or args.checkpoint is not None or args.checkpoint_restore or args.adr or args.adr_list or args.decide or args.reject or args.hypothesis or args.list_decisions or args.list_open or args.mark_seen or args.working_state or args.lesson or args.supersede or args.query_memory or args.goal or args.memory or args.memory_add or args.memory_stats:
         gi = os.path.join(root, ".gitignore")
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
@@ -9065,16 +9519,68 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(render_loom_context(files, root, args.loom, args.max_files))
             return 0
 
+        # --memory <symbol> FIRST: graph-linked memory retrieval (never a
+        # write). The legacy --remember NOTE keeps appending; --remember with
+        # a symbol-resolvable value dispatches here too (graph retrieval).
+        if args.memory:
+            print(render_memory_graph(files, root, args.memory,
+                                      target_root=args.target_root,
+                                      include_archive=args.include_archive))
+            return 0
+
+        # --memory-add: generic typed write (needs --title)
+        if args.memory_add:
+            if not args.title:
+                print("--memory-add requires --title (use "
+                      "--type TYPE --title T [--body B] [--symbols S,S])",
+                      file=sys.stderr)
+                return 1
+            e = memory_append(root, args.type or "goal", args.title,
+                              body=args.body or "",
+                              symbols=args.symbols.split(",")
+                              if args.symbols else None,
+                              priority=args.priority, created="memory")
+            print("added [%s] %s — importance: %d, tier: %s"
+                  % (e["type"], e["title"], e["importance"], e["tier"]))
+            return 0
+
+        # --memory-stats: counts by type/tier, bytes, top linked symbols
+        if args.memory_stats:
+            print(render_memory_stats(root))
+            return 0
+
         if args.remember:
+            # legacy --remember NOTE appends to a section (default DECISIONS);
+            # a symbol-resolvable value switches to graph retrieval
+            if memory_symbol_resolve(files, root, args.remember):
+                print(render_memory_graph(files, root, args.remember,
+                                          target_root=args.target_root,
+                                          include_archive=args.include_archive))
+                return 0
             print(memory_remember(root, args.section, args.remember))
             return 0
 
         if args.goal:
             print(wm_goal(root, args.goal))
+            # typed mirror: goal entries append to memory.jsonl too
+            e = memory_append(root, "goal", args.goal, created="goal")
+            print("memory: [goal] importance: %d, tier: %s"
+                  % (e["importance"], e["tier"]))
             return 0
 
         if args.decide:
-            print(wm_decide(root, args.decide, args.reason, args.status))
+            e = wm_decide(root, args.decide, args.reason, args.status)
+            print(e)
+            # typed mirror: decisions append to memory.jsonl (backward compat)
+            me = memory_append(root, "decision", args.decide,
+                               body=("status: %s" % args.status
+                                     if args.status != "accepted" else ""),
+                               reason=args.reason,
+                               symbols=args.symbols.split(",")
+                               if args.symbols else None,
+                               created="decide")
+            print("memory: importance: %d, tier: %s"
+                  % (me["importance"], me["tier"]))
             return 0
 
         if args.reject:
@@ -9083,6 +9589,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.hypothesis:
             print(wm_hypothesis(root, args.hypothesis, "open"))
+            # typed hypothesis: append to memory.jsonl too
+            me = memory_append(root, "hypothesis", args.hypothesis,
+                               body="status: open", created="hypothesis")
+            print("memory: importance: %d, tier: %s"
+                  % (me["importance"], me["tier"]))
             return 0
 
         if args.list_decisions:
@@ -9095,6 +9606,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.lesson:
             print(memory_lesson(root, args.lesson))
+            # typed mirror: lessons append to memory.jsonl too
+            me = memory_append(root, "lesson", args.lesson,
+                               symbols=args.symbols.split(",")
+                               if args.symbols else None,
+                               created="lesson")
+            print("memory: importance: %d, tier: %s"
+                  % (me["importance"], me["tier"]))
             return 0
 
         if args.supersede:
@@ -9132,6 +9650,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.adr:
             print(render_adr(root, args.adr, args.context or "", args.decision or "",
                              args.adr_status))
+            # typed mirror: ADRs append to memory.jsonl too (type architecture)
+            me = memory_append(root, "architecture", args.adr,
+                               body=(args.decision or ""),
+                               reason=(args.context or ""),
+                               symbols=args.symbols.split(",")
+                               if args.symbols else None,
+                               created="adr")
+            print("memory: importance: %d, tier: %s"
+                  % (me["importance"], me["tier"]))
             return 0
 
     if args.churn:

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import time
 from typing import Any, Dict, List, Optional
@@ -33,7 +34,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.78.0"
+SERVER_VERSION = "0.79.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -633,7 +634,7 @@ TOOLS: List[Dict[str, Any]] = [
         "description": (
             "Single natural-language entry point. Ask in plain English and "
             "codeloom routes deterministically to the right tool — the agent "
-            "never has to pick among 79 tools. Examples: 'what matters for "
+            "never has to pick among 82 tools. Examples: 'what matters for "
             "fixing the login bug', 'what breaks if I change auth.py', 'where "
             "is the Agent class', 'what calls what across files', 'give me the "
             "whole context for adding retry'. This eliminates tool-routing "
@@ -671,18 +672,70 @@ TOOLS: List[Dict[str, Any]] = [
     {
         "name": "codeloom_remember",
         "description": (
-            "Append a note to the repository's persistent memory (architecture "
-            "decisions, patterns, conventions). Future loom_context calls return "
-            "it. Section: ARCHITECTURE | DECISIONS | PATTERNS | CONVENTIONS."
+            "Memory OS retrieval: fetch everything the repo remembers about a "
+            "symbol — linked memory notes, decisions, lessons, and the memory "
+            "graph around it. Ask 'what do we know about Engine'. Graph-linked "
+            "retrieval via core --memory <symbol>."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
-                "note": {"type": "string", "description": "The decision/pattern to remember"},
-                "section": {"type": "string", "description": "ARCHITECTURE|DECISIONS|PATTERNS|CONVENTIONS (default DECISIONS)"},
+                "symbol": {"type": "string", "description": "Symbol/module to retrieve memory for, e.g. 'Engine' or 'core.engine'"},
             },
-            "required": ["note"],
+            "required": ["symbol"],
+        },
+    },
+    {
+        "name": "codeloom_memory_add",
+        "description": (
+            "Memory OS add: write a typed memory entry (decision, bug, lesson, "
+            "constraint, architecture, api, question, todo, warning) linked to "
+            "symbols. Entries feed codeloom_remember graph retrieval. Use for "
+            "'remember this', 'note that', 'add memory'."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "type": {"type": "string", "enum": ["decision", "bug", "question", "architecture", "api", "constraint", "lesson", "todo", "warning"], "description": "Memory entry type (default: decision)"},
+                "title": {"type": "string", "description": "Short title for the memory entry"},
+                "body": {"type": "string", "description": "Full body/details of the memory entry"},
+                "symbols": {"type": "string", "description": "Comma-separated symbols this memory links to (optional)"},
+                "priority": {"type": "integer", "description": "Optional priority 1-5 (higher = more important)"},
+            },
+            "required": ["title", "body"],
+        },
+    },
+    {
+        "name": "codeloom_memory_stats",
+        "description": (
+            "Memory OS stats: report the repository's memory health — entry "
+            "counts by type, growth bounds, archive size. Call before pruning "
+            "or to understand how much memory the repo holds."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+            },
+        },
+    },
+    {
+        "name": "codeloom_memory_prune",
+        "description": (
+            "Memory OS growth bounds: report archive entries older than N days "
+            "(dry-run; NEVER auto-deletes). Use with 'delete': true to actually "
+            "prune the reported entries. The memory layer is lossless until you "
+            "explicitly prune."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+                "older_than_days": {"type": "integer", "description": "Prune archive entries older than N days (default 90)"},
+                "delete": {"type": "boolean", "description": "Actually delete the reported entries (default false — dry-run report only)"},
+            },
         },
     },
     {
@@ -1554,7 +1607,7 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
     always returns the map + task relevance — never an error. Even an ambiguous
     query yields something the agent can act on, so a 'wrong' pick is still
     helpful. This is the answer to jcodemunch's 91-tool routing problem: the
-    agent never picks among 79 tools, and codeloom never returns nothing."""
+    agent never picks among 82 tools, and codeloom never returns nothing."""
     q = (args.get("query") or "").strip().lower()
     if not q:
         # empty query -> still return the map (never an error)
@@ -1698,17 +1751,42 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
         if any(k in q for k in ["open", "hypothes"]):
             return {"content": [{"type": "text", "text": codeloom.list_open_items(root)}]}
         return {"content": [{"type": "text", "text": codeloom.render_working_state(root, full=True)}]}
-    if any(k in q for k in ["remember", "save this", "note this", "record that", "write down"]):
+    # Memory OS: retrieval first (specific write phrases beat bare 'remember')
+    if any(k in q for k in ["remember this", "remember that", "note that",
+                            "add memory", "save this", "note this",
+                            "record that", "write down"]):
         import re as _re
-        note = q.replace("remember", "").replace("save this", "").replace("note this", "").replace("record that", "").replace("write down", "").strip()
-        section = "DECISIONS"
-        if any(k in q for k in ["architecture"]):
-            section = "ARCHITECTURE"
-        elif any(k in q for k in ["pattern"]):
-            section = "PATTERNS"
-        elif any(k in q for k in ["convention"]):
-            section = "CONVENTIONS"
-        return {"content": [{"type": "text", "text": codeloom.memory_remember(root, section, note or q)}]}
+        text = _re.sub(r"(remember this|remember that|note that|add memory|save this|note this|record that|write down)", "", q).strip()
+        mtype = "decision"
+        if any(k in q for k in ["bug", "broken", "fails", "error"]):
+            mtype = "bug"
+        elif any(k in q for k in ["lesson", "learned", "trap"]):
+            mtype = "lesson"
+        elif any(k in q for k in ["todo", "to do", "next step", "still need"]):
+            mtype = "todo"
+        elif any(k in q for k in ["api", "endpoint", "interface"]):
+            mtype = "api"
+        elif any(k in q for k in ["constraint", "can't", "cannot", "must "]):
+            mtype = "constraint"
+        elif any(k in q for k in ["warning", "caution", "careful"]):
+            mtype = "warning"
+        elif any(k in q for k in ["architecture", "design"]):
+            mtype = "architecture"
+        elif any(k in q for k in ["question", "wonder", "how does"]):
+            mtype = "question"
+        title = text[:80] or q
+        return {"content": [{"type": "text", "text": _memory_add(root, title, text or q, mtype, "", None)}]}
+    if any(k in q for k in ["remember", "what do we know about", "memory about"]):
+        import re as _re
+        _stop = {"what", "do", "we", "know", "about", "memory", "the", "a", "an",
+                 "of", "on", "for", "this", "that", "in", "is", "are", "remember"}
+        sym = None
+        for tok in _re.findall(r"[A-Za-z_][\w.]*", q):
+            if tok.lower() not in _stop:
+                sym = tok
+                break
+        if sym:
+            return {"content": [{"type": "text", "text": _memory_symbol(root, sym)}]}
     if any(k in q for k in ["what did i remember", "my memory", "read memory", "what do i know"]):
         return {"content": [{"type": "text", "text": codeloom.memory_read(root)}]}
     if any(k in q for k in ["adr", "architectural decision", "record decision", "decision record"]):
@@ -1762,6 +1840,77 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
     return {"content": [{"type": "text", "text": map_text + "\n" + task_text}]}
 
 
+def _core_argv(flag: str, *values: str) -> List[str]:
+    """argv for the codeloom CLI fallback (no shell)."""
+    return [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "codeloom.py"),
+            flag, *values]
+
+
+def _memory_symbol(root: str, symbol: str) -> str:
+    """Graph-linked memory retrieval: core render_memory_graph() if landed,
+    else subprocess fallback to `python3 codeloom.py --memory <symbol> <root>`."""
+    fn = getattr(codeloom, "render_memory_graph", None)
+    if callable(fn):
+        return str(fn(_collect_files(root, 5000), root, symbol))
+    try:
+        out = subprocess.run(_core_argv("--memory", symbol, root),
+                             capture_output=True, text=True, timeout=120)
+        raw = out.stdout if out.stdout else out.stderr
+        return (raw or "").strip() or f"# memory {symbol}: (no output)"
+    except Exception as e:  # pragma: no cover - fallback chain end
+        return f"# memory retrieval failed: {e}"
+
+
+def _memory_add(root: str, title: str, body: str, mtype: str,
+                symbols: str, priority: Optional[int]) -> str:
+    """Memory OS write: core memory_append() if landed, else subprocess
+    fallback to `python3 codeloom.py --memory-add ...` (tests.py convention)."""
+    if mtype not in ("decision", "bug", "question", "architecture", "api",
+                     "constraint", "lesson", "todo", "warning"):
+        mtype = "decision"
+    fn = getattr(codeloom, "memory_append", None)
+    if callable(fn):
+        syms = [s.strip() for s in (symbols or "").split(",") if s and s.strip()]
+        entry: Any = fn(root, mtype, title, body=body, symbols=syms or None,
+                        priority=priority, created="memory")
+        if entry.get("error"):
+            return f"# memory-add failed: {entry['error']}"
+        return ("added [%s] %s — importance: %d, tier: %s"
+                % (entry.get("type", mtype), entry.get("title", title),
+                   entry.get("importance", 0), entry.get("tier", "?")))
+    # core CLI convention (tests.py): --memory-add --type T --title TITLE
+    # --symbols SYMS [--body BODY] [--priority N] <root>
+    argv = _core_argv("--memory-add", root)
+    argv += ["--type", mtype, "--title", title]
+    if body:
+        argv += ["--body", body]
+    if symbols:
+        argv += ["--symbols", symbols]
+    if priority is not None:
+        argv += ["--priority", str(int(priority))]
+    try:
+        out = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        raw = out.stdout if out.stdout else out.stderr
+        return (raw or "").strip() or f"# memory-add: {title} (no output)"
+    except Exception as e:  # pragma: no cover - fallback chain end
+        return f"# memory-add failed: {e}"
+
+
+def _memory_stats(root: str) -> str:
+    """Memory OS stats: core render_memory_stats() if landed, else subprocess
+    fallback to `python3 codeloom.py --memory-stats <root>`."""
+    fn = getattr(codeloom, "render_memory_stats", None)
+    if callable(fn):
+        return str(fn(root))
+    try:
+        out = subprocess.run(_core_argv("--memory-stats", root),
+                             capture_output=True, text=True, timeout=60)
+        raw = out.stdout if out.stdout else out.stderr
+        return (raw or "").strip() or "# memory stats: (no output)"
+    except Exception as e:  # pragma: no cover - fallback chain end
+        return f"# memory stats failed: {e}"
+
+
 def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     """Execute a tool and return an MCP result (text content)."""
     root = os.path.abspath(args.get("root", "."))
@@ -1769,7 +1918,7 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     files = _collect_files(root, max_files)
 
     # codeloom_ask: single natural-language entry point that routes
-    # deterministically — the agent never has to pick among 79 tools.
+    # deterministically — the agent never has to pick among 82 tools.
     if name == "codeloom_ask":
         return _route_ask(args, root, max_files)
 
@@ -1936,11 +2085,28 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         text = codeloom.render_loom_context(f, root, task, max_files)
 
     elif name == "codeloom_remember":
-        note = args.get("note")
-        section = args.get("section", "DECISIONS")
-        if not note:
-            return {"isError": True, "content": [{"type": "text", "text": "missing 'note' argument"}]}
-        text = codeloom.memory_remember(root, section, note)
+        symbol = args.get("symbol")
+        if not symbol:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
+        text = _memory_symbol(root, symbol)
+
+    elif name == "codeloom_memory_add":
+        title = args.get("title")
+        body = args.get("body")
+        if not title or not body:
+            return {"isError": True, "content": [{"type": "text", "text": "missing 'title'/'body' arguments"}]}
+        text = _memory_add(root, title, body,
+                           args.get("type", "decision"),
+                           args.get("symbols", ""),
+                           args.get("priority"))
+
+    elif name == "codeloom_memory_stats":
+        text = _memory_stats(root)
+
+    elif name == "codeloom_memory_prune":
+        text = codeloom.render_memory_prune(
+            root, int(args.get("older_than_days", 90)),
+            bool(args.get("delete", False)))
 
     elif name == "codeloom_adr":
         title = args.get("title")

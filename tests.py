@@ -1880,5 +1880,225 @@ class TestEvalPlumbing(unittest.TestCase):
             force_rmtree(base)
 
 
+def _memory_os_implemented():
+    """True once codeloom.py grows the MemoryOS layer (--memory-add /
+    --memory-stats / memory.jsonl). Owned by a sibling agent working in
+    parallel; until it lands these tests skip so the suite stays green."""
+    try:
+        with open(os.path.join(TESTS_DIR, "codeloom.py"), "r",
+                  encoding="utf-8", errors="replace") as fh:
+            src = fh.read()
+    except OSError:
+        return False
+    return "--memory-add" in src and "memory.jsonl" in src
+
+
+@unittest.skipUnless(_memory_os_implemented(),
+                     "MemoryOS (--memory-add/--memory graph/--memory-stats, "
+                     "memory.jsonl) not implemented in codeloom.py yet")
+class TestMemoryOS(unittest.TestCase):
+    """Typed JSONL repository memory: schema, backward-compat dual write,
+    importance formula, graph-linked --memory, jsonl query, stats, and
+    lossless cap rotation. All writes go to .codeloom-memory/ in a
+    throwaway CWD so the repo and checkout stay clean."""
+
+    def _cli(self, *argv, cwd, env=None):
+        e = dict(os.environ)
+        if env:
+            e.update(env)
+        r = subprocess.run(
+            [sys.executable, os.path.join(TESTS_DIR, "codeloom.py")]
+            + list(argv),
+            capture_output=True, text=True, cwd=cwd, env=e, timeout=120)
+        return r
+
+    def _jsonl(self, cwd):
+        """All entries currently in .codeloom-memory/memory.jsonl."""
+        p = os.path.join(cwd, ".codeloom-memory", "memory.jsonl")
+        entries = []
+        if os.path.isfile(p):
+            with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        entries.append(json.loads(line))
+        return entries
+
+    def test_memory_add_writes_jsonl(self):
+        # --memory-add --type bug --title "login fails" --symbols AuthService
+        # creates .codeloom-memory/memory.jsonl with one well-shaped entry
+        tmp = tempfile.mkdtemp()
+        try:
+            r = self._cli("--memory-add", "--type", "bug",
+                          "--title", "login fails",
+                          "--symbols", "AuthService", cwd=tmp)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            p = os.path.join(tmp, ".codeloom-memory", "memory.jsonl")
+            self.assertTrue(os.path.isfile(p), "memory.jsonl not created")
+            entries = self._jsonl(tmp)
+            self.assertEqual(len(entries), 1)
+            e = entries[0]
+            for key in ("type", "id", "title", "body", "affected_symbols",
+                        "importance", "confidence", "tier", "timestamp",
+                        "created"):
+                self.assertIn(key, e, "schema key %r missing" % key)
+            self.assertEqual(e["type"], "bug")
+            self.assertEqual(e["title"], "login fails")
+            self.assertIn("AuthService", e.get("affected_symbols") or [])
+        finally:
+            force_rmtree(tmp)
+
+    def test_decide_appends_both(self):
+        # --decide keeps writing DECISIONS.md (markdown backward compat)
+        # AND appends a typed jsonl entry
+        tmp = tempfile.mkdtemp()
+        try:
+            r = self._cli("--decide", "use JWT", "--reason", "stateless",
+                          cwd=tmp)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            dec = os.path.join(tmp, ".codeloom-memory", "DECISIONS.md")
+            self.assertTrue(os.path.isfile(dec), "DECISIONS.md must survive")
+            with open(dec, "r", encoding="utf-8") as fh:
+                self.assertIn("use JWT", fh.read())
+            entries = self._jsonl(tmp)
+            self.assertEqual(len(entries), 1, "one jsonl entry expected")
+            e = entries[0]
+            self.assertEqual(e["type"], "decision")
+            blob = (e.get("title") or "") + " " + (e.get("body") or "")
+            self.assertIn("use JWT", blob)
+        finally:
+            force_rmtree(tmp)
+
+    def test_importance_formula(self):
+        # base 10 + bug 20 + "must never fail" keyword 30 + symbols 5+ =>
+        # importance >= 60; the CLI prints the "importance: N" line
+        import re as _re
+        tmp = tempfile.mkdtemp()
+        try:
+            r = self._cli("--memory-add", "--type", "bug",
+                          "--title", "auth crash",
+                          "--body", "the login flow must never fail or tokens leak",
+                          "--symbols", "AuthService,RateLimiter", cwd=tmp)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            m = _re.search(r"importance:\s*(\d+)", r.stdout)
+            self.assertIsNotNone(
+                m, "expected 'importance: N' in output: %r" % r.stdout)
+            self.assertGreaterEqual(int(m.group(1)), 60)
+            self.assertGreaterEqual(self._jsonl(tmp)[0]["importance"], 60)
+        finally:
+            force_rmtree(tmp)
+
+    def test_remember_graph_links(self):
+        # mini repo: engine.py, auth.py (imports engine), utils.py.
+        # A decision pinned to engine symbols must be found by
+        # --memory <engine symbol> together with the graph-reachable
+        # section (auth.py depends on engine).
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(repo)
+            def w(name, text):
+                with open(os.path.join(repo, name), "w") as fh:
+                    fh.write(text)
+            w("engine.py",
+              "class Engine:\n"
+              "    def run(self):\n"
+              "        return 42\n"
+              "\n"
+              "def start():\n"
+              "    return Engine().run()\n")
+            w("auth.py",
+              "from engine import Engine\n"
+              "\n"
+              "class Auth:\n"
+              "    def login(self):\n"
+              "        return Engine().run()\n")
+            w("utils.py",
+              "def retry(fn, tries=3):\n"
+              "    return fn()\n")
+            r1 = self._cli("--decide", "Engine must stay stateless",
+                           "--reason", "pure safety",
+                           "--symbols", "Engine", cwd=repo)
+            self.assertEqual(r1.returncode, 0, r1.stderr)
+            r2 = self._cli("--memory", "Engine", cwd=repo)
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            # the entry itself is returned
+            self.assertIn("Engine must stay stateless", r2.stdout)
+            # graph-reachable section: auth.py depends on engine
+            self.assertIn("auth", r2.stdout.lower())
+        finally:
+            force_rmtree(tmp)
+
+    def test_query_memory_json(self):
+        # --query-memory is extended to memory.jsonl: a keyword only present
+        # in a typed entry must still come back
+        tmp = tempfile.mkdtemp()
+        try:
+            r1 = self._cli("--memory-add", "--type", "bug",
+                           "--title", "zebra token cassette",
+                           "--body", "always rotate the zebra_key", cwd=tmp)
+            self.assertEqual(r1.returncode, 0, r1.stderr)
+            r2 = self._cli("--query-memory", "zebra", cwd=tmp)
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            # the jsonl entry body, not just the echoed query header
+            self.assertIn("zebra token cassette", r2.stdout)
+        finally:
+            force_rmtree(tmp)
+
+    def test_memory_stats_counts(self):
+        import re as _re
+        tmp = tempfile.mkdtemp()
+        try:
+            r1 = self._cli("--memory-add", "--type", "bug",
+                           "--title", "crash on mount", cwd=tmp)
+            self.assertEqual(r1.returncode, 0, r1.stderr)
+            r2 = self._cli("--decide", "adopt JSON", "--reason", "typed",
+                           cwd=tmp)
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            r3 = self._cli("--memory-stats", cwd=tmp)
+            self.assertEqual(r3.returncode, 0, r3.stderr)
+            self.assertIn("bug", r3.stdout)
+            self.assertIn("decision", r3.stdout)
+            self.assertRegex(r3.stdout, _re.compile(r"bug\s*[:=]\s*1"))
+            self.assertRegex(r3.stdout, _re.compile(r"decision\s*[:=]\s*1"))
+        finally:
+            force_rmtree(tmp)
+
+    def test_memory_cap_rotation(self):
+        # tiny CODELOOM_MEMORY_CAP_BYTES forces lossless rotation of
+        # memory.jsonl into archive/memory-<date>.jsonl; every written
+        # entry must stay recoverable (live + archive)
+        tmp = tempfile.mkdtemp()
+        try:
+            env = {"CODELOOM_MEMORY_CAP_BYTES": "300"}
+            titles = []
+            for i in range(10):
+                t = "entry %02d" % i
+                titles.append(t)
+                r = self._cli("--memory-add", "--type", "bug",
+                              "--title", t, cwd=tmp, env=env)
+                self.assertEqual(r.returncode, 0, r.stderr)
+            memdir = os.path.join(tmp, ".codeloom-memory")
+            arch = os.path.join(memdir, "archive")
+            self.assertTrue(os.path.isdir(arch), "archive dir expected")
+            arch_files = [f for f in os.listdir(arch)
+                          if f.startswith("memory") and f.endswith(".jsonl")]
+            self.assertTrue(arch_files,
+                            "expected archive/memory-<date>.jsonl rotation")
+            seen = set()
+            paths = [os.path.join(memdir, "memory.jsonl")]
+            paths += [os.path.join(arch, f) for f in sorted(arch_files)]
+            for p in paths:
+                with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if line:
+                            seen.add(json.loads(line)["title"])
+            for t in titles:
+                self.assertIn(t, seen, "entry %r lost in rotation" % t)
+        finally:
+            force_rmtree(tmp)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
