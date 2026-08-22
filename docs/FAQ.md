@@ -68,12 +68,12 @@ READMEs. We measured them live on the same repo. Where we win:
   loop" is a markdown journal of Q&A — it remembers *answers*, not
   *decisions*. codeloom's ledger (`--decide` → `--checkpoint` → `--resume`)
   restores both the map *and* what the agent tried/decided/rejected, in
-  **2 calls / ~777 tokens measured** (bare re-derive: 33 calls / ~36k
+  **2 calls / ~985 tokens measured** (bare re-derive: 33 calls / ~21.6k
   tokens — [`benchmarks/README.md`](../benchmarks/README.md)).
-- **Zero install.** One stdlib file vs pip (78 packages) + graph build +
+- **Zero install.** One stdlib file vs pip (75 packages) + graph build +
   daemon (`crg-daemon` with health checks + TOML config) + an
   embeddings extra (~2GB) for semantic search. Setup→first answer:
-  0.105s warm for us, 41s+pip+build for them.
+  0.13s warm for us, 41s+pip+build for them.
 - **Symbol retrieval: 24–36× fewer tokens** on the same fastapi symbols
   (13–20 vs 428–485, measured).
 

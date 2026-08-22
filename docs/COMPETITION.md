@@ -40,11 +40,11 @@ marked. Last updated: 2026-08-22.
 
 Where codeloom leads:
 - **Zero-dependency single file under MIT** — none of the eight match all three.
-- **Compaction-survival decision ledger** — measured (97.9% fewer tokens to recover, `benchmarks/compaction_recovery.py`); code-review-graph has zero mentions of compaction/session/resume in its README; CCE requires agent-called MCP tools + running server.
+- **Compaction-survival decision ledger** — measured (95.4% fewer tokens to recover, `benchmarks/compaction_recovery.py`); code-review-graph has zero mentions of compaction/session/resume in its README; CCE requires agent-called MCP tools + running server.
 - **78 tools behind 1 NL router** — crg's 30 tools have no router (adherence problem the CodeRLM thread hit).
 - **Fixture-gated grammar claims** — 46 languages golden-file parity in CI.
 - **Zero-dep offline semantic search** — crg needs a 2GB model extra or cloud key; CCE needs ONNX.
-- **Setup-to-first-answer** — measured: 0.105s warm vs crg 41s pip + 4s build + daemon.
+- **Setup-to-first-answer** — measured: 0.13s warm vs crg 41s pip + 4s build + daemon.
 
 Where competitors lead (stated plainly):
 - **crg**: community scale, 5 translated READMEs, eval runner, multi-repo registry, incremental rebuilds.

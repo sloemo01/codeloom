@@ -154,16 +154,16 @@ claude-context, codeseek, jcodemunch, codegraph, codebase-memory-mcp, repowise
 
 | | **codeloom** | code-review-graph (30.6k★) | code-context-engine | claude-context |
 |---|---|---|---|---|
-| Install | **one stdlib file** | pip: **78 packages** + daemon + TOML config | pip + ONNX + server | npm |
+| Install | **one stdlib file** | pip: **75 packages** + daemon + TOML config | pip + ONNX + server | npm |
 | Background process | **none** | `crg-daemon` (16MB RSS, health checks) | `cce serve` + resource governor | — |
-| Compaction memory | ✅ **decision ledger, measured: 2 calls / 777 tok to recover** (97.9% fewer) | ⚠️ markdown Q&A journal, zero compaction mentions | ⚠️ agent-called `record_decision` MCP | memsearch plugin |
+| Compaction memory | ✅ **decision ledger, measured: 2 calls / ~985 tok to recover** (95.4% fewer) | ⚠️ markdown Q&A journal, zero compaction mentions | ⚠️ agent-called `record_decision` MCP | memsearch plugin |
 | MCP surface | **78 + 1 NL router** | 30, no router | 22 | many |
 | Semantic search | ✅ zero-dep, offline | ❌ `[embeddings]` extra (~2GB) or cloud key | ❌ ONNX required | ✅ (Zilliz) |
 | Language proof | **46 fixture-proven in CI** | not published | — | — |
-| Setup→answer | **0.105s warm** | 41s pip + 4s build + daemon | after indexing | after indexing |
+| Setup→answer | **0.13s warm** | 41s pip + 4s build + daemon | after indexing | after indexing |
 
 Measured numbers: symbol retrieval 24–36× fewer tokens than crg; compaction
-recovery **97.9% fewer tokens**; Linux kernel full graph (C engine) ~89-113s. Details and
+recovery **95.4% fewer tokens**; Linux kernel full graph (C engine) ~89-113s. Details and
 reproduction commands in [`benchmarks/README.md`](benchmarks/README.md).
 
 Where competitors are ahead, stated plainly: jcodemunch has broader safety

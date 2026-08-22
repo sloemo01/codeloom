@@ -26,9 +26,9 @@ I kept hitting this, so I built codeloom: one file, zero dependencies, no daemon
 
 **The measured numbers (all reproducible, loss rows published):**
 
-- **Compaction recovery: 2 calls / ~777 tokens vs 33 calls / ~36k tokens.** After a compaction, `--resume` restores both the structural map and the decision ledger. Nobody else publishes this number — the 30k★ field leader has zero mentions of compaction in its README. ([bench](https://github.com/sloemo01/codeloom/blob/main/benchmarks/README.md))
+- **Compaction recovery: 2 calls / ~985 tokens vs 33 calls / ~21.6k tokens.** After a compaction, `--resume` restores both the structural map and the decision ledger. Nobody else publishes this number — the 30k★ field leader has zero mentions of compaction in its README. ([bench](https://github.com/sloemo01/codeloom/blob/main/benchmarks/README.md))
 - **Symbol retrieval: 24–36× fewer tokens than code-review-graph** on the same fastapi symbols, same tokenizer (13–20 vs 428–485). Measured live against their MCP server.
-- **Setup-to-first-answer: 0.105s** (warm). Theirs: pip install (78 packages) + graph build (42MB) + daemon + an embeddings extra (~2GB) for semantic search. Ours: copy one stdlib file.
+- **Setup-to-first-answer: 0.13s warm** (after `--index`). Theirs: pip install (75 packages) + graph build (42MB) + daemon + an embeddings extra (~2GB) for semantic search. Ours: copy one stdlib file.
 - **Sealed retrieval run (no LLM):** 10 calls / 731 tokens vs bare grep-and-read 29 calls / 6,602 tokens, same hit-rate or better.
 
 **The one thing that matters: `--pack` is a code-embedded task brief, not a ranked list.**
@@ -66,13 +66,13 @@ Would love feedback — especially on the edit-relevance ranking and the compact
 
 So I built codeloom: a map of your repo for agents. One file, zero deps, no daemon, 100% local. Under a second.
 
-**2/6** The measured differentiator: after a context compaction, a bare agent re-derives with **33 calls / ~36k tokens**. `codeloom --resume` restores the map *and* the decision ledger in **2 calls / ~777 tokens**. The 30k★ field leader has zero mentions of compaction anywhere.
+**2/6** The measured differentiator: after a context compaction, a bare agent re-derives with **33 calls / ~21.6k tokens**. `codeloom --resume` restores the map *and* the decision ledger in **2 calls / ~985 tokens**. The 30k★ field leader has zero mentions of compaction anywhere.
 
 **3/6** The pitch in one line: the search tools answer "where is this symbol?" codeloom answers "what code actually runs for this task?" — and embeds it.
 
 `codeloom --pack "fix the login bug"` returns a ~1.6k-token brief with the actual `login()` source embedded, the call path, the impact list, and what's safe to touch. An agent pastes it once and works — zero retrieval on the core path.
 
-**4/6** Measured head-to-head vs code-review-graph (same repo, same symbols, same tokenizer): 13–20 tokens vs 428–485. Setup: one stdlib file vs 78 pip packages + a daemon. Semantic search: zero-dep offline vs a ~2GB embeddings extra.
+**4/6** Measured head-to-head vs code-review-graph (same repo, same symbols, same tokenizer): 13–20 tokens vs 428–485. Setup: one stdlib file vs 75 pip packages + a daemon. Semantic search: zero-dep offline vs a ~2GB embeddings extra.
 
 **5/6** Zero-install, zero-telemetry, offline — one stdlib file, no pip, no model downloads, no license checks, no telemetry that phones home. The heavyweight tools can't say that.
 
@@ -131,7 +131,7 @@ Also:
 - **CI action** — `codeloom --install-agents .` writes AGENTS.md + a GitHub Action that posts the `--pack` brief on every PR
 - **MCP server** — zero-dep, 78 tools, resident in-memory knowledge graph + `--watch` incremental refresh (daemon-speed, no daemon)
 - **AST depth, repo-aware** — `--auto-grammars` scans the repo and installs grammars for its languages; 130+ extensions via regex/C extraction
-- **Compaction recovery, measured** — after a compaction: 2 calls / ~777 tokens to restore (`--resume`) vs 33 calls / ~36k tokens to re-derive (bare). All numbers reproducible: github.com/sloemo01/codeloom/blob/main/benchmarks/README.md
+- **Compaction recovery, measured** — after a compaction: 2 calls / ~985 tokens to restore (`--resume`) vs 33 calls / ~21.6k tokens to re-derive (bare). All numbers reproducible: github.com/sloemo01/codeloom/blob/main/benchmarks/README.md
 
 Repo: https://github.com/sloemo01/codeloom
 

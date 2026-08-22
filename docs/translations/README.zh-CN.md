@@ -154,14 +154,14 @@ codeloom --resume                                 # restore after compaction
 |---|---|---|---|---|
 | 安装 | **一个 stdlib 文件** | pip：**78 个包** + 守护进程 + TOML 配置 | pip + ONNX + 服务器 | npm |
 | 后台进程 | **无** | `crg-daemon`（16MB RSS，健康检查） | `cce serve` + 资源治理 | — |
-| 压缩后记忆 | ✅ **决策台账，实测：2 次调用 / 777 个 token 即可恢复**（少 97.9%） | ⚠️ markdown 问答日志，零压缩提及 | ⚠️ 代理调用的 `record_decision` MCP | memsearch 插件 |
+| 压缩后记忆 | ✅ **决策台账，实测：2 次调用 / ~985 个 token 即可恢复**（少 95.4%） | ⚠️ markdown 问答日志，零压缩提及 | ⚠️ 代理调用的 `record_decision` MCP | memsearch 插件 |
 | MCP 表面 | **78 + 1 个自然语言路由器** | 30，无路由器 | 22 | 很多 |
 | 语义搜索 | ✅ 零依赖、离线 | ❌ `[embeddings]` 附加项（约 2GB）或云端密钥 | ❌ 需要 ONNX | ✅ (Zilliz) |
 | 语言证明 | **46 种语言在 CI 中经 fixture 验证** | 未公布 | — | — |
-| 安装→出答案 | **0.105 秒热启动** | 41 秒 pip + 4 秒构建 + 守护进程 | 建索引后 | 建索引后 |
+| 安装→出答案 | **0.13 秒热启动** | 41 秒 pip + 4 秒构建 + 守护进程 | 建索引后 | 建索引后 |
 
 实测数据：符号检索比 crg 少 24–36 倍 tokens；压缩恢复
-**少 97.9% tokens**；Linux 内核完整图约 89–113 秒（C 引擎）。细节和
+**少 95.4% tokens**；Linux 内核完整图约 89–113 秒（C 引擎）。细节和
 复现命令见 [`benchmarks/README.md`](benchmarks/README.md)。
 
 竞品领先的地方，直说无妨：jcodemunch 有更广的安全预检

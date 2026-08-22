@@ -168,14 +168,14 @@ para los números):
 |---|---|---|---|---|
 | Instalación | **un archivo stdlib** | pip: **78 paquetes** + daemon + configuración TOML | pip + ONNX + server | npm |
 | Proceso en segundo plano | **ninguno** | `crg-daemon` (16MB RSS, comprobaciones de salud) | `cce serve` + gobernador de recursos | — |
-| Memoria de compactación | ✅ **registro de decisiones, medido: 2 llamadas / 777 tok para recuperar** (97.9% menos) | ⚠️ diario Q&A en markdown, cero menciones de compactación | ⚠️ MCP `record_decision` invocado por el agente | plugin memsearch |
+| Memoria de compactación | ✅ **registro de decisiones, medido: 2 llamadas / ~985 tok para recuperar** (95.4% menos) | ⚠️ diario Q&A en markdown, cero menciones de compactación | ⚠️ MCP `record_decision` invocado por el agente | plugin memsearch |
 | Superficie MCP | **78 + 1 router NL** | 30, sin router | 22 | muchas |
 | Búsqueda semántica | ✅ cero dependencias, sin conexión | ❌ extra `[embeddings]` (~2GB) o clave en la nube | ❌ requiere ONNX | ✅ (Zilliz) |
 | Prueba de lenguajes | **46 probados por fixtures en CI** | no publicado | — | — |
-| Configuración→respuesta | **0.105s en caliente** | 41s pip + 4s build + daemon | tras la indexación | tras la indexación |
+| Configuración→respuesta | **0.13s en caliente** | 41s pip + 4s build + daemon | tras la indexación | tras la indexación |
 
 Números medidos: recuperación de símbolos con 24–36× menos tokens que crg;
-recuperación tras compactación con **97.9% menos tokens**; grafo completo del
+recuperación tras compactación con **95.4% menos tokens**; grafo completo del
 kernel de Linux en ~89–113s (motor C). Detalles y comandos de reproducción en
 [`benchmarks/README.md`](benchmarks/README.md).
 
