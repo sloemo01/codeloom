@@ -33,7 +33,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.77.0"
+SERVER_VERSION = "0.78.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -596,11 +596,44 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "codeloom_verify_edit",
+        "description": (
+            "Edit-safety preflight: given a target file (or repo root), report "
+            "whether an edit there is safe — dependents, call sites, blast "
+            "radius — with a GO/STOP verdict. Ask before editing: 'did I break "
+            "X', 'check my edit', 'is my edit safe'."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {"type": "string", "description": "File to edit or repo root to audit"},
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+            },
+            "required": ["target"],
+        },
+    },
+    {
+        "name": "codeloom_blindspot",
+        "description": (
+            "Coverage audit: find the files/symbols you have NOT read yet so "
+            "nothing important is missed before you act. Answers 'read "
+            "coverage', 'read everything', 'what haven't I read', 'blindspot'."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {"type": "string", "description": "Path or repo root to audit for blind spots"},
+                "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
+            },
+            "required": ["target"],
+        },
+    },
+    {
         "name": "codeloom_ask",
         "description": (
             "Single natural-language entry point. Ask in plain English and "
             "codeloom routes deterministically to the right tool — the agent "
-            "never has to pick among 77 tools. Examples: 'what matters for "
+            "never has to pick among 79 tools. Examples: 'what matters for "
             "fixing the login bug', 'what breaks if I change auth.py', 'where "
             "is the Agent class', 'what calls what across files', 'give me the "
             "whole context for adding retry'. This eliminates tool-routing "
@@ -1467,6 +1500,53 @@ def _resolve_focus(graph: dict, module: str, root: str) -> Optional[str]:
     return match
 
 
+_CLI_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "codeloom.py")
+
+
+def _run_core_or_cli(candidates: tuple, cli_argv: List[str], target: str, label: str) -> str:
+    """Invoke the newest codeloom machinery from the MCP server.
+
+    Prefers the core render function by direct import (candidate names, since
+    the core agent may name it render_X or X); falls back to the CLI equivalent
+    via argv (never shell=True). If neither exists yet (core agent still
+    building), returns a clear, non-crashing placeholder.
+    """
+    for name in candidates:
+        fn = getattr(codeloom, name, None)
+        if fn is not None:
+            try:
+                out = fn(target)
+            except Exception as exc:  # noqa: BLE001 - surface honestly, never crash
+                return f"# codeloom_{label}\ncore {name} raised: {exc}\n"
+            return out if isinstance(out, str) else str(out)
+    import subprocess as _sp
+    try:
+        proc = _sp.run(cli_argv, capture_output=True, text=True, timeout=120)
+    except Exception as exc:  # noqa: BLE001
+        return (f"# codeloom_{label}\n{label} not yet available in core "
+                f"({'/'.join(candidates)} missing; subprocess failed: {exc}).\n")
+    if proc.returncode == 0 and proc.stdout.strip():
+        return proc.stdout
+    errs = [ln for ln in (proc.stderr or "").splitlines() if ln.strip()]
+    hint = errs[0] if errs else f"exit {proc.returncode}"
+    return (f"# codeloom_{label}\n{label} not yet available in core "
+            f"({'/'.join(candidates)} missing and `{' '.join(cli_argv)}` failed: {hint}).\n")
+
+
+def _verify_edit(target: str) -> str:
+    """Edit-safety preflight: core verify_edit/render_verify_edit, else CLI."""
+    return _run_core_or_cli(("verify_edit", "render_verify_edit"),
+                            [sys.executable, _CLI_PATH, "--verify-edit", target],
+                            target, "verify_edit")
+
+
+def _blindspot(target: str) -> str:
+    """Coverage audit: core render_blindspot, else CLI --blindspot."""
+    return _run_core_or_cli(("render_blindspot",),
+                            [sys.executable, _CLI_PATH, "--blindspot", target],
+                            target, "blindspot")
+
+
 def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any]:
     """Route a natural-language request to the right codeloom tool.
 
@@ -1474,12 +1554,36 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
     always returns the map + task relevance — never an error. Even an ambiguous
     query yields something the agent can act on, so a 'wrong' pick is still
     helpful. This is the answer to jcodemunch's 91-tool routing problem: the
-    agent never picks among 77 tools, and codeloom never returns nothing."""
+    agent never picks among 79 tools, and codeloom never returns nothing."""
     q = (args.get("query") or "").strip().lower()
     if not q:
         # empty query -> still return the map (never an error)
         return {"content": [{"type": "text", "text": codeloom.render_text(codeloom.build_map(root, True, max_files))}]}
     files = _collect_files(root, max_files)
+
+    # 0. Edit-safety guard — verify/blindspot questions route to the newest
+    # tools, BEFORE the symbol/read branches so 'read coverage' etc. win.
+    if any(k in q for k in ["verify", "did i break", "check my edit",
+                            "is my edit safe", "edit safety", "verify edit"]):
+        import re as _re
+        m = _re.search(r"([\w./-]+\.py|[\w./-]+)",
+                       q.replace("did i break", "").replace("check my edit", "")
+                        .replace("verify", "").replace("edit safety", ""))
+        target = m.group(1) if m else root
+        if not os.path.isabs(target):
+            target = os.path.join(root, target)
+        return {"content": [{"type": "text", "text": _verify_edit(target)}]}
+    if any(k in q for k in ["blindspot", "read coverage", "read everything",
+                            "what haven't i read", "not yet read", "coverage gap",
+                            "what am i missing"]):
+        import re as _re
+        m = _re.search(r"([\w./-]+\.py|[\w./-]+)",
+                       q.replace("blindspot", "").replace("read coverage", "")
+                        .replace("read everything", ""))
+        target = m.group(1) if m else root
+        if not os.path.isabs(target):
+            target = os.path.join(root, target)
+        return {"content": [{"type": "text", "text": _blindspot(target)}]}
 
     # 1. Task-orientation (the moat) — "what matters / what breaks / read order / context"
     if any(k in q for k in ["what matters", "relevant to", "which files", "for this task",
@@ -1665,9 +1769,20 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     files = _collect_files(root, max_files)
 
     # codeloom_ask: single natural-language entry point that routes
-    # deterministically — the agent never has to pick among 77 tools.
+    # deterministically — the agent never has to pick among 79 tools.
     if name == "codeloom_ask":
         return _route_ask(args, root, max_files)
+
+    if name == "codeloom_verify_edit":
+        target = args.get("target") or root
+        if not os.path.isabs(target):
+            target = os.path.join(root, target)
+        return {"content": [{"type": "text", "text": _verify_edit(target)}]}
+    if name == "codeloom_blindspot":
+        target = args.get("target") or root
+        if not os.path.isabs(target):
+            target = os.path.join(root, target)
+        return {"content": [{"type": "text", "text": _blindspot(target)}]}
 
     if name == "codeloom_framework":
         return {"content": [{"type": "text", "text": codeloom.render_framework(root, max_files)}]}
@@ -2063,6 +2178,79 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# loom:// resources — pull-based working memory for the agent (state, delta,
+# hotset, resume). Registered via resources/list + resources/read; no push.
+# --------------------------------------------------------------------------- #
+
+RESOURCES: List[Dict[str, Any]] = [
+    {
+        "uri": "loom://state",
+        "name": "codeloom working state",
+        "description": "Layered working-state packet: goal, decisions, actions, open items, hot set, persistent memory. Read this first after any compaction.",
+        "mimeType": "text/markdown",
+    },
+    {
+        "uri": "loom://delta",
+        "name": "codeloom session delta",
+        "description": "What changed since the last call: recent git diff + files changed since the previous run (incremental).",
+        "mimeType": "text/markdown",
+    },
+    {
+        "uri": "loom://hotset",
+        "name": "codeloom hot set",
+        "description": "Files/symbols already marked as deeply understood — do NOT re-read these. JSON list.",
+        "mimeType": "application/json",
+    },
+    {
+        "uri": "loom://resume",
+        "name": "codeloom resume prompt",
+        "description": "The compact resume prompt: structural snapshot + working state + session delta, for restoring context after compaction.",
+        "mimeType": "text/markdown",
+    },
+]
+
+
+def read_resource(uri: str, root: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Satisfy resources/read for loom:// URIs (pull-based, graceful fallbacks)."""
+    root = os.path.abspath(root or ".")
+    if uri == "loom://state":
+        if hasattr(codeloom, "render_working_state"):
+            text = codeloom.render_working_state(root, full=True)
+        else:
+            text = "# loom://state\nWorking-state packet not yet available in core (render_working_state missing).\n"
+    elif uri == "loom://delta":
+        if hasattr(codeloom, "render_delta"):
+            text = codeloom.render_delta(root)
+        else:
+            parts = []
+            try:
+                import subprocess as _sp
+                proc = _sp.run(["git", "-C", root, "diff", "--stat", "HEAD"],
+                               capture_output=True, text=True, timeout=30)
+                if proc.returncode == 0 and proc.stdout.strip():
+                    parts.append("# codeloom --delta (git diff vs HEAD)\n" + proc.stdout)
+            except Exception:
+                pass
+            parts.append("# loom://delta\nSession-delta machinery not yet available in core (render_delta missing); showing git diff --stat above if the repo is git-backed.")
+            text = "\n".join(parts)
+    elif uri == "loom://hotset":
+        if hasattr(codeloom, "get_hot_set"):
+            import json as _json
+            text = _json.dumps({"uri": "loom://hotset", "hotset": codeloom.get_hot_set(root)}, indent=2)
+        else:
+            text = '{"uri": "loom://hotset", "hotset": [], "note": "hot-set machinery not yet available in core"}'
+    elif uri == "loom://resume":
+        try:
+            files = _collect_files(root, 5000)
+            text = codeloom.render_resume(files, root, 5000)
+        except Exception as exc:  # noqa: BLE001
+            text = f"# loom://resume\nResume prompt not yet available in core: {exc}\n"
+    else:
+        return {"isError": True, "content": [{"type": "text", "text": f"unknown resource: {uri}"}]}
+    return {"content": [{"type": "text", "text": text}]}
+
+
+# --------------------------------------------------------------------------- #
 # Minimal MCP stdio server (JSON-RPC 2.0)
 # --------------------------------------------------------------------------- #
 
@@ -2100,10 +2288,16 @@ def serve() -> int:
                 "id": msg_id,
                 "result": {
                     "protocolVersion": PROTOCOL_VERSION,
-                    "capabilities": {"tools": {}},
+                    "capabilities": {"tools": {}, "resources": {}},
                     "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
                 },
             })
+        elif method == "resources/list":
+            _send({"jsonrpc": "2.0", "id": msg_id, "result": {"resources": RESOURCES}})
+        elif method == "resources/read":
+            uri = params.get("uri", "")
+            result = read_resource(uri, params.get("root"))
+            _send({"jsonrpc": "2.0", "id": msg_id, "result": result})
         elif method == "tools/list":
             _send({"jsonrpc": "2.0", "id": msg_id, "result": {"tools": TOOLS}})
         elif method == "tools/call":

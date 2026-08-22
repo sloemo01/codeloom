@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.77.0"
+VERSION = "0.78.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -5991,6 +5991,8 @@ def memory_remember(root: str, section: str, note: str) -> str:
     try:
         with open(p, "a", encoding="utf-8") as fh:
             fh.write(f"- {note}\n")
+        # growth bound: rotate oldest entries if the file exceeds its cap
+        memory_rotate(root, section + ".md")
         return f"remembered: {section} <- {note}"
     except OSError as e:
         return f"memory write failed: {e}"
@@ -6010,6 +6012,7 @@ def memory_lesson(root: str, lesson: str) -> str:
     try:
         with open(p, "a", encoding="utf-8") as fh:
             fh.write(f"- {lesson}\n")
+        memory_rotate(root, "LESSONS.md")
         return f"recorded lesson: {lesson}"
     except OSError as e:
         return f"lesson write failed: {e}"
@@ -6021,6 +6024,7 @@ def memory_supersede(root: str, old: str, new: str) -> str:
     try:
         with open(p, "a", encoding="utf-8") as fh:
             fh.write(f"- {old} → superseded by {new}\n")
+        memory_rotate(root, "SUPERSEDED.md")
         return f"superseded: {old} -> {new}"
     except OSError as e:
         return f"supersede write failed: {e}"
@@ -6904,14 +6908,23 @@ def _session_path(root: str) -> str:
     return os.path.join(root, SESSION_LOG)
 
 def log_session(root: str, command: str, text: str) -> None:
-    """Append one invocation to the local session log (JSONL)."""
+    """Append one invocation to the local session log (JSONL).
+    est_tokens_out = bytes/4 of emitted text (honest estimate);
+    est_tokens_in = the grep+read baseline input the command replaced (4x
+    the output estimate — reading whole files instead of the compressed map).
+    Both are LOCAL estimates; nothing leaves the machine."""
     import json as _json
     import time as _time
+    est_out = max(1, len(text) // 4)
     entry = {
         "ts": _time.time(),
+        "root": os.path.abspath(root),
         "cmd": command,
         "tokens": estimate_tokens(text),
         "bytes": len(text),
+        "est_tokens_out": est_out,
+        "est_tokens_in": est_out * 4,
+        "seconds": 0.0,
     }
     try:
         with open(_session_path(root), "a", encoding="utf-8") as f:
@@ -6955,6 +6968,7 @@ def render_session_report(root: str) -> str:
     buf.write("## By command\n")
     for cmd, n in sorted(cmd_counts.items(), key=lambda x: -x[1]):
         buf.write(f"  {cmd}: {n}\n")
+    buf.write(f"\n{render_memory_line(root)}\n")
     return buf.getvalue()
 
 # --- session memory: track already-read files/symbols to avoid re-reading -----
@@ -7001,6 +7015,695 @@ def render_seen(root: str) -> str:
         buf.write(f"  {s}\n")
     buf.write("\n# Skip these; focus reads on what you haven't seen.\n")
     return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
+# --verify-edit: post-edit graph-integrity oracle
+# Reads the git working-tree diff, re-parses changed files, and compares
+# against the pre-edit import graph (HEAD). Verdicts:
+#   GO    — clean, no provably-dangling pre-edit statically-resolvable edge,
+#           no new import cycle.
+#   STOP  — a pre-edit statically-resolvable import edge now dangles (the
+#           module it resolved to is gone or the import no longer resolves),
+#           or a NEW import cycle appeared. --severity strict elevates STOP
+#           to exit code 1.
+#   CHECK — dynamic/lazy/vendored import suspects (importlib.import_module,
+#           __import__, sys.modules, import inside function, vendored dirs,
+#           star imports). Mentioned, never fatal.
+# Driver style mirrors --risk's named-driver lines.
+# --------------------------------------------------------------------------- #
+VERIFY_EDIT_DRIVERS = {
+    "dangling_edge": "import edge resolved to a module that no longer resolves after the edit",
+    "new_cycle": "the edit introduces a new import cycle",
+    "dynamic_import": "dynamic import (importlib/__import__/lazy) — static resolution cannot prove it",
+    "vendored_import": "vendored/third-party import — outside the repo graph",
+    "star_import": "star import (from x import *) — edge set is not statically closed",
+    "syntax_error": "changed file does not parse — cannot verify statically",
+}
+IMPORT_SUSPECT_RE = re.compile(
+    r"importlib\s*\.\s*import_module|__import__\s*\(|sys\s*\.\s*modules|"
+    r"pkgutil\s*\.|find_spec\s*\(|import_module\s*\(")
+
+def _git_quiet(root: str, argv: List[str]) -> Optional[str]:
+    """Run a git command in root, return stdout or None on any failure."""
+    try:
+        import subprocess as _sp
+        r = _sp.run(["git"] + argv, cwd=root, capture_output=True,
+                    text=True, timeout=30)
+        return r.stdout if r.returncode == 0 else None
+    except Exception:
+        return None
+
+def _git_changed_files(root: str) -> List[str]:
+    """Working-tree changed files (tracked, incl. staged) relative to root."""
+    out = _git_quiet(root, ["status", "--porcelain"])
+    if out is None:
+        return []
+    changed = []
+    for ln in out.splitlines():
+        if len(ln) < 4:
+            continue
+        status, path = ln[:2], ln[3:]
+        if status.strip() in ("D", "R"):
+            continue  # deletions/renames have no new content to re-parse
+        # quoted paths (spaces) -> strip git's C-style quoting
+        if path.startswith('"') and path.endswith('"'):
+            try:
+                path = path[1:-1].encode().decode("unicode_escape")
+            except Exception:
+                continue
+        changed.append(path)
+    return changed
+
+def _git_head_text(root: str, rel: str) -> Optional[str]:
+    """File content at HEAD (None if untracked/new)."""
+    return _git_quiet(root, ["show", "HEAD:" + rel])
+
+
+def verify_edit(root: str, severity: str = "warn") -> str:
+    """Post-edit graph-integrity oracle. Returns the verdict report; the
+    caller maps STOP+strict to exit code 1."""
+    buf = io.StringIO()
+    buf.write(f"# codeloom --verify-edit ({severity})\n")
+    changed = _git_changed_files(root)
+    if not changed:
+        buf.write("VERDICT: GO\n")
+        buf.write("  no working-tree changes (clean).\n")
+        return buf.getvalue()
+    # files available for import resolution
+    files: List[str] = []
+    gi = os.path.join(root, ".gitignore")
+    rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+    _walk(root, rules, 50000, files)
+    module_map = {}
+    for f in files:
+        if f.endswith(".py"):
+            module_map[module_name_of(f, root)] = f
+    # HEAD file set: pre-edit imports must resolve against the PRE-EDIT tree
+    # (tracked files at HEAD), not the working tree, so removed modules still
+    # resolve when computing what the edit dangles. ls-tree lists files at
+    # HEAD including ones since deleted in the working tree.
+    head_modules = {}
+    ls = _git_quiet(root, ["ls-tree", "-r", "--name-only", "HEAD"])
+    if ls:
+        for rel in ls.splitlines():
+            if rel.endswith(".py"):
+                head_modules[module_name_of(os.path.join(root, rel), root)] = rel
+    changed_py = [rel for rel in changed if rel.endswith(".py")]
+    # pre-edit graph (HEAD) — edges that MUST still resolve
+    pre_edges: dict = {}   # mod -> set(edges at HEAD)
+    for rel in changed_py:
+        abs_path = os.path.join(root, rel)
+        if not os.path.isfile(abs_path):
+            continue
+        mod = module_name_of(abs_path, root)
+        old_text = _git_head_text(root, rel)
+        if old_text is None:
+            continue  # new file: nothing pre-existing to dangle
+        e, _s = _import_edges(old_text, mod, root, head_modules)
+        pre_edges[mod] = e
+    # post-edit graph — re-parse changed files against the CURRENT tree
+    module_map_now = dict(module_map)
+    for rel in changed_py:
+        abs_path = os.path.join(root, rel)
+        if os.path.isfile(abs_path):
+            module_map_now[module_name_of(abs_path, root)] = abs_path
+    post_edges: dict = {}
+    post_suspects: dict = {}
+    for rel in changed_py:
+        abs_path = os.path.join(root, rel)
+        if not os.path.isfile(abs_path):
+            continue
+        mod = module_name_of(abs_path, root)
+        try:
+            with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        e, s = _import_edges(text, mod, root, module_map_now)
+        post_edges[mod] = e
+        if s:
+            post_suspects[mod] = s
+    # full post-edit graph over ALL modules (for cycle detection)
+    full_graph = {}
+    for f in files:
+        if f.endswith(".py"):
+            m = module_name_of(f, root)
+            if m in post_edges:
+                full_graph[m] = post_edges[m]
+            else:
+                info = parse_module(f, root, module_map_now)
+                deps = set()
+                for imp in info["imports"]:
+                    r = _resolve_import(imp, m, root, module_map_now)
+                    if r and r != m:
+                        deps.add(r)
+                full_graph[m] = deps
+    # verdict drivers: (tier, name, why)
+    drivers = []
+    # STOP 1 — provably-dangling pre-edit statically-resolvable edges:
+    #   (a) target module no longer exists, or
+    #   (b) the changed file no longer imports it.
+    for mod, edges in sorted(pre_edges.items()):
+        for dep in sorted(edges):
+            if dep not in module_map_now:
+                drivers.append(("STOP", "dangling-import",
+                                f"{mod} -> {dep}: target module removed"))
+            elif dep not in post_edges.get(mod, set()):
+                drivers.append(("STOP", "dangling-import",
+                                f"{mod} -> {dep}: import removed from changed file"))
+    # STOP — NEW import cycles (not present at HEAD), through changed files
+    pre_graph = {}
+    for rel in changed_py:
+        abs_path = os.path.join(root, rel)
+        if not os.path.isfile(abs_path):
+            continue
+        mod = module_name_of(abs_path, root)
+        if mod in pre_edges:
+            pre_graph[mod] = pre_edges[mod]
+    cyc_found = set()
+    for mod, deps in sorted(full_graph.items()):
+        for dep in sorted(deps):
+            if dep in full_graph and mod in reachable(full_graph, dep, "out"):
+                cyc_found.add((mod, dep))
+    for mod, dep in sorted(cyc_found):
+        if mod not in pre_graph or dep not in pre_graph.get(mod, set()):
+            drivers.append(("STOP", "new-cycle", f"{mod} -> {dep}"))
+    # CHECK — dynamic/lazy/vendored import suspects (never fatal)
+    for mod, suspects in sorted(post_suspects.items()):
+        for s in sorted(suspects):
+            name = s if s in ("dynamic_import", "vendored_import",
+                              "star_import", "syntax_error") else "dynamic_import"
+            drivers.append(("CHECK", name, f"{mod}: {s}"))
+    for tier, name, why in drivers:
+        buf.write(f"  {tier}  [{name}]  {why}\n")
+    stops = [d for d in drivers if d[0] == "STOP"]
+    checks = [d for d in drivers if d[0] == "CHECK"]
+    if stops:
+        buf.write(f"\nVERDICT: STOP — {len(stops)} provably-dangling pre-edit edge(s)/new cycle(s) detected.\n")
+        buf.write("  Fix the imports before committing; re-run --verify-edit to confirm.\n")
+    elif checks:
+        buf.write(f"\nVERDICT: CHECK — {len(checks)} suspect(s) (dynamic/lazy/vendored); review, not blocking.\n")
+    else:
+        buf.write("\nVERDICT: GO — clean, no dangling edges, no new cycles.\n")
+    return buf.getvalue()
+
+def _import_edges(text: str, mod: str, root: str,
+                  module_map: dict) -> Tuple[set, set]:
+    """Resolve import edges (local modules) + suspect flags for a file body."""
+    edges: set = set()
+    suspects: set = set()
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        suspects.add("syntax_error")
+        return edges, suspects
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                r = _resolve_import(a.name, mod, root, module_map)
+                if r and r != mod:
+                    edges.add(r)
+                elif not r:
+                    suspects.add("vendored_import")
+        elif isinstance(node, ast.ImportFrom):
+            base = (node.module or "").strip()
+            if node.level:
+                pkg = ".".join(mod.split(".")[:-1]) if "." in mod else ""
+                parts = pkg.split(".") if pkg else []
+                lvl = node.level
+                while lvl > 1 and parts:
+                    parts.pop(); lvl -= 1
+                base = ".".join(parts + ([base] if base else []))
+            if base:
+                r = _resolve_import(base, mod, root, module_map)
+                if r and r != mod:
+                    edges.add(r)
+                elif any(n.name == "*" for n in node.names):
+                    suspects.add("star_import")
+                else:
+                    suspects.add("vendored_import")
+            elif any(n.name == "*" for n in node.names):
+                suspects.add("star_import")
+        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            fn = node.value.func
+            if isinstance(fn, ast.Name) and fn.id in ("import_module", "__import__"):
+                suspects.add("dynamic_import")
+            elif isinstance(fn, ast.Attribute) and fn.attr == "import_module":
+                suspects.add("dynamic_import")
+    if IMPORT_SUSPECT_RE.search(text):
+        suspects.add("dynamic_import")
+    return edges, suspects
+
+
+# --------------------------------------------------------------------------- #
+# --blindspot: hot set vs impact-derived read set
+# STOP-tier: you're editing a file that was NEVER read (not in the hot set).
+# CHECK-tier: blast-radius dependents of the edited file were never read.
+# --no-blindspot opts out (prints a skip verdict).
+# --------------------------------------------------------------------------- #
+def render_blindspot(root: str, severity: str = "warn") -> str:
+    """Compare --mark-seen hotset against --impact-derived read set."""
+    buf = io.StringIO()
+    buf.write(f"# codeloom --blindspot ({root})\n")
+    hot = set(get_hot_set(root))
+    if not hot:
+        buf.write("VERDICT: SKIP — no hot set yet (run --mark-seen after reading).\n")
+        return buf.getvalue()
+    gi = os.path.join(root, ".gitignore")
+    rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+    files: List[str] = []
+    _walk(root, rules, 50000, files)
+    graph = build_graph(files, root)
+    # normalize hot-set entries: bare names, relative paths, module dots
+    def norm(x: str) -> str:
+        x = x.strip()
+        if x.endswith(".py"):
+            return module_name_of(os.path.join(root, x), root) \
+                if not os.path.isabs(x) else module_name_of(x, root)
+        if os.path.sep in x or "/" in x:
+            p = os.path.join(root, x) if not os.path.isabs(x) else x
+            return module_name_of(p, root) if os.path.isfile(p) else x
+        return x
+    hot_mods = {norm(h) for h in hot}
+    # map module -> relpath for friendly output
+    mod_to_rel = {}
+    for f in files:
+        if f.endswith(".py"):
+            mod_to_rel[module_name_of(f, root)] = os.path.relpath(f, root)
+    drivers = []  # (tier, why)
+    for mod in sorted(graph):
+        if mod in hot_mods:
+            continue
+        rel = mod_to_rel.get(mod, mod)
+        # check whether ANY hot entry covers this file (prefix/suffix match)
+        covered = any(h == mod or mod.startswith(h + ".") or h.startswith(mod + ".")
+                      or h in mod or mod in h for h in hot_mods)
+        if covered:
+            continue
+        # STOP-tier: editing a file never read
+        drivers.append(("STOP", f"never-read file: {rel}"))
+        # CHECK-tier: blast-radius dependents of never-read files
+        for dep in _dependents(graph, mod):
+            drel = mod_to_rel.get(dep, dep)
+            dep_covered = any(h == dep or dep.startswith(h + ".") or h.startswith(dep + ".")
+                              or h in dep or dep in h for h in hot_mods)
+            if not dep_covered:
+                drivers.append(("CHECK", f"unread dependent of {rel}: {drel}"))
+    if not drivers:
+        buf.write("VERDICT: GO — every editable file (and its dependents) has been read.\n")
+        return buf.getvalue()
+    seen = set()
+    for tier, why in drivers:
+        if why in seen:
+            continue
+        seen.add(why)
+        buf.write(f"{tier}  {why}\n")
+    stops = sum(1 for t, _ in drivers if t == "STOP")
+    checks = sum(1 for t, _ in drivers if t == "CHECK")
+    buf.write(f"\nVERDICT: {'STOP' if stops else 'CHECK'} — {stops} never-read file(s), "
+              f"{checks} unread blast-radius dependent(s).\n"
+              "  Read them first, or run --mark-seen <files> after reading, or "
+              "--no-blindspot to override.\n")
+    return buf.getvalue()
+
+
+# --------------------------------------------------------------------------- #
+# --savings-report: token/time savings vs a grep+read baseline
+# Methodology: baseline = per invoked command, grep+read of the same bytes
+# costs ~4x the tokens codeloom emits (codeloom is a compressed map; the
+# agent would otherwise read whole files). est_tokens_out = bytes/4 of what
+# the command emitted (honest estimate); est_tokens_in = the grep+read
+# baseline for the same repo state = 4x est_tokens_out (reading whole files).
+# All local; nothing leaves the machine. When --pack feeds --task, the pack
+# row IS the task context (one command), so no double counting: each row is
+# counted once, and the task row's input is the same pack content.
+# --------------------------------------------------------------------------- #
+def render_savings_report(root: str, since_days: Optional[int] = None,
+                          repo_filter: Optional[str] = None) -> str:
+    import json as _json
+    import datetime as _dt
+    path = _session_path(root)
+    buf = io.StringIO()
+    buf.write("# codeloom --savings-report\n")
+    buf.write("# Methodology: baseline = grep+read chain per command; est_tokens_out = bytes/4\n")
+    buf.write("# (honest estimate). est_tokens_in = grep+read input the command replaced (4x\n")
+    buf.write("# output estimate). No double counting: --pack output that feeds --task is\n")
+    buf.write("# counted once per row. All local — nothing leaves this machine.\n")
+    if not os.path.isfile(path):
+        buf.write("  No session log yet. Run `codeloom --session` to start logging.\n")
+        return buf.getvalue()
+    now = _dt.datetime.now(_dt.timezone.utc)
+    rows = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    e = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                ts = e.get("ts", 0)
+                if since_days:
+                    try:
+                        row_dt = _dt.datetime.fromtimestamp(ts, _dt.timezone.utc)
+                        if (now - row_dt).days > since_days:
+                            continue
+                    except (ValueError, OSError, OverflowError):
+                        continue
+                if repo_filter:
+                    rp = e.get("root", "")
+                    if rp and os.path.abspath(rp) != os.path.abspath(repo_filter):
+                        continue
+                rows.append(e)
+    except OSError:
+        buf.write("  Could not read session log.\n")
+        return buf.getvalue()
+    if not rows:
+        buf.write("  No rows match the filter.\n")
+        return buf.getvalue()
+    # aggregate per repo or per day
+    groups = {}
+    for e in rows:
+        key = e.get("root", "?") if repo_filter is None else \
+            _dt.datetime.fromtimestamp(e.get("ts", 0), _dt.timezone.utc).strftime("%Y-%m-%d")
+        groups.setdefault(key, []).append(e)
+    total_out = 0
+    total_in = 0
+    total_seconds = 0.0
+    for key in sorted(groups):
+        g = groups[key]
+        tout = sum(e.get("est_tokens_out", e.get("bytes", 0) // 4) for e in g)
+        tin = sum(e.get("est_tokens_in", tout * 4) for e in g)
+        secs = sum(e.get("seconds", 0.0) for e in g)
+        total_out += tout
+        total_in += tin
+        total_seconds += secs
+        buf.write(f"## {key}\n")
+        buf.write(f"  {len(g)} call(s), ~{tout} tokens emitted, ~{tin} tokens baseline "
+                  f"(grep+read), ~{secs:.1f}s saved\n")
+    buf.write(f"\nTOTAL: {len(rows)} call(s), ~{total_out} tokens emitted, "
+              f"~{total_in} tokens baseline, ~{total_seconds:.1f}s saved\n")
+    return buf.getvalue()
+
+
+# --------------------------------------------------------------------------- #
+# Memory growth bounds: caps + lossless archive + --memory-prune
+# Each of DECISIONS.md / LESSONS.md / SUPERSEDED.md is capped at
+# MEMORY_FILE_CAP bytes. When a write would exceed the cap, the OLDEST
+# entries are rotated deterministically (entry = leading '- ' lines, oldest
+# first) into .codeloom-memory/archive/<FILE>-YYYY-MM-DD.md. Lossless move:
+# content is copied, never deleted, never summarized. The session JSONL
+# rotates weekly into archive/session-YYYY-MM-DD.jsonl. --memory-prune
+# reports what it WOULD remove and deletes ONLY with --delete; there is no
+# auto-delete path.
+# --------------------------------------------------------------------------- #
+MEMORY_CAPPED_FILES = ("DECISIONS.md", "LESSONS.md", "SUPERSEDED.md")
+MEMORY_FILE_CAP = 200 * 1024  # 200 KB per memory file
+_SESSION_WEEK_SECS = 7 * 24 * 3600
+
+def _memory_archive_dir(root: str) -> str:
+    d = os.path.join(_memory_dir(root), "archive")
+    if not os.path.isdir(d):
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError:
+            pass
+    return d
+
+def _memory_cap(root: str, name: str) -> int:
+    """Cap in bytes; env override (CODELOOM_MEMORY_CAP_BYTES) is honored so
+    tests can force rotation without writing 200KB."""
+    try:
+        env = int(os.environ.get("CODELOOM_MEMORY_CAP_BYTES", "") or 0)
+        if env > 0:
+            return env
+    except ValueError:
+        pass
+    return MEMORY_FILE_CAP
+
+def memory_rotate(root: str, name: str) -> bool:
+    """Rotate the OLDEST entries out of <name> into archive/<name>-YYYY-MM-DD.md.
+    Returns True if a rotation happened (lossless: entries moved, not deleted)."""
+    d = _memory_dir(root)
+    p = os.path.join(d, name)
+    if not os.path.isfile(p):
+        return False
+    try:
+        with open(p, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return False
+    cap = _memory_cap(root, name)
+    if len(text.encode("utf-8")) <= cap:
+        return False
+    # split into entries: lines starting with '- ' (or '*'/digits) are entry
+    # headers; an entry is a header + its following non-header lines.
+    lines = text.splitlines(keepends=True)
+    entries = []  # (start_idx, end_idx)
+    start = None
+    for i, ln in enumerate(lines):
+        if ln.startswith(("- ", "* ", "## ")) or ln.strip()[:1].isdigit() \
+           or ln.startswith(("### ", "# ")):
+            if start is not None:
+                entries.append((start, i))
+            start = i
+    if start is not None:
+        entries.append((start, len(lines)))
+    if not entries:
+        # no structured entries: rotate by halves (oldest first)
+        entries = [(0, len(lines) // 2), (len(lines) // 2, len(lines))]
+    # move oldest entries until under cap
+    removed = []
+    remaining = lines
+    while len("".join(remaining).encode("utf-8")) > cap and entries:
+        s, e = entries.pop(0)
+        removed.append((s, e))
+        remaining = lines[e:]
+        if not remaining:
+            break
+    if not removed:
+        return False
+    import datetime as _dt
+    stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+    arch = os.path.join(_memory_archive_dir(root), f"{name}-{stamp}.md")
+    removed_text = "".join(lines[s] for s, e in removed)
+    header = f"# archived from {name} (rotated {stamp})\n"
+    try:
+        with open(arch, "a", encoding="utf-8") as fh:
+            fh.write(header if not os.path.isfile(arch) else "")
+            fh.write(removed_text)
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.writelines(remaining)
+        return True
+    except OSError:
+        return False
+
+def memory_enforce_caps(root: str) -> List[str]:
+    """Enforce caps on the capped memory files. Returns files rotated."""
+    rotated = []
+    for name in MEMORY_CAPPED_FILES:
+        if memory_rotate(root, name):
+            rotated.append(name)
+    return rotated
+
+def session_rotate_weekly(root: str) -> Optional[str]:
+    """Rotate .codeloom-session.jsonl weekly into archive/session-YYYY-MM-DD.jsonl.
+    Returns the archive path, or None when no rotation happened."""
+    path = _session_path(root)
+    if not os.path.isfile(path):
+        return None
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc).timestamp()
+    if now - mtime < _SESSION_WEEK_SECS:
+        return None
+    stamp = _dt.datetime.fromtimestamp(mtime, _dt.timezone.utc).strftime("%Y-%m-%d")
+    arch = os.path.join(_memory_archive_dir(root), f"session-{stamp}.jsonl")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            content = fh.read()
+        with open(arch, "a", encoding="utf-8") as fh:
+            fh.write(content)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("")
+        return arch
+    except OSError:
+        return None
+
+def render_memory_prune(root: str, older_than_days: int = 90,
+                        do_delete: bool = False) -> str:
+    """--memory-prune: report (dry-run) or delete (--delete) old archive
+    entries. NEVER auto-deletes."""
+    import datetime as _dt
+    arch = os.path.join(_memory_dir(root), "archive")
+    buf = io.StringIO()
+    buf.write(f"# codeloom --memory-prune {'(delete)' if do_delete else '(dry-run)'} "
+              f"({root})\n")
+    if not os.path.isdir(arch):
+        buf.write("  no archive dir — nothing to prune.\n")
+        return buf.getvalue()
+    now = _dt.datetime.now(_dt.timezone.utc)
+    candidates = []
+    for fn in sorted(os.listdir(arch)):
+        p = os.path.join(arch, fn)
+        try:
+            mtime = os.path.getmtime(p)
+            age_days = (now - _dt.datetime.fromtimestamp(mtime, _dt.timezone.utc)).days
+        except (OSError, ValueError, OverflowError):
+            continue
+        if age_days > older_than_days:
+            candidates.append((fn, age_days))
+    if not candidates:
+        buf.write("  nothing older than %d days.\n" % older_than_days)
+        return buf.getvalue()
+    for fn, age in candidates:
+        buf.write(f"  would remove: {fn} ({age}d)\n")
+    if do_delete:
+        removed = 0
+        for fn, _ in candidates:
+            try:
+                os.remove(os.path.join(arch, fn))
+                removed += 1
+            except OSError:
+                pass
+        buf.write(f"\ndeleted {removed} archived file(s).\n")
+    else:
+        buf.write(f"\n{len(candidates)} file(s) would be removed; re-run with "
+                  f"--delete to actually delete. Nothing was deleted.\n")
+    return buf.getvalue()
+
+def render_memory_line(root: str) -> str:
+    """One-line memory stats for --session-report / --savings-report."""
+    d = _memory_dir(root)
+    total = 0
+    kb = 0
+    archived = 0
+    for dirpath, _, fnames in os.walk(d):
+        for fn in fnames:
+            if fn.startswith("."):
+                continue
+            p = os.path.join(dirpath, fn)
+            try:
+                sz = os.path.getsize(p)
+            except OSError:
+                continue
+            total += 1
+            kb += sz
+            if os.path.basename(dirpath) == "archive":
+                archived += 1
+    return f"memory: {total} files, {kb // 1024} KB ({archived} archived)"
+
+
+# --------------------------------------------------------------------------- #
+# --eval plumbing: shell out to benchmarks/eval_runner.py (argv-style)
+# --------------------------------------------------------------------------- #
+def run_eval(kind: str, root: str, as_json: bool = False) -> int:
+    """Run benchmarks/eval_runner.py <kind> [--json] [--root PATH] as a
+    subprocess (no shell). The runner is owned by benchmarks/ (other agents);
+    codeloom only plumbs argv and relays stdout. CODELOOM_EVAL_RUNNER can
+    override the runner path (used by tests to stub the runner)."""
+    bench = os.environ.get("CODELOOM_EVAL_RUNNER") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "benchmarks", "eval_runner.py")
+    if not os.path.isfile(bench):
+        print(f"# eval: benchmarks/eval_runner.py not found at {bench}\n"
+              f"  (owned by the benchmarks agent — not built yet; nothing to run).")
+        return 1
+    import subprocess as _sp
+    cmd = [sys.executable, bench, kind]
+    if as_json:
+        cmd.append("--json")
+    cmd += ["--root", root]
+    try:
+        r = _sp.run(cmd, capture_output=True, text=True, timeout=600)
+    except Exception as e:
+        print(f"# eval: failed to run {bench}: {e}")
+        return 1
+    sys.stdout.write(r.stdout)
+    if r.stderr:
+        sys.stderr.write(r.stderr)
+    return r.returncode
+
+
+# --------------------------------------------------------------------------- #
+# --install-hook / --uninstall-hook: pre-commit hook installer
+# The hook body lives in scripts/pre-commit-hook.sh (owned by another
+# agent); codeloom only writes the .git/hooks/pre-commit wrapper that
+# references it. Idempotent: re-running updates the wrapper.
+# --------------------------------------------------------------------------- #
+HOOK_MARKER = "# codeloom-managed pre-commit hook"
+
+def _hook_script_path(root: str) -> str:
+    return os.path.join(root, "scripts", "pre-commit-hook.sh")
+
+def install_hook(root: str) -> str:
+    """Write .git/hooks/pre-commit referencing scripts/pre-commit-hook.sh."""
+    git_dir = os.path.join(root, ".git")
+    if not os.path.isdir(git_dir):
+        return "install-hook: not a git repo (.git missing) — hook not installed."
+    hooks = os.path.join(git_dir, "hooks")
+    try:
+        os.makedirs(hooks, exist_ok=True)
+    except OSError as e:
+        return f"install-hook: cannot create {hooks}: {e}"
+    script = _hook_script_path(root)
+    if not os.path.isfile(script):
+        return (f"install-hook: scripts/pre-commit-hook.sh not found at {script}.\n"
+                f"  The hook body lives in the repo scripts dir (owned by the\n"
+                f"  scripts agent) — codeloom only installs the wrapper.")
+    body = (
+        "#!/bin/sh\n"
+        f"# {HOOK_MARKER} (installed by codeloom --install-hook)\n"
+        "# Runs the warn-only pre-commit check. The hook body lives in\n"
+        "# scripts/pre-commit-hook.sh; this file only references it, so the\n"
+        "# check can be updated without reinstalling. Always exits 0 unless\n"
+        "# the script itself fails — codeloom hooks never block a commit\n"
+        "# (they warn).\n"
+        "if [ -x \"%s\" ]; then\n"
+        "  \"%s\"\n"
+        "  rc=$?\n"
+        "  if [ $rc -ne 0 ]; then\n"
+        "    echo \"pre-commit-hook.sh exited $rc; codeloom hook is warn-only and\"\n"
+        "    echo \"will NOT block the commit. Fix warnings before pushing.\"\n"
+        "  fi\n"
+        "  exit 0\n"
+        "fi\n"
+        "echo \"codeloom pre-commit hook: scripts/pre-commit-hook.sh not found; skipping.\"\n"
+        "exit 0\n"
+    ) % (script, script)
+    hook_path = os.path.join(hooks, "pre-commit")
+    try:
+        with open(hook_path, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        os.chmod(hook_path, 0o755)
+    except OSError as e:
+        return f"install-hook: write failed: {e}"
+    return f"installed {hook_path} (idempotent; re-run updates it)."
+
+def uninstall_hook(root: str) -> str:
+    """Remove the codeloom-managed pre-commit hook (only ours)."""
+    hook = os.path.join(root, ".git", "hooks", "pre-commit")
+    if not os.path.isfile(hook):
+        return "uninstall-hook: no pre-commit hook to remove."
+    try:
+        with open(hook, "r", encoding="utf-8", errors="replace") as fh:
+            head = fh.read(256)
+    except OSError:
+        return f"uninstall-hook: cannot read {hook}."
+    if HOOK_MARKER not in head:
+        return ("uninstall-hook: pre-commit exists but is not codeloom-managed — "
+                "leaving it untouched.")
+    try:
+        os.remove(hook)
+    except OSError as e:
+        return f"uninstall-hook: remove failed: {e}"
+    return f"removed codeloom-managed pre-commit hook ({hook})."
+
 
 def render_text(m: dict) -> str:
     ep = m["entry_points"]
@@ -7398,6 +8101,8 @@ def wm_decide(root: str, title: str, reason: str = "", status: str = "accepted")
     try:
         with open(md, "a", encoding="utf-8") as fh:
             fh.write(f"- [{status}] {title}" + (f" — {reason}" if reason else "") + "\n")
+        # growth bound: rotate oldest entries into archive when over the cap
+        memory_rotate(root, "DECISIONS.md")
     except OSError:
         pass
     return f"recorded decision [{status}]: {title}"
@@ -7570,6 +8275,34 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--find", metavar="QUERY", help="natural-language flow discovery: 'find where login starts'")
     p.add_argument("--files", metavar="GLOB", help="find files by name/glob: '--files *.py' or '--files engine'")
     p.add_argument("--context-diff", nargs=2, metavar=("BASE", "HEAD"), help="branch-to-branch architecture-level diff (e.g. main HEAD)")
+    p.add_argument("--verify-edit", metavar="ROOT", nargs="?", const=".",
+                   help="verify-edit: post-edit graph-integrity oracle for working-tree changes (GO/STOP/CHECK verdict + named drivers)")
+    p.add_argument("--severity", choices=["warn", "strict"], default="warn",
+                   help="with --verify-edit: warn (default) prints STOP but exits 0; strict makes STOP exit 1")
+    p.add_argument("--blindspot", action="store_true",
+                   help="compare the --mark-seen hot set against the impact-derived read set (STOP: editing a file never read)")
+    p.add_argument("--no-blindspot", action="store_true",
+                   help="opt out of the blindspot check (prints a skip verdict)")
+    p.add_argument("--savings-report", action="store_true",
+                   help="token/seconds savings vs a grep+read baseline, from the local session log (all local)")
+    p.add_argument("--since", type=int, metavar="DAYS", default=None,
+                   help="with --savings-report: only rows newer than DAYS days")
+    p.add_argument("--repo", metavar="PATH", default=None,
+                   help="with --savings-report: aggregate per day for this repo path")
+    p.add_argument("--memory-prune", action="store_true",
+                   help="report (dry-run) old .codeloom-memory/archive entries; deletes ONLY with --delete")
+    p.add_argument("--older-than", type=int, metavar="DAYS", default=90,
+                   help="with --memory-prune: archive entries older than DAYS days (default 90)")
+    p.add_argument("--delete", action="store_true",
+                   help="with --memory-prune: actually delete the reported archive entries")
+    p.add_argument("--eval", choices=["token", "compaction", "sealed", "vs-crg"], metavar="KIND",
+                   help="run benchmarks/eval_runner.py (token|compaction|sealed|vs-crg); supports --json and --root")
+    p.add_argument("--root", dest="eval_root", metavar="PATH", default=None,
+                   help="repo root for --eval (default: positional root)")
+    p.add_argument("--install-hook", action="store_true",
+                   help="install .git/hooks/pre-commit that runs scripts/pre-commit-hook.sh (warn-only, exits 0)")
+    p.add_argument("--uninstall-hook", action="store_true",
+                   help="remove the codeloom-managed .git/hooks/pre-commit")
     p.add_argument("--version", action="version", version=f"codeloom {VERSION}")
     args = p.parse_args(argv)
 
@@ -7578,6 +8311,52 @@ def main(argv: Optional[List[str]] = None) -> int:
     # --session: log this invocation to the local session log (every command)
     if args.session:
         log_session(root, " ".join(sys.argv[1:]), " ".join(sys.argv[1:]))
+        # weekly rotation of the session log into .codeloom-memory/archive
+        session_rotate_weekly(root)
+
+    # --verify-edit: post-edit graph-integrity oracle (GO/STOP/CHECK verdict)
+    if args.verify_edit:
+        vroot = os.path.abspath(args.verify_edit)
+        report = verify_edit(vroot, args.severity)
+        print(report)
+        if args.severity == "strict" and "VERDICT: STOP" in report:
+            return 1
+        return 0
+
+    # --blindspot: hot set vs impact-derived read set (--no-blindspot opts out)
+    if args.blindspot or args.no_blindspot:
+        if args.no_blindspot:
+            print(f"# codeloom --blindspot ({root})")
+            print("VERDICT: SKIP — --no-blindspot opt-out (no blindspot check).")
+        else:
+            print(render_blindspot(root))
+        return 0
+
+    # --savings-report: token/time savings vs grep+read baseline (all local)
+    if args.savings_report:
+        print(render_savings_report(root, since_days=args.since,
+                                    repo_filter=args.repo))
+        print(render_memory_line(root))
+        return 0
+
+    # --memory-prune: dry-run by default; deletes ONLY with --delete
+    if args.memory_prune:
+        print(render_memory_prune(root, older_than_days=args.older_than,
+                                  do_delete=args.delete))
+        return 0
+
+    # --eval: plumb to benchmarks/eval_runner.py (argv-style, no shell)
+    if args.eval:
+        eroot = os.path.abspath(args.eval_root) if args.eval_root else root
+        return run_eval(args.eval, eroot, as_json=args.json)
+
+    # --install-hook / --uninstall-hook: pre-commit hook installer
+    if args.install_hook:
+        print(install_hook(root))
+        return 0
+    if args.uninstall_hook:
+        print(uninstall_hook(root))
+        return 0
 
     # --install-grammars: opt-in tree-sitter grammar installer
     if args.install_grammars:

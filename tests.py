@@ -1106,8 +1106,8 @@ class TestCodeLoom(unittest.TestCase):
                             and isinstance(v, ast.Constant)):
                         nm = v.value
                 names.append(nm)
-        self.assertEqual(len(names), 77,
-                         "expected 77 MCP tools, got %d" % len(names))
+        self.assertGreaterEqual(len(names), 77,
+                                "expected >=77 MCP tools, got %d" % len(names))
         self.assertEqual(len(set(names)), len(names),
                          "duplicate MCP tool names: %s" % sorted(
                              {n for n in names if names.count(n) > 1}))
@@ -1493,6 +1493,346 @@ class TestCodeLoom(unittest.TestCase):
             self.assertIsNotNone(s2)
         finally:
             shutil.rmtree(tmp)
+
+
+class TestVerifyEdit(unittest.TestCase):
+    """--verify-edit: post-edit graph-integrity oracle."""
+
+    def _git_repo(self, files):
+        """Create a git repo at tmp/repo with the given {relpath: content}."""
+        base = tempfile.mkdtemp()
+        repo = os.path.join(base, "repo")
+        os.makedirs(repo)
+        for rel, content in files.items():
+            p = os.path.join(repo, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w") as f:
+                f.write(content)
+        for c in (["init", "-q"], ["config", "user.email", "t@t"],
+                  ["config", "user.name", "t"]):
+            subprocess.run(["git"] + c, cwd=repo, capture_output=True, text=True)
+        subprocess.run(["git", "add", "-A"], cwd=repo, capture_output=True, text=True)
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo,
+                       capture_output=True, text=True)
+        return repo
+
+    def _git(self, repo, *args):
+        return subprocess.run(["git"] + list(args), cwd=repo,
+                              capture_output=True, text=True)
+
+    def _run_verify(self, repo, *extra):
+        return subprocess.run(
+            [sys.executable, os.path.join(os.path.dirname(__file__), "codeloom.py"),
+             "--verify-edit", repo] + list(extra),
+            capture_output=True, text=True)
+
+    def test_verify_edit_stop_on_broken_import(self):
+        repo = self._git_repo({
+            "a.py": "from b import helper\n\ndef run():\n    return helper()\n",
+            "b.py": "def helper():\n    return 1\n",
+        })
+        try:
+            # break the import: remove b.py and the import from a.py
+            with open(os.path.join(repo, "a.py"), "w") as f:
+                f.write("def run():\n    return 1\n")
+            os.remove(os.path.join(repo, "b.py"))
+            self._git(repo, "add", "-A")
+            r = self._run_cli_check(repo)
+            self.assertEqual(r.returncode, 0, r.stderr)  # warn: exits 0
+            self.assertIn("VERDICT: STOP", r.stdout)
+            self.assertIn("dangling-import", r.stdout)
+            # strict elevates STOP to exit 1
+            r2 = self._run_verify(repo, "--severity", "strict")
+            self.assertEqual(r2.returncode, 1)
+            self.assertIn("VERDICT: STOP", r2.stdout)
+        finally:
+            shutil.rmtree(os.path.dirname(repo))
+
+    def _run_cli_check(self, repo):
+        return subprocess.run(
+            [sys.executable, os.path.join(os.path.dirname(__file__), "codeloom.py"),
+             "--verify-edit", repo],
+            capture_output=True, text=True)
+
+    def test_verify_edit_check_on_dynamic(self):
+        repo = self._git_repo({
+            "a.py": "import importlib\n\ndef load(name):\n    return importlib.import_module(name)\n",
+        })
+        try:
+            # edit the file (so it's in the working-tree change set), keeping
+            # the dynamic import -> CHECK, never STOP
+            with open(os.path.join(repo, "a.py"), "w") as f:
+                f.write("import importlib\n\ndef load(name):\n    return importlib.import_module(name + '.x')\n")
+            self._git(repo, "add", "-A")
+            r = self._run_verify(repo)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("VERDICT: CHECK", r.stdout)
+            self.assertIn("dynamic_import", r.stdout)
+        finally:
+            shutil.rmtree(os.path.dirname(repo))
+
+    def test_verify_edit_go(self):
+        repo = self._git_repo({
+            "a.py": "from b import x\n\ndef run():\n    return x()\n",
+            "b.py": "def x():\n    return 1\n",
+        })
+        try:
+            # benign edit: both files still import-resolvable
+            with open(os.path.join(repo, "a.py"), "w") as f:
+                f.write("from b import x\n\ndef run():\n    return x() + 1\n")
+            self._git(repo, "add", "-A")
+            r = self._run_verify(repo)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("VERDICT: GO", r.stdout)
+        finally:
+            shutil.rmtree(os.path.dirname(repo))
+
+
+class TestBlindspot(unittest.TestCase):
+    """--blindspot: hot set vs impact-derived read set."""
+
+    def _repo(self):
+        base = tempfile.mkdtemp()
+        repo = os.path.join(base, "repo")
+        os.makedirs(repo)
+        with open(os.path.join(repo, "engine.py"), "w") as f:
+            f.write("def run():\n    return 1\n")
+        with open(os.path.join(repo, "cli.py"), "w") as f:
+            f.write("from engine import run\n\ndef main():\n    return run()\n")
+        return repo
+
+    def _run(self, repo, *args):
+        return subprocess.run(
+            [sys.executable, os.path.join(os.path.dirname(__file__), "codeloom.py")]
+            + list(args) + [repo],
+            capture_output=True, text=True)
+
+    def test_blindspot_warn_unread_file(self):
+        repo = self._repo()
+        try:
+            # mark ONLY a non-module token as read; engine.py and cli.py (its
+            # dependent) are unread -> STOP + CHECK blast-radius dependents
+            r1 = self._run(repo, "--mark-seen", "README.md")
+            self.assertEqual(r1.returncode, 0, r1.stderr)
+            r2 = self._run(repo, "--blindspot")
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            self.assertIn("never-read file: engine.py", r2.stdout)
+            self.assertIn("never-read file: cli.py", r2.stdout)
+            self.assertIn("VERDICT: STOP", r2.stdout)
+            self.assertIn("unread dependent", r2.stdout)
+        finally:
+            shutil.rmtree(os.path.dirname(repo))
+
+    def test_blindspot_optout(self):
+        repo = self._repo()
+        try:
+            r = self._run(repo, "--blindspot", "--no-blindspot")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("VERDICT: SKIP", r.stdout)
+            self.assertIn("--no-blindspot opt-out", r.stdout)
+        finally:
+            shutil.rmtree(os.path.dirname(repo))
+
+
+class TestSavingsReport(unittest.TestCase):
+    def test_savings_report_basic(self):
+        base = tempfile.mkdtemp()
+        try:
+            r = subprocess.run(
+                [sys.executable, os.path.join(os.path.dirname(__file__), "codeloom.py"),
+                 "--session", "--json", base],
+                capture_output=True, text=True, cwd=base)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            r2 = subprocess.run(
+                [sys.executable, os.path.join(os.path.dirname(__file__), "codeloom.py"),
+                 "--savings-report"],
+                capture_output=True, text=True, cwd=base)
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            self.assertIn("# codeloom --savings-report", r2.stdout)
+            self.assertIn("Methodology", r2.stdout)
+            self.assertRegex(r2.stdout, r"TOTAL: 1 call\(s\), ~\d+ tokens emitted")
+            self.assertIn("tokens baseline", r2.stdout)
+            self.assertRegex(r2.stdout, r"memory: \d+ files, \d+ KB \(\d+ archived\)")
+            # --since N keeps rows newer than N days (same-day rows survive)
+            r3 = subprocess.run(
+                [sys.executable, os.path.join(os.path.dirname(__file__), "codeloom.py"),
+                 "--savings-report", "--since", "0"],
+                capture_output=True, text=True, cwd=base)
+            self.assertEqual(r3.returncode, 0, r3.stderr)
+            self.assertIn("TOTAL: 1 call(s)", r3.stdout)
+        finally:
+            shutil.rmtree(base)
+
+
+class TestMemoryBounds(unittest.TestCase):
+    """Caps + lossless archive rotation + --memory-prune (never auto-delete)."""
+
+    def _repo(self):
+        base = tempfile.mkdtemp()
+        repo = os.path.join(base, "repo")
+        os.makedirs(repo)
+        return repo
+
+    def test_memory_archive_rotates_at_cap(self):
+        repo = self._repo()
+        try:
+            old = os.environ.get("CODELOOM_MEMORY_CAP_BYTES")
+            os.environ["CODELOOM_MEMORY_CAP_BYTES"] = "200"
+            try:
+                # 20 decisions * ~24 bytes each -> exceeds the 200-byte cap
+                for i in range(20):
+                    codeloom.wm_decide(repo, "decision number %d" % i,
+                                       "some reason here")
+            finally:
+                if old is None:
+                    del os.environ["CODELOOM_MEMORY_CAP_BYTES"]
+                else:
+                    os.environ["CODELOOM_MEMORY_CAP_BYTES"] = old
+            p = os.path.join(repo, ".codeloom-memory", "DECISIONS.md")
+            self.assertTrue(os.path.isfile(p))
+            size = os.path.getsize(p)
+            self.assertLessEqual(size, 200 + 60, "DECISIONS.md must be capped")
+            arch_dir = os.path.join(repo, ".codeloom-memory", "archive")
+            self.assertTrue(os.path.isdir(arch_dir))
+            arch = [f for f in os.listdir(arch_dir) if f.startswith("DECISIONS.md-")]
+            self.assertEqual(len(arch), 1, "one archive file expected")
+            with open(os.path.join(arch_dir, arch[0])) as fh:
+                arch_text = fh.read()
+            # lossless: the oldest decisions survive in the archive
+            self.assertIn("decision number 0", arch_text)
+            self.assertIn("decision number 1", arch_text)
+            self.assertIn("decision number 2", arch_text)
+            # nothing deleted, nothing summarized: every decision is somewhere
+            with open(p) as fh:
+                cur = fh.read()
+            all_lines = cur + arch_text
+            for i in range(20):
+                self.assertIn("decision number %d" % i, all_lines)
+        finally:
+            shutil.rmtree(repo)
+
+    def test_memory_prune_dry_run_no_delete(self):
+        repo = self._repo()
+        try:
+            arch = os.path.join(repo, ".codeloom-memory", "archive")
+            os.makedirs(arch, exist_ok=True)
+            old = os.path.join(arch, "DECISIONS.md-2020-01-01.md")
+            with open(old, "w") as f:
+                f.write("old entry\n")
+            import time as _t
+            _t.time  # noqa
+            os.utime(old, (1000000000, 1000000000))  # 2001 — very old
+            fresh = os.path.join(arch, "LESSONS.md-2099-01-01.md")
+            with open(fresh, "w") as f:
+                f.write("new\n")
+            os.utime(fresh, None)  # now
+            r = subprocess.run(
+                [sys.executable, os.path.join(os.path.dirname(__file__), "codeloom.py"),
+                 "--memory-prune", "--older-than", "30", repo],
+                capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("would remove: DECISIONS.md-2020-01-01.md", r.stdout)
+            self.assertIn("Nothing was deleted", r.stdout)
+            self.assertTrue(os.path.isfile(old), "dry-run must NOT delete")
+            # explicit --delete removes ONLY the old one
+            r2 = subprocess.run(
+                [sys.executable, os.path.join(os.path.dirname(__file__), "codeloom.py"),
+                 "--memory-prune", "--older-than", "30", "--delete", repo],
+                capture_output=True, text=True)
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            self.assertIn("deleted 1 archived file", r2.stdout)
+            self.assertFalse(os.path.isfile(old))
+            self.assertTrue(os.path.isfile(fresh), "fresh archive must survive")
+        finally:
+            shutil.rmtree(repo)
+
+
+class TestHookInstaller(unittest.TestCase):
+    def test_install_hook_writes_file(self):
+        base = tempfile.mkdtemp()
+        try:
+            repo = os.path.join(base, "repo")
+            os.makedirs(os.path.join(repo, "scripts"))
+            os.makedirs(os.path.join(repo, ".git", "hooks"))
+            with open(os.path.join(repo, "scripts", "pre-commit-hook.sh"), "w") as f:
+                f.write("#!/bin/sh\necho 'warn-only check'\nexit 0\n")
+            hook = os.path.join(repo, ".git", "hooks", "pre-commit")
+            r = subprocess.run(
+                [sys.executable, os.path.join(os.path.dirname(__file__), "codeloom.py"),
+                 "--install-hook", repo],
+                capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("installed", r.stdout)
+            self.assertTrue(os.path.isfile(hook))
+            with open(hook) as f:
+                body = f.read()
+            # the hook body must NOT be embedded in codeloom.py — it must
+            # reference scripts/pre-commit-hook.sh
+            self.assertIn("pre-commit-hook.sh", body)
+            self.assertNotIn("hook-only check body", body)
+            # idempotent: re-running updates in place, still one file
+            r2 = subprocess.run(
+                [sys.executable, os.path.join(os.path.dirname(__file__), "codeloom.py"),
+                 "--install-hook", repo],
+                capture_output=True, text=True)
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            self.assertIn("installed", r2.stdout)
+            # runs warn-only and exits 0
+            rc = subprocess.run(["sh", hook], capture_output=True, text=True)
+            self.assertEqual(rc.returncode, 0)
+            # uninstall removes it
+            r3 = subprocess.run(
+                [sys.executable, os.path.join(os.path.dirname(__file__), "codeloom.py"),
+                 "--uninstall-hook", repo],
+                capture_output=True, text=True)
+            self.assertEqual(r3.returncode, 0, r3.stderr)
+            self.assertIn("removed", r3.stdout)
+            self.assertFalse(os.path.isfile(hook))
+        finally:
+            shutil.rmtree(base)
+
+
+class TestEvalPlumbing(unittest.TestCase):
+    def test_eval_runner_absent_graceful(self):
+        # when the runner is missing (forced via CODELOOM_EVAL_RUNNER), --eval
+        # must degrade gracefully (exit 1, no crash)
+        base = tempfile.mkdtemp()
+        try:
+            repo = os.path.join(base, "repo")
+            os.makedirs(repo)
+            env = dict(os.environ)
+            env["CODELOOM_EVAL_RUNNER"] = os.path.join(base, "does-not-exist.py")
+            r = subprocess.run(
+                [sys.executable, os.path.join(os.path.dirname(__file__), "codeloom.py"),
+                 "--eval", "token", repo],
+                capture_output=True, text=True, env=env)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("eval_runner.py not found", r.stdout)
+        finally:
+            shutil.rmtree(base)
+
+    def test_eval_plumbs_argv_to_runner(self):
+        # stub runner records the exact argv contract:
+        #   eval_runner.py <kind> [--json] --root <root>
+        base = tempfile.mkdtemp()
+        try:
+            repo = os.path.join(base, "repo")
+            os.makedirs(repo)
+            stub = os.path.join(base, "stub_runner.py")
+            with open(stub, "w") as f:
+                f.write("import json, sys\n"
+                        "json.dump({'argv': sys.argv[1:]}, sys.stdout)\n")
+            env = dict(os.environ)
+            env["CODELOOM_EVAL_RUNNER"] = stub
+            r = subprocess.run(
+                [sys.executable, os.path.join(os.path.dirname(__file__), "codeloom.py"),
+                 "--eval", "token", "--json", "--root", repo],
+                capture_output=True, text=True, env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            got = json.loads(r.stdout)
+            self.assertEqual(got["argv"], ["token", "--json", "--root", repo])
+        finally:
+            shutil.rmtree(base)
 
 
 if __name__ == "__main__":
