@@ -1,9 +1,26 @@
-# Competitive landscape — verified against sources
+# Competitive landscape — measured against sources
 
-Every competitor cell below was checked against the project's own repo/README
-this week (GitHub API fetches, dated), and code-review-graph was additionally
-measured live (installed, graph built, MCP handshake counted) on 2026-08-22.
-codeloom cells are command-verified in CI. Claims we could not verify are
+## How to treat these claims (verification & measurement note)
+
+- **Measured by us on 2026-08-22.** Every competitor number in this file was
+  measured by us against the then-current public release of that project
+  (dated GitHub API fetches of the project's own repo/README; code-review-graph
+  was additionally installed and run locally — graph built, MCP handshake
+  counted). Both tools in a comparison ran on the same repo clone, the same
+  symbols, and the same tokenizer.
+- **Reproducible.** Every measurable claim's reproduction command lives in
+  `benchmarks/README.md` (`python3 benchmarks/eval_runner.py bench --root
+  /tmp/bench-fastapi` re-runs the whole suite; `python3 benchmarks/vs_crg.py
+  --repo /tmp/bench-fastapi` re-runs the vs-crg rows). Rows without a bench
+  command are statements about the competitor's own project/README, with the
+  source listed in the "Source checked" column of the field table.
+- **Our measurements of their software.** These are not the maintainers'
+  published numbers, and this is not an audit. If a maintainer disputes a
+  number, we re-run against their current release and correct this file.
+- **No third-party verification is implied.** Nothing here has been
+  independently verified — treat this as a self-published comparison.
+
+codeloom cells are command-verified in CI; claims we could not verify are
 marked. Last updated: 2026-08-22.
 
 ## The field
@@ -23,6 +40,10 @@ marked. Last updated: 2026-08-22.
 
 ## Capability matrix
 
+Measured cells are re-run via `benchmarks/eval_runner.py bench` (see
+`benchmarks/README.md`); presence/absence claims come from each project's own
+repo/README (see "Source checked" above).
+
 | Capability | codeloom | crg | claude-context | jcodemunch | codegraph | codebase-memory | CCE | repowise |
 |---|---|---|---|---|---|---|---|---|
 | MCP tools | **82 + `codeloom_ask` NL router** | 30, no router (counted live) | many (code-search) | 90+, 6 routers | 1 + 7 unlisted | 15 | 22 | 10 task-shaped |
@@ -33,18 +54,27 @@ marked. Last updated: 2026-08-22.
 | Memory model | ✅ **decision ledger + typed graph-linked memory objects** (memory.jsonl: type/id/importance/`affected_symbols`/tier) — retrieve by symbol + graph neighbors | ⚠️ markdown journal of Q&A (no compaction mention) | memsearch plugin (separate) | ❌ | ✅ session memory + learning | ❌ | ⚠️ `record_decision` MCP calls | ADRs only |
 | Semantic search | ✅ zero-dep subword hash (ggml opt-in) | ❌ requires `[embeddings]` extra (~2GB) or cloud key | ✅ (Zilliz) | opt-in | ❌ | ✅ bundled | ❌ requires ONNX embeddings | vector hybrid |
 | One-call cited answer | ✅ calibrated confidence | ✅ search FTS JSON | ✅ | ✅ calibrated | ✅ | ✅ | ✅ | ✅ quality tiers |
-| Install weight | **one file, stdlib-only** | pip + 78 pkgs + daemon + TOML config | npm | pip + index store | bundled binary | single binary | pip + ONNX + server | pip + dashboard |
+| Install weight | **one file, stdlib-only** | pip + 75 pkgs + daemon + TOML config | npm | pip + index store | bundled binary | single binary | pip + ONNX + server | pip + dashboard |
 | PR review | ✅ deterministic zero-LLM + risk labels | ✅ risk labels + GitHub Action | — | ✅ | blast radius | — | — | ✅ defect-validated |
 
 ## Honest position
 
-Where codeloom leads:
-- **Zero-dependency single file under MIT** — none of the eight match all three.
+Where our measurements put codeloom ahead:
+- **Zero-dependency single file under MIT** — none of the eight match all
+  three (checked against each project's own repo/README, per the field table
+  above).
 - **Compaction-survival memory + graph-linked memory objects** — measured (95.4% fewer tokens to recover, `benchmarks/compaction_recovery.py`); code-review-graph has zero mentions of compaction/session/resume in its README; CCE requires agent-called MCP tools + running server. v0.79 goes further: **typed `memory.jsonl` objects** (type/id/title/body/`affected_symbols`/importance/confidence/tier, written via `--memory-add`) with deterministic importance scoring, retrieved **by symbol + graph neighbors** via `--memory <symbol>` (with `--memory-stats` to audit the distribution) — crg's memory is a markdown journal with no graph linkage, so it can't answer "what did this repo learn about `validate()` *and its callers*".
-- **79→82 tools behind 1 NL router** — crg's 30 tools have no router (adherence problem the CodeRLM thread hit); v0.78 added `verify_edit` + `blindspot` + `loom://resources`; v0.79 adds the Memory OS trio `codeloom_memory_add` / `codeloom_remember` / `codeloom_memory_stats`.
-- **Fixture-gated grammar claims** — 46 languages golden-file parity in CI.
+- **82 tools behind 1 NL router (counted live via MCP handshake; grew 79→82
+  across v0.78→v0.79; see `benchmarks/README.md`)** — crg's 30 tools have no
+  router (adherence problem the CodeRLM thread hit); v0.78 added
+  `verify_edit` + `blindspot` + `loom://resources`; v0.79 adds the Memory OS
+  trio `codeloom_memory_add` / `codeloom_remember` / `codeloom_memory_stats`.
+- **Fixture-gated grammar claims (measured in CI)** — 46 languages
+  golden-file parity in CI.
 - **Zero-dep offline semantic search** — crg needs a 2GB model extra or cloud key; CCE needs ONNX.
-- **Setup-to-first-answer** — measured: 0.13s warm vs crg 8.6s pip + 4s build + daemon.
+- **Setup-to-first-answer (same fastapi clone; wall-clock rows in
+  `benchmarks/README.md`)** — measured: 0.13s warm vs crg 8.6s pip + 4s build
+  + daemon.
 - **Local savings ledger, all-local, no telemetry** — `--savings-report` (v0.78) compiles your own `--session` log into per-repo token/cost receipts; the numbers live in your repo, not in our README. CCE's sealed 94% ledger is better evidence discipline — ours is local-first and independently auditable.
 - **Post-edit loop closure** — `--verify-edit` (v0.78) re-derives a GO/CHECK/STOP verdict *after* an edit; jcodemunch's preflight (the strongest in the field) stops at *before*. `--blindspot` (v0.78) adds the unread-file warning — the files your edit breaks that you never read. That's the loop-closure differentiator: preflight → edit → verify → commit.
 
@@ -53,7 +83,8 @@ Where competitors lead (stated plainly):
 - **CCE**: sealed 94% savings ledger (better evidence discipline; ours is labeled static/live honestly).
 - **codegraph/codebase-memory**: community scale, vendored grammars, arXiv evals.
 - **claude-context**: Zilliz backing, memsearch tie-in.
-- **repomix**: 28k★ packing ecosystem (complementary — their #1620 asks for a memory layer = people asking repomix to become codeloom).
+- **repomix**: 28k★ packing ecosystem (complementary — their issue #1620 asks
+  for a memory layer).
 
 Claims we retired after checking sources:
 - ~~"Nobody else ships pattern matching"~~ — jcodemunch's `search_ast` does (presets + DSL; ours adds metavariable capture).

@@ -58,11 +58,15 @@ use codeloom for the 99% of sessions that aren't one-shot.
 
 Honest answer: they're the biggest in this niche (30.6k★) and they do real
 work — an incremental graph, a watch daemon, a GitHub Action, 5 translated
-READMEs. We measured them live on the same repo. Where we win:
+READMEs. We measured them live on the same fastapi clone — same repo, same
+symbols, same tokenizer. Where our measurements come out ahead: (every claim
+has a reproduction command in
+[`benchmarks/README.md`](../benchmarks/README.md) — run it yourself)
 
 - **30 tools, no router.** Their agent must pick from 30 MCP tools. Ours
-  has 82 behind *one* deterministic NL router (`codeloom_ask`) — no
-  tool-selection misfires, which is the "it loves to just grep" adherence
+  exposes 82 behind *one* deterministic NL router (`codeloom_ask`), counted
+  live via a `tools/list` handshake — no tool-selection misfires, which is
+  the "it loves to just grep" adherence
   problem every tree-sitter tool hits.
 - **Compaction survival is a feature, not an afterthought.** Their "memory
   loop" is a markdown journal of Q&A — it remembers *answers*, not

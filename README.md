@@ -1,7 +1,7 @@
 <h1 align="center">codeloom</h1>
 
 <p align="center">
-  <b>Give your AI coding agent a map of the repo in one second — and memory that survives compaction.</b><br/>
+  <b>Give your AI coding agent a map of the repo in about a second — and memory that survives compaction.</b><br/>
   One file · zero dependencies · no daemon · 100% local · MIT
 </p>
 
@@ -54,7 +54,7 @@ curl -O https://raw.githubusercontent.com/sloemo01/codeloom/main/codeloom.py
 # Option B: pip
 pip install codeloom
 
-# Map any repo (<1s to first result)
+# Map any repo (<1s to first result — verify: `time python3 codeloom.py <repo> > /dev/null`)
 python3 codeloom.py /path/to/repo > AGENTS.md
 
 # Tell your agent: "read AGENTS.md first"
@@ -69,7 +69,7 @@ python3 codeloom.py --install-agent claude-code   # or cursor, codex, gemini-cli
 
 ## What it gives your agent
 
-### Task-shaped tools (the moat)
+### Task-shaped tools (our strongest evidence)
 
 | Command | What the agent gets |
 |---|---|
@@ -79,13 +79,15 @@ python3 codeloom.py --install-agent claude-code   # or cursor, codex, gemini-cli
 | `--why QUERY` | Decision lookup stamped `[exact]`/`[fuzzy]`/`[unverified]` |
 | `--plan TASK` | Agent-native prioritized reading plan |
 
-### Working memory across compaction (nobody else ships this)
+### Working memory across compaction (no competitor README we examined mentions compaction)
 
 ```bash
 codeloom --decide "use retry(3) not retry(∞) — unbounded hangs agents"
 codeloom --checkpoint --task "fix login bug"     # save working state
 codeloom --resume                                 # restore after compaction
 ```
+
+*Measured: `--resume` restores the structural map + decision ledger in 2 calls / ~985 tokens vs 33 calls / 21,636 tokens for the bare grep-and-read re-derive (95.4% fewer) — verify: `python3 benchmarks/compaction_recovery.py --repo /tmp/bench-fastapi`*
 
 Also: `--remember`, `--seen`, `--working-state`, `--lessons`, `--supersede`,
 `--adr`, `--query-memory`.
@@ -101,8 +103,8 @@ agent's explicit choice, never the tool's.
 ## Memory OS — the graph remembers for you
 
 Shipped in **v0.79**, Memory OS turns the repo's memory from a plain ledger
-into a **typed, importance-scored, graph-linked memory layer** — the new
-differentiator.
+into a **typed, importance-scored, graph-linked memory layer** — our main
+addition in this release.
 
 ### Typed memory objects
 
@@ -180,10 +182,10 @@ The old CLI surface still works as the manual layer: `--memory-add`
 
 | Command | Result |
 |---|---|
-| `--graph` | Full import graph (385 modules, 1126 edges in <1s) |
+| `--graph` | Full import graph (measured on this repo: 385 modules, 1126 edges in <1s — verify: `python3 codeloom.py --graph <repo>`) |
 | `--cross` | Cross-file call graph, AST-resolved |
 | `--search` / `--usages` / `--grep` / `--read` | Symbol index, call sites, snippets, token-efficient source |
-| `--get-symbol X` | Summary-first retrieval (~95–99% token savings) |
+| `--get-symbol X` | Summary-first retrieval (measured 97.8–99.2% token savings vs grep-and-read, 15 task-runs — verify: `python3 benchmarks/token_efficiency.py`) |
 | `--impact M` / `--refactor` / `--rename` | Blast radius prediction |
 | `--similar` / `--deadcode` / `--explain` | Refactoring intelligence, zero LLM |
 | `--trace` | Runtime call edges static analysis can't see |
@@ -194,16 +196,15 @@ The old CLI surface still works as the manual layer: `--memory-add`
 
 | Command | Result |
 |---|---|
-| `--health` | Code-health screen: 0–10 per file, **0.2s**, deterministic detectors |
+| `--health` | Code-health screen: 0–10 per file, **0.2s** (measured on this repo; verify: `time python3 codeloom.py --health <repo>`), deterministic detectors |
 | `--risk HEAD~1..HEAD` | Change-risk score 0–100 + named drivers for any commit range |
 | `--embed-search Q` | Semantic search offline — subword-hash, zero deps (ggml opt-in) |
 | `--watch` → `--watch-merge` | Live freshness: native watcher pipes into the persistent index |
-| `--engine c` | Auto-building C core: Linux-kernel full graph (C engine) ~89-113s |
+| `--engine c` | Auto-building C core: Linux-kernel full graph (C engine) ~89-113s ([bench](benchmarks/hardware-scaling.md)) |
 | `--verify FILE` | SHA-256 checksum verification |
 | `--verify-edit` (v0.78) | **Post-edit integrity oracle** — GO/CHECK/STOP verdict after an edit |
 
-**50 tree-sitter languages dispatched · 46 fixture-proven** (golden-file parity
-tests gate CI on every grammar) · **130+ extensions via regex fallback**.
+**50 tree-sitter languages dispatched · 46 fixture-proven** — golden-file parity tests gate CI on every grammar, verify: `python3 tests.py` · **130+ extensions via regex fallback**.
 
 ## MCP server (82 tools + 1 router)
 
@@ -214,8 +215,8 @@ tests gate CI on every grammar) · **130+ extensions via regex fallback**.
 Or auto-wire any of 17 agents: `codeloom --install-agent <name>`.
 
 82 tools total, but the agent's effective surface is **one tool**:
-`codeloom_ask` takes natural language and routes deterministically —
-no tool-selection misfires. Full listing:
+`codeloom_ask` takes natural language and routes deterministically — a
+table-driven dispatch, not an LLM tool-selection step. Full listing:
 [`docs/mcp-listing.md`](docs/mcp-listing.md).
 
 The v0.79 MCP surface adds the **Memory OS trio**: `codeloom_memory_add`
@@ -249,23 +250,25 @@ Zero LLM cost for stage 1. Works on any GitHub repo — copy the workflow file.
 Full source-cited matrix: [`docs/COMPETITION.md`](docs/COMPETITION.md).
 Summary against the 8-row field — code-review-graph, code-context-engine,
 claude-context, codeseek, jcodemunch, codegraph, codebase-memory-mcp, repowise
-(verified from their repos, crg measured live 2026-08-22 — see
-[`benchmarks/README.md`](benchmarks/README.md) for numbers):
+(README-level review May 2026; crg measured live on the same fastapi clone
+2026-08-22 — see [`benchmarks/README.md`](benchmarks/README.md) for numbers and
+reproduction commands):
 
 | | **codeloom** | code-review-graph (30.6k★) | code-context-engine | claude-context |
 |---|---|---|---|---|
-| Install | **one stdlib file** | pip: **75 packages** + daemon + TOML config | pip + ONNX + server | npm |
+| Install | **one stdlib file** | pip: **75 packages** + daemon + TOML config ([bench](benchmarks/README.md), counted from their `pyproject.toml`, 2026-08-22) | pip + ONNX + server | npm |
 | Background process | **none** | `crg-daemon` (16MB RSS, health checks) | `cce serve` + resource governor | — |
-| Compaction memory | ✅ **decision ledger + Memory OS: typed, graph-linked `memory.jsonl` objects**, measured: 2 calls / ~985 tok to recover (95.4% fewer) | ⚠️ markdown Q&A journal, zero compaction mentions | ⚠️ agent-called `record_decision` MCP | memsearch plugin |
+| Compaction memory | ✅ **decision ledger + Memory OS: typed, graph-linked `memory.jsonl` objects** — 2 calls / ~985 tok to recover, 95.4% fewer than bare re-derive ([bench](benchmarks/README.md), measured 2026-08-22, same repo & symbols as the others) | ⚠️ markdown Q&A journal — no compaction coverage found in README review (May 2026) | ⚠️ agent-called `record_decision` MCP | memsearch plugin |
 | MCP surface | **82 + 1 NL router** | 30, no router | 22 | many |
 | Semantic search | ✅ zero-dep, offline | ❌ `[embeddings]` extra (~2GB) or cloud key | ❌ ONNX required | ✅ (Zilliz) |
-| Language proof | **46 fixture-proven in CI** | not published | — | — |
-| Setup→answer | **0.13s warm** | 8.6s pip + 4s build + daemon | after indexing | after indexing |
+| Language proof | **46 fixture-proven in CI** (verify: `python3 tests.py`) | not published | — | — |
+| Setup→answer | **0.13s warm** (measured 2026-08-22 on the same fastapi clone; verify: `python3 benchmarks/vs_crg.py --repo /tmp/bench-fastapi --symbols Body,Cookie,File,Header --no-setup`) | 8.6s pip + 4s build + daemon (measured 2026-08-22) | after indexing | after indexing |
 
-Measured numbers: symbol retrieval 43–54× fewer tokens than crg (9–10 vs
-428–485); compaction
-recovery **95.4% fewer tokens**; Linux kernel full graph (C engine) ~89-113s. Details and
-reproduction commands in [`benchmarks/README.md`](benchmarks/README.md).
+Measured numbers (same repo, same symbols, same tokenizer — crg live
+2026-08-22): symbol retrieval **43–54× fewer tokens** than crg (9–10 vs 428–485) — verify: `python3 benchmarks/vs_crg.py --repo /tmp/bench-fastapi --symbols Body,Cookie,File,Header --no-setup`; compaction recovery **95.4% fewer tokens** — verify: `python3 benchmarks/compaction_recovery.py --repo /tmp/bench-fastapi`;
+Linux kernel full graph (C engine) ~89-113s ([bench](benchmarks/hardware-scaling.md)).
+Details and reproduction commands in [`benchmarks/README.md`](benchmarks/README.md);
+run the whole suite with `python3 benchmarks/eval_runner.py bench --root /tmp/bench-fastapi`.
 
 Where competitors are ahead, stated plainly: jcodemunch has broader safety
 preflight (edit/delete-safe, SCIP compiler verification); codegraph has 67k★
@@ -273,15 +276,15 @@ community scale; codebase-memory ships 158 grammars and an arXiv-published
 eval; repowise (AGPL) has defect-validated risk scoring. We claim speed +
 shape + proof-per-grammar + memory depth — not their moats.
 
-Shipped in v0.78, we close the loop they leave open: `--verify-edit` gives
+Shipped in v0.78, we close a loop the preflight tools don't: `--verify-edit` gives
 the post-edit GO/CHECK/STOP verdict (their preflight stops at *before*),
 `--blindspot` warns when files you never read are about to break,
 `--savings-report` publishes a **local-only** token-savings ledger (no
 telemetry — receipts live in the repo, not in our README), and
 `--install-hook`/`--uninstall-hook` add a warn-only pre-commit risk hook.
-v0.79 adds the differentiator they can't copy without a graph: **Memory OS
-— typed, importance-scored memory objects linked to the code graph**,
-retrieved by symbol + graph neighbors (`--memory <symbol>`,
+v0.79 adds what no competitor README we examined (May 2026) ships:
+**Memory OS — typed, importance-scored memory objects linked to the code
+graph**, retrieved by symbol and graph neighbors (`--memory <symbol>`,
 `codeloom_remember`).
 
 ## Known limits (honest)
@@ -320,6 +323,33 @@ retrieved by symbol + graph neighbors (`--memory <symbol>`,
 - **Checksums**: every release publishes the SHA-256 of `codeloom.py`;
   verify with `codeloom --verify codeloom.py`
 - **Auditable**: one stdlib file — read the whole thing before running it
+
+## Evidence: verification
+
+The numbers below are our own measurements, published with their reproduction
+commands. They are honest but self-published — the fastest way to verify is to
+run the one-command check yourself.
+
+| Claim | How to verify | Time |
+|---|---|---|
+| Token efficiency: 98.8% fewer tokens than grep-and-read (15 task-runs, 3 repos, cl100k_base) | `python3 benchmarks/token_efficiency.py` (auto-clones the 3 repos into /tmp if missing) | ~2–5 min |
+| Compaction recovery: 95.4% fewer tokens; 2 calls vs 33 | `python3 benchmarks/compaction_recovery.py --repo /tmp/bench-fastapi` (clone fastapi first: `git clone --depth 1 https://github.com/fastapi/fastapi.git /tmp/bench-fastapi`) | ~1 min |
+| Sealed retrieval: ~9× fewer tokens, 2.9× fewer calls, no LLM | `python3 benchmarks/live_sealed_run/harness.py --mode all --repo /tmp/bench-fastapi` | ~1 min |
+| Symbol retrieval vs code-review-graph: 43–54× fewer tokens | `python3 benchmarks/vs_crg.py --repo /tmp/bench-fastapi --symbols Body,Cookie,File,Header --no-setup` (needs crg installed for the crg side) | ~2 min |
+| Memory graph retrieval: 10/10 direct + graph-neighbor hits, 85 ms avg (synthetic repo) | `python3 benchmarks/memory_eval.py` (default = fast synthetic repo; `--repo` for a real one) | ~30 s |
+| Whole suite, one command | `python3 benchmarks/eval_runner.py bench --root /tmp/bench-fastapi` | ~5 min |
+
+### Verification status
+
+| Status | Meaning |
+|---|---|
+| SELF-PUBLISHED — reproducible by anyone: **yes** | Every number above comes with the exact command that produced it (same repo, same symbols, same tokenizer). |
+| INDEPENDENT THIRD-PARTY BENCHMARK — **none yet** | All numbers are first-party measurements. We welcome independent ones; file an issue or PR if you run the suite and get different figures. |
+| REAL-WORLD USAGE REPORTS — pending (out of scope) | We don't collect telemetry and don't claim adoption numbers. |
+| LONG-TERM MAINTENANCE — pending (out of scope) | No track record to point at yet; the test suite (`python3 tests.py`) is the current gate. |
+
+We'd rather you check: if a number doesn't reproduce on your machine, file an
+issue with your output — that's a bug.
 
 ## Contributing
 
