@@ -1,11 +1,74 @@
 # CodeLoom benchmarks
 
 Honest, reproducible numbers comparing CodeLoom to the heavyweight competitors
-(jcodemunch, codegraph, codebase-memory-mcp). The point is not "CodeLoom is
-faster at everything" — it's that CodeLoom wins decisively on the axis that
-matters for everyday agent work: **token-efficient, task-oriented retrieval
-with zero setup and always-fresh context**, plus Linux-kernel-class index
-speed (~91s vs their ~3 min).
+(jcodemunch, codegraph, codebase-memory-mcp, code-review-graph). The point is not
+"CodeLoom is faster at everything" — it's that CodeLoom wins decisively on the
+axis that matters for everyday agent work: **token-efficient, task-oriented
+retrieval with zero setup and always-fresh context**, plus Linux-kernel-class
+index speed (~91s vs their ~3 min), and — uniquely — **measured compaction
+recovery** (nobody else publishes a number here).
+
+## Compaction recovery (the differentiator — measured 2026-08-22)
+
+What happens after a context compaction mid-task: the bare agent re-derives
+context with the realistic grep-and-read chain agents actually use; codeloom
+restores both the structural map and the decision ledger via `--resume`.
+
+| path | calls | KB | tokens (est) |
+|---|---|---|---|
+| **bare re-derive** (10 questions, fastapi) | **33** | **141.6** | **36,257** |
+| **codeloom** (`--resume` + `--query-memory`) | **2** | **3.0** | **777** |
+
+**97.9% fewer tokens, 16.5× fewer calls** to reach "ready to continue working"
+after a compaction. Scripted policy simulation (same caveat as bench/RESULTS.md
+— not a live-agent run); reproduce with:
+
+```bash
+python3 benchmarks/compaction_recovery.py --repo /tmp/bench-fastapi
+```
+
+Why this matters: code-review-graph (30.6k★) has **zero mentions of
+compaction/session/resume/checkpoint** in its README; code-context-engine
+requires the agent to call `record_decision` MCP tools from a running server
+(they ship "memory nudges" because agents forget to). Nobody else ships a
+deterministic restore.
+
+## vs code-review-graph (measured 2026-08-22, same repo, same symbols)
+
+`benchmarks/vs_crg.py` runs both tools on the same fastapi clone. Symbol
+retrieval tokens (tiktoken cl100k_base):
+
+| symbol | codeloom | crg | winner |
+|---|---|---|---|
+| `Body` | 13 | 428 | codeloom (33×) |
+| `Cookie` | 13 | 440 | codeloom (34×) |
+| `File` | 13 | 462 | codeloom (36×) |
+| `Header` | 20 | 485 | codeloom (24×) |
+
+**The honest caveat:** codeloom returns a summary (signature + docstring + call
+graph) by default; crg returns FTS JSON with file paths + line ranges and needs
+a second disambiguated `query callers_of` call. Summary-first is the whole point
+— codeloom opts into `--full` only when the implementation is needed.
+
+**The row we lose:** task briefs. crg's `get_minimal_context_tool` returns 161
+tokens vs codeloom `--pack`'s 1,625 — because `--pack` embeds the actual
+`login()` source, call path and impact list (the code-embedded brief), while
+crg's is a pointer card with graph stats and suggested tools. Different
+contracts: theirs is "orient the agent", ours is "hand the agent the code".
+
+**Setup-to-first-answer (the axis crg doesn't publish):**
+
+| | codeloom | crg |
+|---|---|---|
+| Install | 0 (one stdlib file) | pip: 41s, **78 packages** |
+| Index | `--index`: 3MB disk | build: 4s → **42MB** `.code-review-graph/` |
+| First query | 3.0s cold / **0.105s warm** | 0.14s (after build) |
+| Semantic search | zero-dep subword hash, offline | `pip install code-review-graph[embeddings]` (sentence-transformers ~2GB) **or cloud API key** |
+| Background process | none | `crg-daemon`: 1 proc, 16MB RSS, TOML watch config |
+| MCP surface | 78 tools + `codeloom_ask` NL router | **30 tools, no router** (counted live via MCP handshake) |
+
+The daemon is honest work — but it's the difference between "copy one file" and
+"pip install 78 packages + build a graph + run a daemon + configure embeddings".
 
 ## Scale / hardware scaling (Linux kernel)
 

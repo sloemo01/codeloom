@@ -3,6 +3,20 @@
 Measured numbers only — no fabricated results. Every figure below was produced
 by actually running the tool.
 
+## Compaction recovery (measured 2026-08-22, fastapi)
+
+After a compaction, re-deriving context: bare grep-and-read chain (33 calls,
+141.6 KB) vs `--resume` + `--query-memory` (2 calls, 3.0 KB). **97.9% fewer
+tokens.** Reproduce: `python3 benchmarks/compaction_recovery.py --repo /tmp/bench-fastapi`
+
+## vs code-review-graph (measured 2026-08-22, fastapi, same symbols)
+
+Symbol retrieval: codeloom 13–20 tokens vs crg 428–485 (24–36× fewer).
+Setup: codeloom 1 file / 0.105s warm vs crg 78 pip packages / 42MB graph /
+daemon / embeddings extra. MCP: codeloom 78 tools + NL router vs crg 30 tools
+no router. Loss row: task brief 1,625 vs their 161 tokens (theirs is a pointer
+card; ours embeds the code). Reproduce: `CRG_BIN=... python3 benchmarks/vs_crg.py --repo ... --symbols Body,Cookie,File,Header`
+
 ## Linux kernel (measured this session)
 
 Cloned `torvalds/linux` (shallow, ~2 GB) and ran the Rust core (`codeloom_rs`):
