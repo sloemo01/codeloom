@@ -744,15 +744,6 @@ class GitignoreRule:
     dir_only: bool    # True for 'pattern/'
     base: str         # directory the .gitignore lives in (for nested files)
 
-def _normalize_glob(p: str) -> str:
-    """Convert a gitignore pattern to an fnmatch-compatible glob.
-    Handles ** (match any depth) and leading/trailing slashes."""
-    p = p.strip()
-    # collapse ** to a match-any-depth token; fnmatch doesn't do ** natively,
-    # so we translate it to a pattern that matches across separators.
-    # We'll handle ** by splitting on it and matching segments.
-    return p
-
 def parse_gitignore(path: str) -> List[GitignoreRule]:
     """Parse a .gitignore file into rules. Handles negation (!), slash
     anchoring, ** globs, and directory-only patterns."""
@@ -5310,12 +5301,24 @@ def render_index(files: List[str], root: str, max_files: int, parallel: bool = F
     """Build and save the persistent index + knowledge graph. Returns a summary.
     engine='c' uses the optional compiled C core for the symbol scan (much
     faster on 100k-file repos). engine='rust' uses the multi-threaded Rust core
-    (codeloom_core_rs). Pure-Python ('py') is the default."""
+    (codeloom_core_rs). Pure-Python ('py') is the default. If an engine core is
+    requested but unavailable, this FAILS LOUDLY (no silent empty index)."""
     if engine in ("c", "rust"):
+        if not _find_core_engine(engine):
+            raise SystemExit(
+                f"[error] --engine {engine} requested but no core binary is built "
+                f"and no compiler (cc/rustc) is available to auto-build it.\n"
+                f"  Fix: run `--build-core` (or install cc/rustc) OR use --engine py.\n"
+                f"  (Refusing to write an empty index.)")
         scan = _c_scan(files, engine=engine)  # scan each file ONCE, reuse for symbols + kg
         index = _c_symbol_index(files, root, scan=scan)
         all_defined = set(index.keys())
         kg = _c_kg(files, root, all_defined, scan=scan)
+        if not index:
+            raise SystemExit(
+                f"[error] --engine {engine} produced no symbols "
+                f"({len(files)} files scanned). Refusing to save an empty index.\n"
+                f"  Fix: run --engine py (pure Python) or repair the {engine} core.")
     else:
         index = build_persistent_index(files, root, parallel=parallel)
         kg = build_knowledge_graph(files, root, parallel=parallel)

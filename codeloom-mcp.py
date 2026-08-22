@@ -1396,6 +1396,15 @@ def _collect_files(root: str, max_files: int) -> List[str]:
 # process, no staleness, no idle resource use.
 # --------------------------------------------------------------------------- #
 
+# Tools served from the resident in-memory index (auto-refreshed by content
+# hash, so they are always fresh — their envelope reports source=resident).
+# codeloom_query is deliberately NOT here: it loads the on-disk persistent
+# index, so its envelope reports the disk index's true age/staleness.
+_RESIDENT_INDEX_TOOLS = frozenset({
+    "codeloom_search", "codeloom_health", "codeloom_deadcode",
+    "codeloom_get_symbol",
+})
+
 class _Index:
     """Per-root in-memory index with incremental refresh. Bounded: at most
     MAX_ROOTS roots stay resident (LRU by last access) so a long session
@@ -2507,10 +2516,23 @@ def serve() -> int:
             result = call_tool(name, args)
             # freshness envelope on every successful response (repowise parity):
             # agents always know index age + commit + staleness before trusting.
+            # Truthful by serving source: the resident in-memory index re-parses
+            # changed files by content hash (always fresh), so tools served from
+            # it report source=resident and stale=false. Tools served from the
+            # on-disk persistent index report its true age/staleness.
             if isinstance(result, dict) and not result.get("isError"):
                 try:
                     root = str(args.get("root") or ".")
-                    result["_meta"] = codeloom.meta_envelope(root)
+                    if name in _RESIDENT_INDEX_TOOLS:
+                        result["_meta"] = {
+                            "indexed": True,
+                            "source": "resident-in-memory",
+                            "index_age_days": None,
+                            "indexed_commit": None,
+                            "stale_warning": False,
+                        }
+                    else:
+                        result["_meta"] = codeloom.meta_envelope(root)
                 except Exception:
                     pass
             _send({"jsonrpc": "2.0", "id": msg_id, "result": result})
