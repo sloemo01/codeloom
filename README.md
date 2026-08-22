@@ -1,26 +1,30 @@
-<h1 align="center">codeloom</h1>
+<div align="center">
 
-<p align="center">
-  <b>Give your AI coding agent a map of the repo in about a second — and memory that survives compaction.</b><br/>
-  One file · zero dependencies · no daemon · 100% local · MIT
-</p>
+# codeloom
 
-<p align="center">
-  <a href="https://github.com/sloemo01/codeloom/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue"/></a>
-  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.8%2B-blue"/></a>
-  <a href="https://github.com/sloemo01/codeloom/actions/workflows/ci.yml"><img src="https://img.shields.io/badge/CI-passing-brightgreen"/></a>
-  <a href="https://github.com/sloemo01/codeloom#readme"><img src="https://img.shields.io/badge/deps-zero-brightgreen"/></a>
-  <a href="https://github.com/sloemo01/codeloom/stargazers"><img src="https://img.shields.io/github/stars/sloemo01/codeloom"/></a>
-</p>
+**Give your AI coding agent a map of the repo in about a second — and memory that survives compaction.**
 
-<p align="center">
-  <a href="#quickstart">Quickstart</a> ·
-  <a href="#what-it-gives-your-agent">Features</a> ·
-  <a href="#mcp-server-82-tools--1-router">MCP</a> ·
-  <a href="#pr-review-bot">PR Bot</a> ·
-  <a href="#why-its-different">vs competitors</a> ·
-  <a href="#documentation">Docs</a>
-</p>
+`one file` · `zero dependencies` · `no daemon` · `100% local` · `MIT`
+
+[![License](https://img.shields.io/badge/license-MIT-2da44e)](#license)
+[![Python](https://img.shields.io/badge/python-3.8%2B-2da44e)](https://www.python.org/downloads/)
+[![CI](https://img.shields.io/badge/CI-passing-2da44e)](https://github.com/sloemo01/codeloom/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-107-2da44e)](https://github.com/sloemo01/codeloom/blob/main/tests.py)
+[![Deps](https://img.shields.io/badge/deps-zero-2da44e)](https://github.com/sloemo01/codeloom#readme)
+[![MCP tools](https://img.shields.io/badge/MCP-82%20tools%20%2B%201%20router-2da44e)](#mcp-server-82-tools--1-router)
+[![Stars](https://img.shields.io/github/stars/sloemo01/codeloom)](https://github.com/sloemo01/codeloom/stargazers)
+
+[Quickstart](#quickstart) · [Features](#what-it-gives-your-agent) · [Memory OS](#memory-os--the-graph-remembers-for-you) · [MCP](#mcp-server-82-tools--1-router) · [PR bot](#pr-review-bot) · [Why it's different](#why-its-different) · [Evidence](#evidence-verification)
+
+</div>
+
+<div align="center">
+
+![codeloom demo](demo.gif)
+
+*A real run: one command, one second, a full structural map your agent can act on.*
+
+</div>
 
 ---
 
@@ -41,7 +45,7 @@ it — and it re-derives everything from scratch. Over and over.
    what the agent already tried, decided, and rejected — after any compaction.
 3. **Memory OS (v0.79)** — typed, importance-scored memory objects written to
    `memory.jsonl` and **linked to the code graph itself**: retrieve what the
-   repo learned about a symbol and its graph neighbors in one call.
+   repo learned about a symbol *and* its graph neighbors in one call.
 
 No install. No daemon. No GPU. No telemetry. Runs 100% on your machine.
 
@@ -69,8 +73,6 @@ python3 codeloom.py --install-agent claude-code   # or cursor, codex, gemini-cli
 
 ## What it gives your agent
 
-### Task-shaped tools (our strongest evidence)
-
 | Command | What the agent gets |
 |---|---|
 | `--pack "TASK"` | **One-shot brief**: reading order + impact + relevant symbols, pre-computed |
@@ -79,7 +81,9 @@ python3 codeloom.py --install-agent claude-code   # or cursor, codex, gemini-cli
 | `--why QUERY` | Decision lookup stamped `[exact]`/`[fuzzy]`/`[unverified]` |
 | `--plan TASK` | Agent-native prioritized reading plan |
 
-### Working memory across compaction (no competitor README we examined mentions compaction)
+### Working memory across compaction
+
+*No competitor README we examined mentions compaction.*
 
 ```bash
 codeloom --decide "use retry(3) not retry(∞) — unbounded hangs agents"
@@ -277,7 +281,7 @@ eval; repowise (AGPL) has defect-validated risk scoring. We claim speed +
 shape + proof-per-grammar + memory depth — not their moats.
 
 Shipped in v0.78, we close a loop the preflight tools don't: `--verify-edit` gives
-the post-edit GO/CHECK/STOP verdict (their preflight stops at *before*),
+the post-edit GO/FAIL verdict (their preflight stops at *before*),
 `--blindspot` warns when files you never read are about to break,
 `--savings-report` publishes a **local-only** token-savings ledger (no
 telemetry — receipts live in the repo, not in our README), and
