@@ -744,15 +744,6 @@ class GitignoreRule:
     dir_only: bool    # True for 'pattern/'
     base: str         # directory the .gitignore lives in (for nested files)
 
-def _normalize_glob(p: str) -> str:
-    """Convert a gitignore pattern to an fnmatch-compatible glob.
-    Handles ** (match any depth) and leading/trailing slashes."""
-    p = p.strip()
-    # collapse ** to a match-any-depth token; fnmatch doesn't do ** natively,
-    # so we translate it to a pattern that matches across separators.
-    # We'll handle ** by splitting on it and matching segments.
-    return p
-
 def parse_gitignore(path: str) -> List[GitignoreRule]:
     """Parse a .gitignore file into rules. Handles negation (!), slash
     anchoring, ** globs, and directory-only patterns."""
@@ -3648,6 +3639,20 @@ def render_get_symbol(files, root, symbol, context_lines=2, summary=False, adapt
         doc_str = doc.group(1).strip().split("\n")[0][:120] if doc else "(no docstring)"
         # call graph: what it calls + what calls it
         calls = build_call_graph_multi(files, root)
+        graph_built = any(calls.values())
+        if not graph_built:
+            # honest: no call edges available — say so instead of "Calls (0)"
+            summary_text = (
+                f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
+                f"~{estimate_tokens(sig_str + doc_str)} tokens (summary)\n\n"
+                f"Signature: {sig_str}\n"
+                f"Docstring: {doc_str}\n"
+                f"Calls: not built (run --index/--graph for call context)\n"
+                f"Called by: not built (run --index/--graph for call context)\n"
+                f"\nUse `--get-symbol {symbol} --full` for the full source.\n"
+            )
+            buf.write(summary_text)
+            return buf.getvalue()
         callees = set()
         for caller, cs in calls.get(loc["module"], {}).items():
             if caller == symbol:
@@ -4926,6 +4931,7 @@ def render_context_card(files: List[str], root: str, targets: List[str]) -> str:
     Collapses the search->read->impact chain into a single round-trip."""
     index = build_byte_index(files, root)
     cg = build_call_graph_multi(files, root)
+    cg_built = any(cg.values())
     # callers count per symbol name across all modules
     callers = {}
     for _mod, funcs in cg.items():
@@ -4967,7 +4973,10 @@ def render_context_card(files: List[str], root: str, targets: List[str]) -> str:
         for s in sigs:
             buf.write("  sig: %s\n" % s)
         n = callers.get(t, 0)
-        buf.write("  callers: %d\n" % n)
+        if cg_built:
+            buf.write("  callers: %d\n" % n)
+        else:
+            buf.write("  callers: not built (run --index/--graph for call context)\n")
         hits = [title for title, body in adrs if t in body]
         for h in hits[:3]:
             buf.write("  adr: %s\n" % h)
@@ -4989,6 +4998,23 @@ def render_answer(files: List[str], root: str, question: str) -> str:
     top = results[0]
     score = float(top.get("score", 0) or 0)
     conf = "high" if score >= 1.5 else ("medium" if score >= 0.9 else "low")
+    # Heuristic gate derived from the hybrid_search scoring scale
+    # (lex = 2.0 per exact name-token match, * kind_b * (0.7 + size_b),
+    # size factor >= 0.9): a single-token FULL match floors at
+    # 2.0 * 1.0 * 0.9 = 1.8 — any score below that cannot be a full match.
+    # Additionally, every query token must appear in the top hit's name
+    # (exact or substring); a token that contributes only via module/
+    # substring of a DIFFERENT symbol means the top hit is a partial
+    # heuristic match (e.g. "Request class" matching "RequestHandler":
+    # the wrong match scored 3.40 while "class" never touches the name).
+    top_name = str(top.get("name", "") or "")
+    top_name_toks = _bm25(top_name)
+    top_name_lc = top_name.lower()
+    q_tokens = _bm25(question)
+    full_match_floor = 1.8
+    name_covers = all(
+        t in top_name_toks or t in top_name_lc for t in q_tokens)
+    heuristic_match = (score < full_match_floor) or not name_covers
     buf = io.StringIO()
     buf.write("confidence: %s\n\n" % conf)
     buf.write("# answer: %s\n" % question)
@@ -5022,6 +5048,8 @@ def render_answer(files: List[str], root: str, question: str) -> str:
             buf.write("callers: %s\n" % ", ".join(sorted(callers)[:6]))
     except Exception:
         pass
+    if heuristic_match:
+        buf.write("\n(heuristic match — verify against the source before trusting)\n")
     return buf.getvalue()
 
 def render_why(files: List[str], root: str, query: str) -> str:
@@ -5310,12 +5338,24 @@ def render_index(files: List[str], root: str, max_files: int, parallel: bool = F
     """Build and save the persistent index + knowledge graph. Returns a summary.
     engine='c' uses the optional compiled C core for the symbol scan (much
     faster on 100k-file repos). engine='rust' uses the multi-threaded Rust core
-    (codeloom_core_rs). Pure-Python ('py') is the default."""
+    (codeloom_core_rs). Pure-Python ('py') is the default. If an engine core is
+    requested but unavailable, this FAILS LOUDLY (no silent empty index)."""
     if engine in ("c", "rust"):
+        if not _find_core_engine(engine):
+            raise SystemExit(
+                f"[error] --engine {engine} requested but no core binary is built "
+                f"and no compiler (cc/rustc) is available to auto-build it.\n"
+                f"  Fix: run `--build-core` (or install cc/rustc) OR use --engine py.\n"
+                f"  (Refusing to write an empty index.)")
         scan = _c_scan(files, engine=engine)  # scan each file ONCE, reuse for symbols + kg
         index = _c_symbol_index(files, root, scan=scan)
         all_defined = set(index.keys())
         kg = _c_kg(files, root, all_defined, scan=scan)
+        if not index:
+            raise SystemExit(
+                f"[error] --engine {engine} produced no symbols "
+                f"({len(files)} files scanned). Refusing to save an empty index.\n"
+                f"  Fix: run --engine py (pure Python) or repair the {engine} core.")
     else:
         index = build_persistent_index(files, root, parallel=parallel)
         kg = build_knowledge_graph(files, root, parallel=parallel)
@@ -7182,23 +7222,35 @@ def verify_edit(root: str, severity: str = "warn") -> str:
             elif dep not in post_edges.get(mod, set()):
                 drivers.append(("STOP", "dangling-import",
                                 f"{mod} -> {dep}: import removed from changed file"))
-    # STOP — NEW import cycles (not present at HEAD), through changed files
+    # STOP — NEW import cycles introduced by the diff vs the FULL HEAD graph.
+    # pre_graph must be computed over EVERY .py module at HEAD (not just the
+    # changed files): a pre-existing cycle in unchanged modules (e.g. a <-> b
+    # committed long ago) must never trigger STOP. Only cycle edges the
+    # working-tree diff actually introduces (in cyc_post but not cyc_head)
+    # may fire the new-cycle driver.
     pre_graph = {}
-    for rel in changed_py:
-        abs_path = os.path.join(root, rel)
-        if not os.path.isfile(abs_path):
-            continue
-        mod = module_name_of(abs_path, root)
-        if mod in pre_edges:
-            pre_graph[mod] = pre_edges[mod]
-    cyc_found = set()
-    for mod, deps in sorted(full_graph.items()):
-        for dep in sorted(deps):
-            if dep in full_graph and mod in reachable(full_graph, dep, "out"):
-                cyc_found.add((mod, dep))
-    for mod, dep in sorted(cyc_found):
-        if mod not in pre_graph or dep not in pre_graph.get(mod, set()):
-            drivers.append(("STOP", "new-cycle", f"{mod} -> {dep}"))
+    if ls:
+        for rel in ls.splitlines():
+            if not rel.endswith(".py"):
+                continue
+            mod = module_name_of(os.path.join(root, rel), root)
+            head_text = _git_head_text(root, rel)
+            if head_text is None:
+                continue
+            e, _s = _import_edges(head_text, mod, root, head_modules)
+            pre_graph[mod] = e
+
+    def _cycle_edges(g: dict) -> set:
+        cyc = set()
+        for mod, deps in sorted(g.items()):
+            for dep in sorted(deps):
+                if dep in g and mod in reachable(g, dep, "out"):
+                    cyc.add((mod, dep))
+        return cyc
+    cyc_head = _cycle_edges(pre_graph)
+    cyc_post = _cycle_edges(full_graph)
+    for mod, dep in sorted(cyc_post - cyc_head):
+        drivers.append(("STOP", "new-cycle", f"{mod} -> {dep}"))
     # CHECK — dynamic/lazy/vendored import suspects (never fatal)
     for mod, suspects in sorted(post_suspects.items()):
         for s in sorted(suspects):
@@ -8682,7 +8734,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--cost", action="store_true", help="append token-cost estimate to output")
     p.add_argument("--session", action="store_true", help="log this invocation to the local session log (JSONL)")
     p.add_argument("--session-report", action="store_true", help="summarize the local session log (calls, tokens, cost)")
-    p.add_argument("--impact", metavar="MODULE", help="predict blast radius of changing a module")
+    p.add_argument("--impact", metavar="MODULE", help="predict blast radius of changing a module (single symbol only)")
     p.add_argument("--check-edit", metavar="SYMBOL", help="preflight: is it safe to edit this symbol? (terminal GO/STOP verdict)")
     p.add_argument("--check-delete", metavar="SYMBOL", help="preflight: is it safe to delete this symbol? (terminal GO/STOP verdict)")
     p.add_argument("--task", metavar="TEXT", help="rank modules relevant to a task description")

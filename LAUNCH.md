@@ -37,6 +37,7 @@ I kept hitting this, so I built codeloom: one file, zero dependencies, no daemon
 - **Symbol retrieval: 43–54× fewer tokens than code-review-graph** on the same fastapi symbols, same tokenizer (9–10 vs 428–485). Measured live against their MCP server.
 - **Setup-to-first-answer: 0.13s warm** (after `--index`). Theirs: pip install (75 packages) + graph build (42MB) + daemon + an embeddings extra (~2GB) for semantic search. Ours: copy one stdlib file.
 - **Sealed retrieval run (no LLM):** 10 calls / 731 tokens vs bare grep-and-read 29 calls / ~5.6–6.7k tokens (bare hit-rate run-variant 1–3/10; codeloom's 4/10 deterministic).
+- **Dogfood honesty (2026-08-23, pallets/flask, 83 files):** same-session head-to-head vs grep+read, codeloom used **MORE** total tokens (+14.5%) and wall time (+2.6x) — the 98.8%/43–54× claims apply to big-repo chains-of-calls vs grep+read baselines, not small-repo single-agent sessions; it won on evidence (`--impact` 5 direct + 33 transitive dependents in 0.23s, `--task` ranking, `--checkpoint-restore` diff, `--memory` retrieval). Reproduce: `benchmarks/dogfood_bench.py`.
 
 **The one thing that matters: `--pack` is a code-embedded task brief, not a ranked list.**
 

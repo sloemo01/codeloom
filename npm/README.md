@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/badge/license-MIT-2da44e)](#license)
 [![Python](https://img.shields.io/badge/python-3.8%2B-2da44e)](https://www.python.org/downloads/)
 [![CI](https://img.shields.io/badge/CI-passing-2da44e)](https://github.com/sloemo01/codeloom/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-107-2da44e)](https://github.com/sloemo01/codeloom/blob/main/tests.py)
+[![Tests](https://img.shields.io/badge/tests-111-2da44e)](https://github.com/sloemo01/codeloom/blob/main/tests.py)
 [![Deps](https://img.shields.io/badge/deps-zero-2da44e)](https://github.com/sloemo01/codeloom#readme)
 [![MCP tools](https://img.shields.io/badge/MCP-82%20tools%20%2B%201%20router-2da44e)](#mcp-server-82-tools--1-router)
 [![Stars](https://img.shields.io/github/stars/sloemo01/codeloom)](https://github.com/sloemo01/codeloom/stargazers)
@@ -206,7 +206,7 @@ The old CLI surface still works as the manual layer: `--memory-add`
 | `--watch` → `--watch-merge` | Live freshness: native watcher pipes into the persistent index |
 | `--engine c` | Auto-building C core: Linux-kernel full graph (C engine) ~89-113s ([bench](benchmarks/hardware-scaling.md)) |
 | `--verify FILE` | SHA-256 checksum verification |
-| `--verify-edit` (v0.78) | **Post-edit integrity oracle** — GO/CHECK/STOP verdict after an edit |
+| `--verify-edit` (v0.78) | **Post-edit integrity oracle** — GO/CHECK/STOP verdict after an edit; cycle detection diffs against the **full HEAD graph**, so pre-existing cycles never trigger STOP — only cycles the diff actually introduces |
 
 **50 tree-sitter languages dispatched · 46 fixture-proven** — golden-file parity tests gate CI on every grammar, verify: `python3 tests.py` · **130+ extensions via regex fallback**.
 
@@ -322,7 +322,7 @@ graph**, retrieved by symbol and graph neighbors (`--memory <symbol>`,
 
 ## Trust & verification
 
-- **CI**: Linux/macOS/Windows × Python 3.8–3.12, 107 tests, ≥46 grammar
+- **CI**: Linux/macOS/Windows × Python 3.8–3.12, 111 tests, ≥46 grammar
   fixtures gated by golden files
 - **Checksums**: every release publishes the SHA-256 of `codeloom.py`;
   verify with `codeloom --verify codeloom.py`
@@ -342,6 +342,18 @@ run the one-command check yourself.
 | Symbol retrieval vs code-review-graph: 43–54× fewer tokens | `python3 benchmarks/vs_crg.py --repo /tmp/bench-fastapi --symbols Body,Cookie,File,Header --no-setup` (needs crg installed for the crg side) | ~2 min |
 | Memory graph retrieval: 10/10 direct + graph-neighbor hits, 85 ms avg (synthetic repo) | `python3 benchmarks/memory_eval.py` (default = fast synthetic repo; `--repo` for a real one) | ~30 s |
 | Whole suite, one command | `python3 benchmarks/eval_runner.py bench --root /tmp/bench-fastapi` | ~5 min |
+
+### Dogfood head-to-head (2026-08-23, pallets/flask, same-session)
+
+We also ran codeloom against a plain grep+read agent on a small repo — and the
+result is honestly mixed. On small repos with terminal-payload counting,
+codeloom used **more** total tokens (+14.5%) and wall time (+2.6×) than the
+plain grep+read agent; it won on evidence — `--impact` gave the blast radius
+(5 direct + 33 transitive in 0.23s), `--task` ranked the exact 4 modules, and
+`--checkpoint`/`--checkpoint-restore` reproduced the exact edit diff. The
+token-efficiency claims above (98.8%, 43–54×) hold for **big repos and
+chains-of-calls vs grep+read baselines** — that scope is where they were
+measured, not on small single-shot tasks.
 
 ### Verification status
 

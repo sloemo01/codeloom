@@ -25,6 +25,14 @@ agents via MCP, and maintain/extend the repo.
 - User asks to extend codeloom, run its tests, or re-record its demo GIF.
 - Don't use for: general codebase questions that don't need structural output.
 
+## Honest scope (small repos)
+
+On small repos (<~200 files), codeloom's value is **memory / safety /
+evidence** (`--verify-edit`, `--checkpoint`, `--impact`, `--memory`), not raw
+speed — a plain `grep` is faster for a single search. Use the MCP server
+in-session for ms-latency searches (its resident index answers in milliseconds;
+the CLI pays parse cost per invocation).
+
 ## Prerequisites
 
 - Python 3.8+ (stdlib only — no pip deps).
@@ -239,7 +247,7 @@ python3 codeloom.py --uninstall-hook /path/to/repo
 | `--answer QUESTION` | one-call cited answer with honest confidence — the "just ask" retrieval entry point |
 | `--context-card S1 S2 ...` | batch triage card: N symbols' signatures + docs + relevance in one call |
 | `--why QUERY` | decision lookup with evidence stamps `[exact]`/`[fuzzy]`/`[unverified]` |
-| `--verify-edit [ROOT]` | **post-edit integrity oracle**: re-parse changed files, GO/CHECK/STOP verdict on dangling imports/cycles; `--severity warn` (exit 0 on STOP) or `--severity strict` (exit 1) |
+| `--verify-edit [ROOT]` | **post-edit integrity oracle**: re-parse changed files, GO/CHECK/STOP verdict on dangling imports/cycles; cycles are diff-introduced only — a pre-existing cycle in the full-HEAD baseline (e.g. `a <-> b` committed long ago) never triggers STOP; `--severity warn` (exit 0 on STOP) or `--severity strict` (exit 1) |
 | `--blindspot` | compare the `--mark-seen` hot set against impact-derived read set: STOP-tier "editing a file you never read" warning; `--no-blindspot` opts out |
 | `--risk [REVSPEC]` | change-risk report for a commit/range (default `HEAD~1..HEAD`): score 0-100 + named drivers |
 | `--savings-report` | token/seconds savings vs grep+read baseline, from the `--session` log; `--since DAYS` filters, `--repo PATH` aggregates per repo |
@@ -311,8 +319,12 @@ This is the decision guide: given what you're trying to do, which flag serves it
 
 ### Verify an edit (after editing — the loop-closure layer, v0.78)
 - `codeloom --verify-edit` — **after** you (or an agent) changed files: re-parses
-  and returns GO/CHECK/STOP on dangling imports/new cycles. Run it before telling
-  the agent "edit is fine" — `--severity strict` makes STOP exit 1 (for CI/gates).
+  and returns GO/CHECK/STOP on dangling imports/new cycles. Cycle detection
+  compares the FULL-HEAD graph against the post-edit graph and fires only on
+  **diff-introduced** cycle edges — a cyclic repo's pre-existing baseline never
+  triggers STOP, so it is safe on codebases that were already cyclic. Run it
+  before telling the agent "edit is fine" — `--severity strict` makes STOP exit
+  1 (for CI/gates).
 - `codeloom --blindspot` — "am I about to edit a file I never read?" (uses the
   `--mark-seen` hot set); `--no-blindspot` opts out.
 - `codeloom --risk HEAD~1..HEAD` — "how risky is my last change?" (0-100 + drivers)
@@ -339,6 +351,11 @@ This is the decision guide: given what you're trying to do, which flag serves it
 ### Proof / reproducibility (maintenance)
 - `codeloom --eval bench --root <repo>` — run the whole measured benchmark suite
   (token efficiency, compaction recovery, sealed retrieval, memory eval)
+- `python3 benchmarks/dogfood_bench.py --repo <r> --task '<t>'` — head-to-head
+  plain grep+read vs codeloom on the same repo/task (zero-dep, zero-LLM):
+  calls / tokens-in / tokens-out / wall / completeness, with honest loss rows —
+  if codeloom loses a metric it says so (e.g. flask: +14.5% tokens, 2.6x wall
+  vs plain, but wins on evidence: impact, memory/checkpoint survival)
 - `codeloom --verify FILE` — SHA-256 checksum (download trust)
 
 ### Web / backend architecture
@@ -568,7 +585,7 @@ Consequences for the agent (why this matters):
 - **Fail-safe by design** — every branch returns actionable context; the
   default is the map + task ranking. A "wrong" pick is still helpful.
 - **Deterministic == testable** — same query, same route, every time. The
-  router is exercised by the 107-test suite and the MCP handshake.
+  router is exercised by the 111-test suite and the MCP handshake.
 - **Keyword order is load-bearing** — safety (verify/blindspot) and
   write-vs-read disambiguation ("remember this bug" → write, "what do we
   know about X" → retrieve) sit BEFORE the broad branches that would
@@ -603,7 +620,7 @@ structured, importance-scored, graph-linked entries:
 ```bash
 python3 tests.py
 ```
-Expect `OK` (107 tests, incl. the 7 `TestMemoryOS` cases). Add tests for any
+Expect `OK` (111 tests, incl. the 7 `TestMemoryOS` cases). Add tests for any
 new feature.
 
 ### 5. Re-record the demo GIF
@@ -640,7 +657,7 @@ new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (107 tests).
+- `python3 tests.py` → `OK` (111 tests).
 - `codeloom --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codeloom --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codeloom --task "text" <root>` returns a ranked module list.

@@ -19,6 +19,10 @@
   number, we re-run against their current release and correct this file.
 - **No third-party verification is implied.** Nothing here has been
   independently verified — treat this as a self-published comparison.
+- **Dogfood honesty:** our own head-to-head on a small repo (flask,
+  2026-08-23) showed codeloom using MORE tokens/time than a plain agent;
+  published efficiency numbers are scoped to big-repo chains vs grep+read
+  baselines.
 
 codeloom cells are command-verified in CI; claims we could not verify are
 marked. Last updated: 2026-08-22.

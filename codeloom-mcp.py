@@ -122,9 +122,11 @@ TOOLS: List[Dict[str, Any]] = [
     {
         "name": "codeloom_impact",
         "description": (
-            "Predict the blast radius of changing a module: which modules depend "
-            "on it (direct + transitive) and what it depends on. Answers 'what "
-            "breaks if I change this?' before the agent edits."
+            "Predict the blast radius of changing a single module — one "
+            "symbol per call, e.g. 'core.engine' or 'src/core/engine.py' "
+            "(the CLI rejects multiple symbols). Shows which modules depend "
+            "on it (direct + transitive) and what it depends on. Answers "
+            "'what breaks if I change this?' before the agent edits."
         ),
         "inputSchema": {
             "type": "object",
@@ -281,7 +283,7 @@ TOOLS: List[Dict[str, Any]] = [
             "Batch triage card for MULTIPLE symbols in ONE call (repowise "
             "get_context parity): per-target definition, same-module signatures, "
             "callers count, and governing ADR titles. Collapses the "
-            "search->read->impact chain into a single round-trip."
+            "search->read->impact sequence into a single round-trip."
         ),
         "inputSchema": {
             "type": "object",
@@ -601,8 +603,10 @@ TOOLS: List[Dict[str, Any]] = [
         "description": (
             "Edit-safety preflight: given a target file (or repo root), report "
             "whether an edit there is safe — dependents, call sites, blast "
-            "radius — with a GO/STOP verdict. Ask before editing: 'did I break "
-            "X', 'check my edit', 'is my edit safe'."
+            "radius — with a GO/STOP verdict. Needs a DIRTY tree: it validates "
+            "uncommitted working-tree changes, so on a clean tree it returns "
+            "GO trivially (save your edit to disk first). Ask before editing: "
+            "'did I break X', 'check my edit', 'is my edit safe'."
         ),
         "inputSchema": {
             "type": "object",
@@ -1625,8 +1629,13 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
 
     # 0. Edit-safety guard — verify/blindspot questions route to the newest
     # tools, BEFORE the symbol/read branches so 'read coverage' etc. win.
-    if any(k in q for k in ["verify", "did i break", "check my edit",
-                            "is my edit safe", "edit safety", "verify edit"]):
+    # 'does my change break X' variants belong here (edit safety), while
+    # 'what breaks if i change X' stays with impact routing in branch 1.
+    if any(k in q for k in ["verify", "did i break", "did my change break",
+                            "does my change break", "did my edit break",
+                            "does my edit break", "my change break",
+                            "check my edit", "is my edit safe", "edit safety",
+                            "verify edit"]):
         import re as _re
         m = _re.search(r"([\w./-]+\.py|[\w./-]+)",
                        q.replace("did i break", "").replace("check my edit", "")
@@ -1634,7 +1643,11 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
         target = m.group(1) if m else root
         if not os.path.isabs(target):
             target = os.path.join(root, target)
-        return {"content": [{"type": "text", "text": _verify_edit(target)}]}
+        hint = ("\n\nNOTE: --verify-edit checks your WORKING TREE, so it needs a "
+                "DIRTY tree (uncommitted edits) to be meaningful. On a clean "
+                "tree it returns GO trivially. Save your edit to disk, then "
+                "re-ask 'did I break X' to get a real verdict.")
+        return {"content": [{"type": "text", "text": _verify_edit(target) + hint}]}
     if any(k in q for k in ["blindspot", "read coverage", "read everything",
                             "what haven't i read", "not yet read", "coverage gap",
                             "what am i missing"]):
@@ -2438,7 +2451,7 @@ def read_resource(uri: str, root: Optional[str] = None) -> Optional[Dict[str, An
                 proc = _sp.run(["git", "-C", root, "diff", "--stat", "HEAD"],
                                capture_output=True, text=True, timeout=30)
                 if proc.returncode == 0 and proc.stdout.strip():
-                    parts.append("# codeloom --delta (git diff vs HEAD)\n" + proc.stdout)
+                    parts.append("# codeloom --incremental (git diff vs HEAD)\n" + proc.stdout)
             except Exception:
                 pass
             parts.append("# loom://delta\nSession-delta machinery not yet available in core (render_delta missing); showing git diff --stat above if the repo is git-backed.")

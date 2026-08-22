@@ -230,7 +230,10 @@ Preflight (`--check-edit`) answers *before*; `--verify-edit` answers *after*.
 Run it on a just-edited file and get a terminal **GO / CHECK / STOP** verdict
 re-deriving structural integrity (symbols resolvable, call sites intact,
 nothing the edit orphaned). This closes the edit loop: preflight → edit →
-verify → commit.
+verify → commit. **v0.79 refinement:** cycle detection now diffs the
+working-tree graph against the **full HEAD graph** (every `.py` module at
+HEAD, via `git ls-tree`), so pre-existing cycles committed long ago never
+trigger STOP — only cycles the working-tree diff actually introduces do.
 
 ### 32. Blindspot Detection — `--blindspot` ✅ (shipped v0.78)
 Before an edit, list the files you have **never read** that the change

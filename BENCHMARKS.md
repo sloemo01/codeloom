@@ -23,6 +23,27 @@ third-party benchmark of codeloom exists yet.** Anyone is welcome to re-run
 the commands below and publish their own numbers — including numbers that
 disagree with ours.
 
+## Dogfood head-to-head (measured 2026-08-23, pallets/flask, same-session)
+
+Honest check: codeloom 0.79.0 vs plain grep+read on the same 83-file repo in
+the same session, counting terminal payloads. **codeloom used MORE total
+tokens (+14.5%) and wall time (+2.6x)** — the CLI returns full payloads,
+which is the honest cost of terminal transport. It won on evidence:
+
+- `--impact` — blast radius in **0.23s**: 5 direct + 33 transitive dependents
+  (grep+read cannot produce a blast radius at all)
+- `--task` ranked the exact modules the change needed
+- `--checkpoint`/`--checkpoint-restore` reproduced the exact edit diff
+- graph-neighbor memory retrieval (`--memory`) worked
+
+**Scope note:** the token-efficiency claims (98.8%, 43–54×) apply to big-repo
+chains-of-calls vs grep+read baselines, **not** to small-repo single-agent
+sessions — both numbers are true; the scope is the difference.
+
+Reproduce (deterministic, zero-LLM, any repo — never touches the target's
+state; runs codeloom on a scratch clone):
+`python3 benchmarks/dogfood_bench.py --repo <r> --task '<t>' [--expect f1,f2] [--runs N] [--json]`
+
 ## Static-replay retrieval (bench/RESULTS.md, measured 2026-08-22, fastapi)
 
 20 architecture questions, one `--answer` call vs scripted grep+read:

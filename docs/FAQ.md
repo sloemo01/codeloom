@@ -174,6 +174,20 @@ Yes, honestly:
 - Neural embeddings are opt-in (ggml). The zero-dep hash is good, not
   great — it catches typos, it won't catch synonym drift.
 
+## Is codeloom always fewer tokens?
+
+No — honestly, no. On a small repo (<~200 files) in a same-session
+head-to-head with terminal-payload counting (pallets/flask, 2026-08-23),
+codeloom used **MORE** total tokens (+14.5%) and wall time (+2.6x) than a
+plain grep+read agent. The 98.8% / 43–54× claims hold for **big-repo
+chains-of-calls vs grep+read baselines** — that's the scope they were
+measured in. The tool's small-repo value is memory/safety/evidence, not
+token count. Reproduce on any repo:
+
+```bash
+python3 benchmarks/dogfood_bench.py --repo <r> --task '<t>'
+```
+
 ## Where does the token math come from?
 
 [`benchmarks/README.md`](../benchmarks/README.md) — every number has a

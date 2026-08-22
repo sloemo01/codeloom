@@ -356,6 +356,31 @@ the call path, and the impact list. An agent pastes it once and works. This is
 the difference between "where does 'login' appear" (jcodemunch, retrieval-shaped)
 and "what code actually runs when a login happens" (codeloom, task-shaped).
 
+## Dogfood head-to-head (plain vs codeloom)
+
+`benchmarks/dogfood_bench.py` — deterministic, zero-LLM harness measuring the
+**same repo, same task** two ways: Run A = plain grep+read simulation
+(`git ls-files` / `grep -rn` / `sed`), Run B = the codeloom command sequence
+(`map`, `graph`, `task`, `index`, `get-symbol`, `impact`, `verify-edit`,
+`memory-add`/`memory`/`memory-stats`, on a scratch clone so the target repo
+is never touched). Reports calls / tokens-in / tokens-out / total / wall /
+completeness with honest loss rows — if B exceeds A on any metric it says so.
+
+```bash
+python3 benchmarks/dogfood_bench.py --repo <r> --task '<t>' [--expect f1,f2] [--runs N] [--json] [--seed N]
+```
+
+Measured on pallets/flask 2026-08-23 (live extreme dogfood run): **codeloom
+lost on total tokens (+14.5%) and wall (+2.6x)** in terminal-payload counting
+(the CLI returns full payloads, which is the honest cost of terminal
+transport) — but **won on evidence**: impact blast radius, memory/checkpoint
+survival (restore reproduced the exact diff), and task ranking. The harness
+below reproduces the same head-to-head shape on any repo, e.g. fastapi:
+
+```bash
+python3 benchmarks/dogfood_bench.py --repo /tmp/bench-fastapi --task "explain the request lifecycle" --expect request,response,route
+```
+
 ## The honest scope
 
 CodeLoom is a **single-file, zero-dependency replacement for the heavyweight
