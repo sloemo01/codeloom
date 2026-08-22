@@ -62,6 +62,10 @@ the trust surface. Know what each one does:
   machine, never leave it. They're plain text/markdown/JSONL you can read and
   delete at any time. The session log is a log, not a source of truth — it's
   meant to be summarized (`--session-report`) and can be rotated/pruned.
+- **`--index`** — writes `.codeloom-index.json` (JSON-only; no binary cache is
+  ever written or loaded). Repo-supplied index files are treated as untrusted:
+  entries pointing outside the repo root are dropped, and legacy `.bin` files
+  are ignored with a warning rather than unmarshalled.
 
 ## The trust model
 
