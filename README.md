@@ -147,17 +147,22 @@ Zero LLM cost for stage 1. Works on any GitHub repo — copy the workflow file.
 ## Why it's different
 
 Full source-cited matrix: [`docs/COMPETITION.md`](docs/COMPETITION.md).
-Summary against the four competitors (all verified from their repos):
+Summary against the field (verified from their repos, crg measured live
+2026-08-22 — see [`benchmarks/README.md`](benchmarks/README.md) for numbers):
 
-| | **codeloom** | jcodemunch | codegraph | codebase-memory-mcp |
+| | **codeloom** | code-review-graph (30.6k★) | code-context-engine | claude-context |
 |---|---|---|---|---|
-| License | **MIT** | dual-use/paid commercial | MIT | MIT |
-| Install | **one stdlib file** | pip + deps | bundled binary | single binary |
-| MCP surface | **78 + 1 NL router** | 90+ via 6 routers | 1 listed + 7 unlisted | 15 |
-| Languages | **50 / 46 fixture-proven** | 70+ claimed | 20 byte-verified | 158 vendored |
-| Compaction memory | ✅ decision ledger | ❌ | ✅ session state | ❌ |
-| Pattern search | ✅ `$VAR`/`$$$REST` capture | ✅ presets/DSL | ❌ | ❌ |
-| Offline semantics | ✅ zero-dep | opt-in | ❌ | ✅ bundled weights |
+| Install | **one stdlib file** | pip: **78 packages** + daemon + TOML config | pip + ONNX + server | npm |
+| Background process | **none** | `crg-daemon` (16MB RSS, health checks) | `cce serve` + resource governor | — |
+| Compaction memory | ✅ **decision ledger, measured: 2 calls / 777 tok to recover** (97.9% fewer) | ⚠️ markdown Q&A journal, zero compaction mentions | ⚠️ agent-called `record_decision` MCP | memsearch plugin |
+| MCP surface | **78 + 1 NL router** | 30, no router | 22 | many |
+| Semantic search | ✅ zero-dep, offline | ❌ `[embeddings]` extra (~2GB) or cloud key | ❌ ONNX required | ✅ (Zilliz) |
+| Language proof | **46 fixture-proven in CI** | not published | — | — |
+| Setup→answer | **0.105s warm** | 41s pip + 4s build + daemon | after indexing | after indexing |
+
+Measured numbers: symbol retrieval 24–36× fewer tokens than crg; compaction
+recovery **97.9% fewer tokens**; Linux kernel full graph ~91s. Details and
+reproduction commands in [`benchmarks/README.md`](benchmarks/README.md).
 
 Where competitors are ahead, stated plainly: jcodemunch has broader safety
 preflight (edit/delete-safe, SCIP compiler verification); codegraph has 67k★
