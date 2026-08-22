@@ -192,6 +192,7 @@ shape + proof-per-grammar + memory depth — not their moats.
 | [`FEATURES.md`](FEATURES.md) | Strategic feature map |
 | [`SECURITY.md`](SECURITY.md) | Trust model & verification |
 | [`docs/COMPETITION.md`](docs/COMPETITION.md) | Source-cited competitor matrix |
+| [`docs/FAQ.md`](docs/FAQ.md) | "vs LSP/RAG/repomix/code-review-graph" — honest tradeoffs |
 | [`docs/mcp-listing.md`](docs/mcp-listing.md) | MCP marketplace listing copy |
 | [`bench/RESULTS.md`](bench/RESULTS.md) | Replay-bench results (loss rows published) |
 | [`BENCHMARKS.md`](BENCHMARKS.md) | Measured performance numbers |
