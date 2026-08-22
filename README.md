@@ -212,6 +212,12 @@ shape + proof-per-grammar + memory depth — not their moats.
 PRs welcome. Run tests with `python3 tests.py`. Ethos: zero-dependency, fast,
 one file, honest claims.
 
+## Translations
+
+[简体中文](docs/translations/README.zh-CN.md) · [日本語](docs/translations/README.ja.md) · [Español](docs/translations/README.es.md) · [हिन्दी](docs/translations/README.hi.md)
+
+Generated with v0.76 — may lag after upgrades.
+
 ## Agent skill
 
 A ready-to-load skill for using and maintaining codeloom ships at
