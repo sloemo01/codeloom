@@ -450,16 +450,92 @@ decided and where you left off.
      | python3 codeloom-mcp.py
    ```
    Expect `serverInfo` with name `codeloom-mcp`.
-3. Tools exposed: `codeloom_map`, `codeloom_graph`, `codeloom_focus`,
-   `codeloom_calls`, `codeloom_diff`, `codeloom_impact`, `codeloom_task`,
-   `codeloom_plan`, `codeloom_pack`, `codeloom_cross`, `codeloom_search`,
-   `codeloom_usages`, `codeloom_grep`, `codeloom_read`, `codeloom_explain`,
-   `codeloom_similar`, `codeloom_deadcode`, `codeloom_get_symbol`,
-   `codeloom_snippet`, `codeloom_incremental`, `codeloom_verify`,
-   `codeloom_trace`, `codeloom_ask` (single natural-language entry point
-   that routes deterministically — the agent never picks among tools), and
-   (v0.79) `codeloom_memory_add`, `codeloom_remember`, `codeloom_memory_stats`,
-   `codeloom_memory_prune`, `codeloom_query_memory` (82 tools total).
+3. Tools exposed (82 total — full surface below). `codeloom_ask` is the
+   single natural-language entry point that routes deterministically — the
+   agent never picks among tools. The complete registry:
+
+| `codeloom_adr` | Write a structured Architectural Decision Record (context + decision + status) to .codeloom-memory/adr/. Captures the human 'why' behind an architecture choi... |
+| `codeloom_adr_list` | List all saved Architectural Decision Records. Use before writing a new ADR to avoid duplicating an existing decision. |
+| `codeloom_answer` | One-call cited answer to a natural-language code question (repowise get_answer parity): hybrid search -> best match with honest confidence (high/medium/low),... |
+| `codeloom_architecture` | Detect the architectural pattern (MVC / layered / Clean / DDD / Hexagonal / monolith / microservices) from the repo layout, plus the top-level structure. Ori... |
+| `codeloom_ask` | Single natural-language entry point. Ask in plain English and codeloom routes deterministically to the right tool — the agent never has to pick among 82 tool... |
+| `codeloom_blindspot` | Coverage audit: find the files/symbols you have NOT read yet so nothing important is missed before you act. Answers 'read coverage', 'read everything', 'what... |
+| `codeloom_bug_predict` | Bug prediction: files statistically likely to break, scored by churn + coupling + complexity. Priority hotfix/refactor targets. |
+| `codeloom_calls` | Function-level call graph: which functions call which, across the codebase. Only reports calls to functions defined in the repo (builtins/stdlib filtered out... |
+| `codeloom_channels` | Pub-sub / event channel map: EMITS -> LISTENS_ON edges for socket.io, Node EventEmitter, Kafka/RabbitMQ-style pub-sub. Links senders to receivers across files. |
+| `codeloom_check_delete` | Preflight: is it safe to delete this symbol? Returns a terminal GO/STOP verdict — GO only if nothing references the symbol, else STOP with the exact dependen... |
+| `codeloom_check_edit` | Preflight: is it safe to edit this symbol? Returns a terminal GO/CHECK/STOP verdict with the exact callers that will break, so the agent stops looping and kn... |
+| `codeloom_checkpoint` | Snapshot in-progress work (uncommitted git diff + a status note) to a file so it survives a context compaction. Call this before a compaction or at the end o... |
+| `codeloom_checkpoint_restore` | Read the last checkpoint back so the agent can resume in-progress work (uncommitted diff + status note) after a compaction. |
+| `codeloom_churn` | Git intelligence: the most-edited files (by commit count) — an instability signal. Helps decide which files are risky to change. |
+| `codeloom_cognitive_load` | Cognitive-load-aware task decomposition: splits a topic into working-memory-sized steps (intrinsic load), flags noise to skip (extraneous load), and surfaces... |
+| `codeloom_context` | Batch triage card for MULTIPLE symbols in ONE call (repowise get_context parity): per-target definition, same-module signatures, callers count, and governing... |
+| `codeloom_context_diff` | Branch-to-branch architecture-level diff: which modules changed between two refs, not just lines. |
+| `codeloom_cross` | Cross-file call graph: resolve calls to their defining module, so A.main() calling engine.run() (imported from B) yields A.main -> B.engine.run. Deep AST ana... |
+| `codeloom_cross_repo` | Build a combined knowledge graph across multiple repository roots (frontend + backend + SDK + CLI + docs). Returns per-repo modules and cross-repo service-to... |
+| `codeloom_deadcode` | Find functions/classes defined in the codebase but never called. Uses the call graph to detect dead code. |
+| `codeloom_dedup` | Session dedupe: skip files already read this session and return only the new delta — saves tokens across repeated calls. |
+| `codeloom_diff` | Show the structure of only the files changed vs git HEAD. Use when the agent is working on a specific change — tells it what's relevant to the current task, ... |
+| `codeloom_docs` | Generate a README or ARCHITECTURE doc from the repo structure. kind: 'readme' (default) or 'arch'. |
+| `codeloom_embed_search` | Fuzzy semantic symbol search using a zero-dependency subword-hash embedding (fastText n-gram technique, pure-Python). Finds symbols whose identifier is seman... |
+| `codeloom_explain` | Generate a plain-English explanation of a symbol's role using its AST signature + call graph. Template-based, no LLM needed. Returns a summary, what it calls... |
+| `codeloom_explain_topic` | Explain a topic/domain end-to-end: relevant files + call flow, instead of a single symbol. E.g. 'authentication' -> the files and how they connect. |
+| `codeloom_export` | Export a portable, self-contained graph snapshot (symbols + call/import edges + routes + channels) to a single JSON file. Commit it to the repo so teammates ... |
+| `codeloom_files` | Find files by name or glob, e.g. '--files engine' or '--files *.py'. Returns matching paths relative to root. For locating a file you don't know the exact pa... |
+| `codeloom_find` | Natural-language flow discovery: 'find where login starts' / 'show every payment flow'. Returns the domain's entry points + call flow. |
+| `codeloom_focus` | Focus on ONE module: what it depends on (depends_on) and what depends on it (depended_on_by). Answers 'what does this code need?' and 'what breaks if I chang... |
+| `codeloom_framework` | Detect the web/app framework (Next.js, FastAPI, Django, Laravel, Express, etc.) and surface its structure: entry points, routes, models, config, and conventi... |
+| `codeloom_get_symbol` | Token-counted symbol retrieval. By default returns a SUMMARY (signature + docstring + call graph) — the 95%+ token-savings mode. Pass full=true for the compl... |
+| `codeloom_get_working_state` | Return the layered working-state packet: goal, status, key decisions, actions taken, open items/hypotheses, and hot set (already-understood files). Call this... |
+| `codeloom_graph` | Build the Python import dependency graph of a codebase: which modules import which. Use to understand 'what touches what'. |
+| `codeloom_graph_html` | Write a local zoomable HTML graph view of imports/calls to codeloom-graph.html. Self-contained, no daemon — open in a browser. |
+| `codeloom_grep` | Search file contents for a snippet (the 'find the exact code' capability). Returns ranked matches with context lines. Use to find where a specific code patte... |
+| `codeloom_grep_symbolic` | Code-only grep: matches real CODE, excluding comments and string literals (the usual false-positive sources). Results ranked by symbol relevance — hits insid... |
+| `codeloom_health` | Code health screen (repowise get_health parity, speed-first): deterministic detectors — long functions, too-many-params, dead symbols, duplicate names — scor... |
+| `codeloom_heatmap` | Dependency heatmap: god/hub classes (widest blast radius), circular imports, and possibly-unused modules. Refactor-risk signals. |
+| `codeloom_hybrid_search` | Hybrid search: BM25 lexical score + structural signals (symbol kind, size) + git churn scored together. Ranks symbols by combined relevance, better than bare... |
+| `codeloom_impact` | Predict the blast radius of changing a module: which modules depend on it (direct + transitive) and what it depends on. Answers 'what breaks if I change this... |
+| `codeloom_incremental` | Show which files changed since the last run, using a hash-based cache (no daemon). Use for repeated runs on large repos — only re-parses changed files. |
+| `codeloom_langs` | List supported languages/extensions: the broad 130+ regex/C structural-extraction set plus the opt-in tree-sitter precision set. |
+| `codeloom_list_open_items` | List the open items/hypotheses recorded in the current session. |
+| `codeloom_loom` | The intent engine. Given a task in plain English, return LAYERED context in one call: overview -> important files (edit-relevance) -> relevant code (pack) ->... |
+| `codeloom_lsp` | LSP bridge status: detect installed language servers (pyright, clangd, rust-analyzer, gopls...) for optional semantic enrichment. codeloom stays zero-dep — L... |
+| `codeloom_lsp_symbol` | Resolve a symbol's real definition via an installed LSP server (pyright/clangd/rust-analyzer/gopls/ts-server) — the cross-file edge static parsing can miss. ... |
+| `codeloom_map` | Produce a compact 'table of contents' of a codebase: folder tree, per-module one-liners (classes/functions), and entry points. Use this FIRST to build a ment... |
+| `codeloom_mark_seen` | Mark files or symbols as already deeply understood so they appear in the hot set of future working-state packets. Use after reading a file/symbol so a post-c... |
+| `codeloom_memory_add` | Memory OS add: write a typed memory entry (decision, bug, lesson, constraint, architecture, api, question, todo, warning) linked to symbols. Entries feed cod... |
+| `codeloom_memory_prune` | Memory OS growth bounds: report archive entries older than N days (dry-run; NEVER auto-deletes). Use with 'delete': true to actually prune the reported entri... |
+| `codeloom_memory_stats` | Memory OS stats: report the repository's memory health — entry counts by type, growth bounds, archive size. Call before pruning or to understand how much mem... |
+| `codeloom_pack` | Single-shot context packing: emit ONE compact file for a task with reading order + impact analysis + symbol index, all pre-computed. An agent pastes this onc... |
+| `codeloom_pattern` | Structural AST pattern search (ast-grep-style, zero-dep): find every code site matching a code shape. $VAR captures one node, $$$REST captures lists. Example... |
+| `codeloom_plan` | Emit a prioritized 'read these files, in this order' plan for a task. The agent-native format: tells the agent exactly what to read to understand a task befo... |
+| `codeloom_plugin_sdk` | Show the plugin SDK surface: how to write a framework-aware extraction hook that extends codeloom. |
+| `codeloom_precision` | Graph precision report for a symbol: call edges annotated with confidence (definite vs maybe) plus class relationships and dependents. Helps agents trust whi... |
+| `codeloom_query` | Fast structural query against the persisted graph (build with --index first): callers X, callees X, dependents X, hubs, routes, symbol X. One graph query rep... |
+| `codeloom_query_memory` | Search long-term memory (decisions, patterns, lessons, conventions, ADRs) for what the agent already knows about a topic. Use for 'what do we already know ab... |
+| `codeloom_read` | Extract the exact source of a function, class, or method. Python uses AST; other languages use tree-sitter (when available) or brace-matching. Token-efficien... |
+| `codeloom_record_decision` | Record an accepted or rejected decision with a reason into the session journal (and persistent memory). Prevents re-trying failed ideas after a compaction. U... |
+| `codeloom_record_hypothesis` | Record an open hypothesis about the codebase so it survives compaction and can be verified later. Shows up in the working-state packet's open items. |
+| `codeloom_record_lesson` | Record a lesson/trap: something tried and why it failed, so a wiped agent never re-explores the same dead end. Use when you abandon an approach after trying it. |
+| `codeloom_refactor` | Refactor engine for a symbol: files touched, dependencies, risk assessment (preflight), and suggested safe order. |
+| `codeloom_remember` | Memory OS retrieval: fetch everything the repo remembers about a symbol — linked memory notes, decisions, lessons, and the memory graph around it. Ask 'what ... |
+| `codeloom_rename` | What a rename touches: every definition, every file containing the name, every dependent module/edge. Run before renaming a symbol to know the blast radius a... |
+| `codeloom_resume` | Emit a compact structural snapshot (entry points + modules + hub modules + top call sites) to restore an agent's context after a compaction. Paste the output... |
+| `codeloom_risk` | Pre-merge change-risk report for a commit or range (clean-room, zero LLM): scores diff size, file spread, health findings in touched files, high-fan-in symbo... |
+| `codeloom_routes` | Extract HTTP routes: METHOD path -> handler across frameworks (FastAPI, Flask, Express, Django, Next.js, Starlette). Links URL patterns to the handler that s... |
+| `codeloom_search` | Search the symbol index for a function, class, or method. Returns where each symbol is defined (module + line) with a context snippet. Works across Python an... |
+| `codeloom_seen` | Session memory: report which files and symbols were already read this session, so the agent can skip re-reading them and save tokens. Reads the local session... |
+| `codeloom_session_report` | Summarize the local session log: total calls, tokens, and estimated input cost, broken down by command. Local observability — no network, no daemon. Run code... |
+| `codeloom_similar` | Find functions/classes with a structurally similar signature (same param count) for refactoring. Returns candidates across the codebase. |
+| `codeloom_snippet` | Extract a byte-range snippet from a file. Returns the text + token estimate + byte count. Use for precise, token-efficient retrieval. |
+| `codeloom_task` | Rank modules relevant to a task description, by token overlap + graph centrality. Use to find which files matter for a specific task before reading the whole... |
+| `codeloom_timeline` | Repository timeline: replay architecture evolution via git log — who changed what, when. |
+| `codeloom_trace` | Run a command (e.g. a test script) under sys.settrace and record the ACTUAL runtime call edges. Captures dynamic imports and monkeypatching that static analy... |
+| `codeloom_usages` | Find where a symbol is USED (not just defined) across the codebase. Answers 'where is this function/class called?' with context snippets. |
+| `codeloom_verify` | Print the SHA-256 of a file so users can verify a downloaded copy of codeloom is official and not tampered with. |
+| `codeloom_verify_edit` | Edit-safety preflight: given a target file (or repo root), report whether an edit there is safe — dependents, call sites, blast radius — with a GO/STOP verdi... |
+| `codeloom_watch` | Incremental daemon-less refresh: re-index only files changed since the last index, keeping the lazy per-symbol store current. Call before queries to guarante... |
+| `codeloom_why` | Decision lookup with evidence stamps (repowise get_why parity): searches recorded memory/ADRs and stamps every matching line [exact]/[fuzzy]/[unverified] so ... |
 
 ### 3. Memory OS workflow (v0.79)
 The typed-memory layer (`memory.jsonl`) turns the markdown memory files into
