@@ -17,38 +17,56 @@ sys.path.insert(0, TESTS_DIR)
 import codeloom  # noqa: E402
 
 
-def force_rmtree(path, attempts=5, delay=0.2):
+def force_rmtree(path, attempts=12, delay=0.5):
     """Remove a directory tree, retrying transient failures (Windows).
 
     git leaves short-lived file handles/locks on .git/objects on Windows,
-    so plain shutil.rmtree can raise PermissionError [WinError 5]. Retry a
-    few times and chmod read-only entries (git marks .git objects
-    read-only) before giving up.
+    so plain shutil.rmtree can raise PermissionError [WinError 5]. Retry
+    up to `attempts` times with a growing backoff (0.5s -> 1.0s, ~9s worst
+    case — enough for a lingering git.exe handle to close), and chmod
+    read-only entries (git marks .git objects read-only) before giving up.
+    Missing paths are a no-op (safe replacement for ignore_errors=True).
+
+    These are throwaway temp dirs: cleanup is best-effort. After the
+    retry loop exhausts, a final ignore_errors=True rmtree guarantees a
+    lingering Windows file lock can NEVER fail a test.
     """
     import time
+    if not path or not os.path.exists(path):
+        return
     for i in range(attempts):
         try:
             shutil.rmtree(path)
             return
         except OSError:
             if i == attempts - 1:
-                raise
-            time.sleep(delay)
-    # Last resort: strip read-only bits, then retry the same loop.
+                break
+            time.sleep(min(delay + i * 0.05, 1.0))
+    # Last resort: strip read-only bits, then retry each failed unlink /
+    # rmdir after a short sleep (the lock is usually a lingering git.exe
+    # handle that closes within a second), then repeat the whole loop.
     def _force_remove(func, p, _exc):
         try:
             os.chmod(p, 0o700)
-            func(p)
         except OSError:
             pass
+        for _ in range(2):
+            try:
+                func(p)
+                return
+            except OSError:
+                time.sleep(0.3)
     for i in range(attempts):
         try:
             shutil.rmtree(path, onerror=_force_remove)
             return
         except OSError:
             if i == attempts - 1:
-                raise
-            time.sleep(delay)
+                break
+            time.sleep(min(delay + i * 0.05, 1.0))
+    # Absolute final fallback: whatever is still locked stays behind, but
+    # the test must never fail because cleanup couldn't delete a temp dir.
+    shutil.rmtree(path, ignore_errors=True)
 
 
 def make_repo(repo):
@@ -95,7 +113,7 @@ class TestCodeLoom(unittest.TestCase):
         make_repo(self.repo)
 
     def tearDown(self):
-        shutil.rmtree(self.tmp)
+        force_rmtree(self.tmp)
 
     def test_file_count_and_gitignore(self):
         m = codeloom.build_map(self.repo, True, 5000)
@@ -178,7 +196,7 @@ class TestCodeLoom(unittest.TestCase):
             self.assertRegex(r.stdout, r"engine:\d+")
             self.assertIn("class Engine", r.stdout)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_cli_pack_dispatch(self):
         # --pack emits a single-shot task brief with a ranked reading order
@@ -192,7 +210,7 @@ class TestCodeLoom(unittest.TestCase):
             self.assertIn("engine.py", r.stdout)
             self.assertIn("## 2. THE RELEVANT CODE", r.stdout)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_cli_decide_query_memory_roundtrip(self):
         # --decide writes to .codeloom-memory in the CWD; --query-memory in
@@ -211,7 +229,7 @@ class TestCodeLoom(unittest.TestCase):
             self.assertIn('--query-memory "retry"', r2.stdout)
             self.assertIn("Use retry everywhere", r2.stdout)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_cli_health_dispatch(self):
         # --health prints a score line (avg X/10 across N files)
@@ -224,7 +242,7 @@ class TestCodeLoom(unittest.TestCase):
             self.assertRegex(r.stdout, r"avg \d+(\.\d+)?/10")
             self.assertIn("files", r.stdout)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_cli_risk_dispatch(self):
         # --risk on a git commit range exits 0 and prints a score line
@@ -234,12 +252,12 @@ class TestCodeLoom(unittest.TestCase):
             for c in (["init", "-q"],
                       ["config", "user.email", "t@t"],
                       ["config", "user.name", "t"]):
-                g = subprocess.run(["git"] + c, cwd=repo,
+                g = subprocess.run(["git"] + c, cwd=repo, timeout=30,
                                    capture_output=True, text=True)
                 self.assertEqual(g.returncode, 0, g.stderr)
-            subprocess.run(["git", "add", "-A"], cwd=repo,
+            subprocess.run(["git", "add", "-A"], cwd=repo, timeout=30,
                            capture_output=True, text=True)
-            subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo,
+            subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, timeout=30,
                            capture_output=True, text=True)
             with open(os.path.join(repo, "engine.py"), "w") as f:
                 f.write("from utils.retry import retry\n\n"
@@ -249,9 +267,9 @@ class TestCodeLoom(unittest.TestCase):
                         "def main():\n"
                         "    eng = Engine()\n"
                         "    return eng.run() + 1\n")
-            subprocess.run(["git", "add", "-A"], cwd=repo,
+            subprocess.run(["git", "add", "-A"], cwd=repo, timeout=30,
                            capture_output=True, text=True)
-            subprocess.run(["git", "commit", "-q", "-m", "tweak"], cwd=repo,
+            subprocess.run(["git", "commit", "-q", "-m", "tweak"], cwd=repo, timeout=30,
                            capture_output=True, text=True)
             r, _ = self._run_cli("--risk", "HEAD~1..HEAD", repo)
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -315,7 +333,7 @@ class TestCodeLoom(unittest.TestCase):
             self.assertIn("greet", calls.get("app", {}).get("main", set()))
             self.assertIn("helper", calls.get("main", {}).get("main", set()))
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_install_agents(self):
         # creates AGENTS.md
@@ -431,7 +449,7 @@ class TestCodeLoom(unittest.TestCase):
             graph = codeloom.build_graph_multi(files, tmp)
             self.assertIn("util", graph.get("app", set()))
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_verify_sha256(self):
         path = os.path.join(self.repo, "src", "cli.py")
@@ -474,7 +492,7 @@ class TestCodeLoom(unittest.TestCase):
             if codeloom._TS_AVAILABLE:
                 self.assertIn("helper", calls.get("util", {}).get("main", set()))
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_embedding_backend_graceful(self):
         # without an embedding backend, task_relevance should still work
@@ -546,7 +564,7 @@ class TestCodeLoom(unittest.TestCase):
             self.assertIsNotNone(r2)
             self.assertIn("public int add", r2["source"])
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_explain_symbol(self):
         files = []
@@ -635,7 +653,7 @@ class TestCodeLoom(unittest.TestCase):
             self.assertIn(os.path.join("sub", "keep.py"), rels)
             self.assertNotIn(os.path.join("sub", "secret.txt"), rels)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_gitignore_cache_invalidation(self):
         # changing .gitignore should invalidate the cache (all files changed)
@@ -660,7 +678,7 @@ class TestCodeLoom(unittest.TestCase):
             changed3 = codeloom.changed_files(files, cache, tmp)
             self.assertEqual(len(changed3), 1)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_workspace_roots(self):
         # a pyproject.toml with src/ should be detected as a workspace root
@@ -672,7 +690,7 @@ class TestCodeLoom(unittest.TestCase):
             roots = codeloom._workspace_roots(tmp)
             self.assertIn("packages.foo.src", roots)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_persistent_index(self):
         # build + save a persistent index, then load it
@@ -691,7 +709,7 @@ class TestCodeLoom(unittest.TestCase):
             status = codeloom.render_index_status(tmp)
             self.assertIn("fresh", status)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_summary_retrieval(self):
         # summary-first retrieval should be much smaller than full source
@@ -712,7 +730,7 @@ class TestCodeLoom(unittest.TestCase):
             # summary should be much smaller than full source for a large symbol
             self.assertLess(len(summary), len(full) // 10)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_scanner_skips_strings_comments(self):
         # a call inside a string or comment should NOT be detected
@@ -732,7 +750,7 @@ class TestCodeLoom(unittest.TestCase):
             # the string/comment references should not create extra edges
             self.assertEqual(len(calls.get("app", {}).get("main", set())), 1)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_pack(self):
         # --pack emits a code-embedded task brief: reading order + embedded code + impact
@@ -770,7 +788,7 @@ class TestCodeLoom(unittest.TestCase):
             mem = codeloom.memory_read(td)
             self.assertIn("session tokens", mem)
         finally:
-            shutil.rmtree(td, ignore_errors=True)
+            force_rmtree(td)
 
     def test_hybrid_search(self):
         # hybrid search ranks the lexical+structural match first
@@ -795,8 +813,8 @@ class TestCodeLoom(unittest.TestCase):
             # two repos should be mapped
             self.assertGreaterEqual(len(cr["repos"]), 1)
         finally:
-            shutil.rmtree(td, ignore_errors=True)
-            shutil.rmtree(td2, ignore_errors=True)
+            force_rmtree(td)
+            force_rmtree(td2)
 
     def test_install_agent_config(self):
         # install-agent emits a valid MCP config snippet for an agent
@@ -849,7 +867,7 @@ class TestCodeLoom(unittest.TestCase):
             self.assertIsNotNone(fresh)
             self.assertTrue(codeloom.index_is_fresh(tmp, fresh))
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_rename_reports_blast_radius(self):
         # rename should list the definition, touched files, and dependent modules
@@ -867,7 +885,7 @@ class TestCodeLoom(unittest.TestCase):
             # b.py depends on pkg.a
             self.assertIn("pkg.a", out.split("depending")[1] if "depending" in out else out)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_grep_searches_docs(self):
         # --grep must search markdown/docs, not just code files
@@ -882,7 +900,7 @@ class TestCodeLoom(unittest.TestCase):
             self.assertIn("48 tools", out)
             self.assertIn("README.md", out)  # doc file now searched
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_files_finds_by_name(self):
         tmp = tempfile.mkdtemp()
@@ -897,7 +915,7 @@ class TestCodeLoom(unittest.TestCase):
             out2 = codeloom.render_files(files, tmp, "*.py")
             self.assertIn("engine.py", out2)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_routes_extracts_http(self):
         # extract_routes finds FastAPI decorators + Express chains
@@ -911,7 +929,7 @@ class TestCodeLoom(unittest.TestCase):
             self.assertTrue(any(r["path"] == "/" and r["handler"] == "root" for r in routes))
             self.assertTrue(any(r["path"] == "/items" and r["handler"] == "create" for r in routes))
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_channels_extraction(self):
         # channel detection maps emit -> listen
@@ -925,7 +943,7 @@ class TestCodeLoom(unittest.TestCase):
             self.assertIn("user:created", c["emit"])
             self.assertIn("user:created", c["listen"])
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_export_snapshot(self):
         tmp = tempfile.mkdtemp()
@@ -936,7 +954,7 @@ class TestCodeLoom(unittest.TestCase):
             self.assertIn("Exported", out)
             self.assertTrue(os.path.isfile(os.path.join(tmp, "snap.json")))
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_checkpoint_writes_and_restores(self):
         # --checkpoint writes a file; --checkpoint-restore reads it back
@@ -951,7 +969,7 @@ class TestCodeLoom(unittest.TestCase):
             restored = codeloom.render_checkpoint_restore(tmp)
             self.assertIn("working on helper", restored)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_adr_writes_and_lists(self):
         # --adr writes a structured record; --adr-list lists it
@@ -963,7 +981,7 @@ class TestCodeLoom(unittest.TestCase):
             listing = codeloom.render_adr_list(tmp)
             self.assertIn("ADR-001", listing)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_query_runs_structural_queries(self):
         # --query answers structural questions from the persisted graph
@@ -978,7 +996,7 @@ class TestCodeLoom(unittest.TestCase):
             out2 = codeloom.render_query(tmp, "callees main")
             self.assertIn("helper", out2)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_working_memory_journal(self):
         # decide/reject/hypothesis/mark_seen build a layered working-state packet
@@ -998,7 +1016,7 @@ class TestCodeLoom(unittest.TestCase):
             opens = codeloom.list_open_items(tmp)
             self.assertIn("pool not shared", opens)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_long_term_memory_lesson_and_query(self):
         # --lesson records a trap; --query-memory finds it across memory files
@@ -1011,7 +1029,7 @@ class TestCodeLoom(unittest.TestCase):
             q2 = codeloom.memory_query(tmp, "bucket")
             self.assertIn("failed because", q2)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_cognitive_load_decomposes(self):
         # --cognitive-load emits intrinsic/extraneous/germane sections
@@ -1026,7 +1044,7 @@ class TestCodeLoom(unittest.TestCase):
             self.assertIn("Extraneous load", out)
             self.assertIn("Germane load", out)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_subword_embed_similarity(self):
         # subword-hash embedding gives fuzzy semantic similarity (typos)
@@ -1064,7 +1082,7 @@ class TestCodeLoom(unittest.TestCase):
             self.assertIn("framework:", out)
             self.assertIn("Express", out)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_session_telemetry(self):
         # log_session appends; render_session_report summarizes
@@ -1078,7 +1096,7 @@ class TestCodeLoom(unittest.TestCase):
             self.assertIn("--task x .", report)
             self.assertIn("cost", report)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_versions_in_sync(self):
         # Version-drift guard: VERSION in codeloom.py, SERVER_VERSION in
@@ -1172,7 +1190,7 @@ class TestCodeLoom(unittest.TestCase):
             meta2 = codeloom.meta_envelope(tmp)
             self.assertTrue(meta2["stale_warning"])
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_mcp_responses_carry_meta_envelope(self):
         # every successful tools/call response carries _meta (repowise parity)
@@ -1196,7 +1214,7 @@ class TestCodeLoom(unittest.TestCase):
             self.assertIn("_meta", resp["result"])
             self.assertIn("stale_warning", resp["result"]["_meta"])
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_context_card_batches_targets(self):
         # one call, multiple targets: definitions + callers + ADR titles
@@ -1219,7 +1237,7 @@ class TestCodeLoom(unittest.TestCase):
             out2 = codeloom.render_context_card(files, tmp, ["nope_xyz"])
             self.assertIn("not found", out2)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_answer_includes_confidence_and_citation(self):
         tmp = tempfile.mkdtemp()
@@ -1236,7 +1254,7 @@ class TestCodeLoom(unittest.TestCase):
             out2 = codeloom.render_answer(files, tmp, "zzzqqqxyzzy")
             self.assertIn("confidence: low", out2)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_why_stamps_evidence_confidence(self):
         tmp = tempfile.mkdtemp()
@@ -1251,7 +1269,7 @@ class TestCodeLoom(unittest.TestCase):
             out2 = codeloom.render_why(files, tmp, "unrelated gibberish topic")
             self.assertIn("No recorded decisions/memory match.", out2)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_tree_sitter_grammar_parity_fixtures(self):
         # codegraph-style discipline: no grammar ships without proving its
@@ -1327,7 +1345,7 @@ class TestCodeLoom(unittest.TestCase):
             # clean file produces NO findings (absent from the findings map)
             self.assertNotIn(clean, res["files"])
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_change_risk_scores_and_bands(self):
         # clean-room change-risk: bigger diff + spread + hot file => higher
@@ -1335,7 +1353,7 @@ class TestCodeLoom(unittest.TestCase):
         tmp = tempfile.mkdtemp()
         try:
             def git(*a):
-                return subprocess.run(["git"] + list(a), cwd=tmp,
+                return subprocess.run(["git"] + list(a), cwd=tmp, timeout=30,
                                       capture_output=True, text=True)
             git("init", "-q")
             git("config", "user.email", "t@t")
@@ -1393,7 +1411,7 @@ class TestCodeLoom(unittest.TestCase):
             out3 = codeloom.render_pattern_search(files, tmp, "nonexistent_fn($Q)")
             self.assertIn("No structural matches", out3)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
     def test_grep_symbolic_excludes_comments_and_strings(self):
         # plain --grep finds matches everywhere; --grep-symbolic keeps only
         # real-code hits and tags each with its enclosing symbol
@@ -1423,7 +1441,7 @@ class TestCodeLoom(unittest.TestCase):
             self.assertEqual(res[0]["symbol"], "handler")
             self.assertEqual(res[0]["line"], 4)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
     def test_doc_sidecars_extract_and_search(self):
         # docx/xlsx/pptx/epub/odt/rtf are extracted via stdlib zip+xml and
@@ -1519,7 +1537,7 @@ class TestCodeLoom(unittest.TestCase):
             s2 = codeloom.ensure_doc_sidecar(docx)
             self.assertIsNotNone(s2)
         finally:
-            shutil.rmtree(tmp)
+            force_rmtree(tmp)
 
 
 class TestVerifyEdit(unittest.TestCase):
@@ -1537,14 +1555,14 @@ class TestVerifyEdit(unittest.TestCase):
                 f.write(content)
         for c in (["init", "-q"], ["config", "user.email", "t@t"],
                   ["config", "user.name", "t"]):
-            subprocess.run(["git"] + c, cwd=repo, capture_output=True, text=True)
-        subprocess.run(["git", "add", "-A"], cwd=repo, capture_output=True, text=True)
-        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo,
+            subprocess.run(["git"] + c, cwd=repo, timeout=30, capture_output=True, text=True)
+        subprocess.run(["git", "add", "-A"], cwd=repo, timeout=30, capture_output=True, text=True)
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, timeout=30,
                        capture_output=True, text=True)
         return repo
 
     def _git(self, repo, *args):
-        return subprocess.run(["git"] + list(args), cwd=repo,
+        return subprocess.run(["git"] + list(args), cwd=repo, timeout=30,
                               capture_output=True, text=True)
 
     def _run_verify(self, repo, *extra):
