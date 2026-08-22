@@ -34,9 +34,9 @@ I kept hitting this, so I built codeloom: one file, zero dependencies, no daemon
 - **Graph-linked memory retrieval (v0.79).** Memory objects are typed, stored in `memory.jsonl`, and linked to the call graph — `--memory <symbol>` returns what the graph knows about that symbol, not an embedding-search hope. Extraction is deterministic (`scripts/memory_extract.py` mines git history), `--memory-stats` and the `memory_eval` benchmark ship with it, and none of it runs an LLM.
 
 - **Compaction recovery: 2 calls / ~985 tokens vs 33 calls / ~21.6k tokens.** After a compaction, `--resume` restores both the structural map and the decision ledger. Nobody else publishes this number — the 30k★ field leader has zero mentions of compaction in its README. ([bench](https://github.com/sloemo01/codeloom/blob/main/benchmarks/README.md))
-- **Symbol retrieval: 24–36× fewer tokens than code-review-graph** on the same fastapi symbols, same tokenizer (13–20 vs 428–485). Measured live against their MCP server.
+- **Symbol retrieval: 43–54× fewer tokens than code-review-graph** on the same fastapi symbols, same tokenizer (9–10 vs 428–485). Measured live against their MCP server.
 - **Setup-to-first-answer: 0.13s warm** (after `--index`). Theirs: pip install (75 packages) + graph build (42MB) + daemon + an embeddings extra (~2GB) for semantic search. Ours: copy one stdlib file.
-- **Sealed retrieval run (no LLM):** 10 calls / 731 tokens vs bare grep-and-read 29 calls / 6,602 tokens, same hit-rate or better.
+- **Sealed retrieval run (no LLM):** 10 calls / 731 tokens vs bare grep-and-read 29 calls / ~5.6–6.7k tokens (bare hit-rate run-variant 1–3/10; codeloom's 4/10 deterministic).
 
 **The one thing that matters: `--pack` is a code-embedded task brief, not a ranked list.**
 
@@ -44,12 +44,12 @@ I kept hitting this, so I built codeloom: one file, zero dependencies, no daemon
 codeloom --pack "fix the login bug" .
 ```
 
-returns a self-contained, ~1.6k-token brief with the **actual `login()` source embedded** (byte-precise, capped ~40 lines), the call path, the impact list, and what's safe to touch. An agent pastes it once and works — **zero retrieval calls on the core path**. That's the difference between "where does 'login' appear" (the search tools) and "what code actually runs when a login happens" (codeloom).
+returns a self-contained, ~1.5k-token brief with the **actual `login()` source embedded** (byte-precise, capped ~40 lines), the call path, the impact list, and what's safe to touch. An agent pastes it once and works — **zero retrieval calls on the core path**. That's the difference between "where does 'login' appear" (the search tools) and "what code actually runs when a login happens" (codeloom).
 
 What it does:
-- **Code-embedded task brief** — `--pack` embeds the real code, not names. Measured on fastapi: `fix the login bug` → ~1,655 tokens, 10 code blocks embedded, only oversized symbols point to `--full`.
+- **Code-embedded task brief** — `--pack` embeds the real code, not names. Measured on fastapi: `fix the login bug` → ~1,541 tokens, 10 code blocks embedded, only oversized symbols point to `--full`.
 - **Edit-relevance ranking** — `--task`/`--plan`/`--pack` rank by anchor → call-path walk, not keyword overlap. `session.py` ranks above `constants.py` for "fix the login bug" because it's on the login call path.
-- **99%+ token savings** — `--get-symbol` is summary-first by default (signature + docstring + call graph, not full source). Measured on browser-use: `Agent` (huge class) 3,689→10 tokens (99.7%), `click` 6,954→16 (99.8%). `--full` opt-in for the implementation.
+- **99%+ token savings** — `--get-symbol` is summary-first by default (signature + docstring + call graph, not full source). Measured on fastapi: `Agent` 3,997→30 tokens (99.2%), `click` 3,997→30 (99.2%) — and **98.8% overall** across the 15 task-runs on express/fastapi/gin (same repos and tokenizer as jcodemunch's own benchmark). `--full` opt-in for the implementation.
 - **Zero-install, zero-telemetry, offline** — one stdlib file, no `pip install`, no model downloads, no license validation, no telemetry that phones home. The heavyweight tools can't say that.
 - **Git-diffable** — `codeloom --write MAP.md` produces a reviewable text artifact you commit and diff in PRs. jcodemunch's index is a binary blob.
 - **CI action** — `codeloom --install-agents .` writes AGENTS.md + a GitHub Action that runs `--pack` on every PR and posts the brief as a comment. One line to add.
@@ -82,9 +82,9 @@ So I built codeloom: a map of your repo for agents. One file, zero deps, no daem
 
 **4/7** The pitch in one line: the search tools answer "where is this symbol?" codeloom answers "what code actually runs for this task?" — and embeds it.
 
-`codeloom --pack "fix the login bug"` returns a ~1.6k-token brief with the actual `login()` source embedded, the call path, the impact list, and what's safe to touch. An agent pastes it once and works — zero retrieval on the core path.
+`codeloom --pack "fix the login bug"` returns a ~1.5k-token brief with the actual `login()` source embedded, the call path, the impact list, and what's safe to touch. An agent pastes it once and works — zero retrieval on the core path.
 
-**5/7** Measured head-to-head vs code-review-graph (same repo, same symbols, same tokenizer): 13–20 tokens vs 428–485. Setup: one stdlib file vs 75 pip packages + a daemon. Semantic search: zero-dep offline vs a ~2GB embeddings extra.
+**5/7** Measured head-to-head vs code-review-graph (same repo, same symbols, same tokenizer): 9–10 tokens vs 428–485. Setup: one stdlib file vs 75 pip packages + a daemon. Semantic search: zero-dep offline vs a ~2GB embeddings extra.
 
 **6/7** Zero-install, zero-telemetry, offline — one stdlib file, no pip, no model downloads, no license checks, no telemetry that phones home. The heavyweight tools can't say that.
 
@@ -100,7 +100,7 @@ So I built codeloom: a map of your repo for agents. One file, zero deps, no daem
 
 **2/7** The pitch in one line: the search tools answer "where is this symbol?" codeloom answers "what code actually runs for this task?" — and embeds it.
 
-`codeloom --pack "fix the login bug"` returns a ~1.6k-token brief with the actual `login()` source embedded, the call path, the impact list, and what's safe to touch. An agent pastes it once and works — zero retrieval on the core path.
+`codeloom --pack "fix the login bug"` returns a ~1.5k-token brief with the actual `login()` source embedded, the call path, the impact list, and what's safe to touch. An agent pastes it once and works — zero retrieval on the core path.
 
 **3/7** Your agent forgets nothing the graph can link. v0.79 is a Memory OS: typed memory objects in `memory.jsonl` linked to the call graph — `--memory <symbol>` returns what the graph knows about X, not an embedding-search hope. Deterministic extraction from git history, zero LLM.
 
@@ -135,7 +135,7 @@ I built codeloom to fix that. One stdlib file, zero deps, no daemon, 100% local.
 codeloom --pack "fix the login bug" .
 ```
 
-returns a self-contained ~1.6k-token brief with the **actual `login()` source embedded** (byte-precise, capped ~40 lines), the call path, the impact list, and what's safe to touch. An agent pastes it once and works — zero retrieval calls on the core path.
+returns a self-contained ~1.5k-token brief with the **actual `login()` source embedded** (byte-precise, capped ~40 lines), the call path, the impact list, and what's safe to touch. An agent pastes it once and works — zero retrieval calls on the core path.
 
 The ranking is **edit-relevance**, not keyword overlap: it anchors the task ("login"), walks the call graph both directions, and ranks the execution path. `session.py` ranks above `constants.py` for "fix the login bug" because it's on the login call path — not because it has more word matches.
 

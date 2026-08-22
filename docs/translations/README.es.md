@@ -93,6 +93,10 @@ codeloom --resume                                 # restore after compaction
 También: `--remember`, `--seen`, `--working-state`, `--lessons`, `--supersede`,
 `--adr`, `--query-memory`.
 
+## Memory OS — el grafo recuerda por ti
+
+En **v0.79**, cada memoria es un registro **tipado** en `.codeloom-memory/memory.jsonl` (tipo, importancia, confianza, símbolos afectados) con recuperación **enlazada al grafo**: `--memory <símbolo>` devuelve las entradas que mencionan el símbolo *más* las adjuntas a sus vecinos en el grafo, clasificadas por importancia. Es la diferencia entre un diario y una memoria cableada a la forma del código.
+
 ### Inteligencia estructural
 
 | Comando | Resultado |
@@ -136,6 +140,8 @@ O conecta automáticamente cualquiera de los 17 agentes:
 determinista — sin errores de selección de herramienta. Listado completo:
 [`docs/mcp-listing.md`](docs/mcp-listing.md).
 
+La superficie MCP de v0.79 añade el **trío de Memory OS**: `codeloom_memory_add` (memorias tipadas con importancia), `codeloom_remember` (recuperación enlazada al grafo) y `codeloom_memory_stats` (informe de distribución), enrutados desde `codeloom_ask` vía las palabras clave memory/remember/stats.
+
 ## Bot de revisión de PR
 
 `.github/workflows/pr-bot.yml` convierte cada pull request en:
@@ -166,7 +172,7 @@ para los números):
 
 | | **codeloom** | code-review-graph (30.6k★) | code-context-engine | claude-context |
 |---|---|---|---|---|
-| Instalación | **un archivo stdlib** | pip: **78 paquetes** + daemon + configuración TOML | pip + ONNX + server | npm |
+| Instalación | **un archivo stdlib** | pip: **75 paquetes** + daemon + configuración TOML | pip + ONNX + server | npm |
 | Proceso en segundo plano | **ninguno** | `crg-daemon` (16MB RSS, comprobaciones de salud) | `cce serve` + gobernador de recursos | — |
 | Memoria de compactación | ✅ **registro de decisiones, medido: 2 llamadas / ~985 tok para recuperar** (95.4% menos) | ⚠️ diario Q&A en markdown, cero menciones de compactación | ⚠️ MCP `record_decision` invocado por el agente | plugin memsearch |
 | Superficie MCP | **82 + 1 router NL** | 30, sin router | 22 | muchas |

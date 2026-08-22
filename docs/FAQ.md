@@ -73,9 +73,9 @@ READMEs. We measured them live on the same repo. Where we win:
 - **Zero install.** One stdlib file vs pip (75 packages) + graph build +
   daemon (`crg-daemon` with health checks + TOML config) + an
   embeddings extra (~2GB) for semantic search. Setup→first answer:
-  0.13s warm for us, 41s+pip+build for them.
-- **Symbol retrieval: 24–36× fewer tokens** on the same fastapi symbols
-  (13–20 vs 428–485, measured).
+  0.13s warm for us, 8.6s pip + 4s build for them.
+- **Symbol retrieval: 43–54× fewer tokens** on the same fastapi symbols
+  (9–10 vs 428–485, measured).
 
 Where they lead, stated plainly: community scale, an eval runner, a
 multi-repo registry, incremental rebuilds, translated docs. We're not
@@ -99,16 +99,16 @@ re-read.
 
 ## Does memory keep stacking forever?
 
-No — memory is bounded by design (landing in v0.78). Each ledger file caps
+No — memory is bounded by design (shipped in v0.78). Each ledger file caps
 at **200KB**, then rotates **losslessly and deterministically** to
 `.codeloom-memory/archive/`: the rotation is byte-exact, nothing is dropped
 or summarized away, and the same content is always archived the same way,
 so restore is reproducible.
 
 codeloom **never auto-deletes** your memory. The only shrink path is
-explicit and user-initiated: `--memory-prune` with `--dry-run` first shows
-exactly what would be removed, and nothing is deleted until you apply it.
-Unbounded growth, silent deletion, and opaque summarization are all off the
+explicit and user-initiated: `--memory-prune` reports (dry-run by default)
+exactly what would be removed, and nothing is deleted until you add
+`--delete`. Unbounded growth, silent deletion, and opaque summarization are all off the
 table by design.
 
 ## Is memory just markdown?
@@ -118,16 +118,17 @@ mirror**, not a wall of text. Every memory is a structured object in
 `.codeloom-memory/memory.jsonl`:
 
 ```json
-{"type": "decision", "id": "sha256…", "title": "use retry(3)",
- "body": "unbounded hangs agents", "affected_symbols": ["retry"],
- "importance": 87, "confidence": 0.7, "tier": "core",
- "timestamp": "2026-08-22T12:00:00+00:00"}
+{"type": "decision", "id": "decision-042", "title": "use retry(3)",
+ "body": "unbounded hangs agents", "reason": "",
+ "affected_symbols": ["retry"], "importance": 65, "confidence": 0.9,
+ "tier": "active", "timestamp": "2026-08-22T12:00:00Z",
+ "created": "memory"}
 ```
 
 The dual-write matters because the two formats serve two consumers: the
 **markdown side** is what a human (or a plain-text agent) greps in
 `DECISIONS.md`/`ARCHITECTURE.md` — it stays readable and diffable. The
-**JSONL side** is what the tool queries — typed fields (`type`,
+**JSONL side** is what the tool queries — typed fields (`type`, `id`,
 `importance`, `confidence`, `tier`, `affected_symbols`, `timestamp`) make
 retrieval precise: filter by type, rank by importance, dedupe by `id`,
 prune by tier. Markdown is the interface; JSONL is the index.

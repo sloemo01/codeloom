@@ -158,7 +158,7 @@ python3 codeloom.py --index-status /path/to/repo
 | `--install-grammars` | install tree-sitter grammars (opt-in precision) |
 | `--install-grammars --yes` | actually run pip install (one-command) |
 | `--index` | build + save a persistent knowledge graph (symbols + call/import edges) |
-| `--index --engine c` | use the compiled C accelerator (auto-builds from codeloom_core.c on first use) — Linux kernel full graph ~89–113s (C engine) |
+| `--index --engine c` | use the compiled C accelerator (auto-builds from codeloom_core.c on first use) |
 | `--auto-grammars` | scan repo + install grammars for its languages (repo-aware AST depth) |
 | `--ask "task"` | one-shot complete task brief: loom + blast radius + files-to-touch |
 | `--rename OLD NEW` | what a rename touches: definitions, files, dependents, edges |
@@ -179,9 +179,12 @@ python3 codeloom.py --index-status /path/to/repo
 | `--write FILE` | write map to FILE |
 | `--no-outline` | skip per-file one-liners (faster) |
 | `--max-files N` | cap traversal (default 20000) |
-| `--memory-add` (v0.79) | write a typed memory object to `.codeloom-memory/memory.jsonl` (`--type bug|task|note` + `--title`/`--body`/`--symbols`/`--priority`); importance scored by formula |
+| `--memory-add` (v0.79) | write a typed memory object to `.codeloom-memory/memory.jsonl` (`--type decision\|bug\|question\|architecture\|api\|constraint\|lesson\|todo\|warning\|goal\|hypothesis`, default goal, + `--title`/`--body`/`--symbols`/`--priority`); importance scored by formula |
 | `--memory SYMBOL` (v0.79) | graph-linked retrieval: typed entries for the symbol + graph-neighbor reachable entries |
 | `--memory-stats` (v0.79) | typed-memory stats: per-type counts, tiers, archive/rotation info |
+| `--remember NOTE` | smart-dispatch: if NOTE names a repo symbol or a pinned memory entry → graph retrieval; otherwise legacy append to `--section` markdown (default DECISIONS) |
+| `--memory-prune` | dry-run report of old `.codeloom-memory/archive` entries; `--older-than DAYS` (default 90), `--delete` actually deletes |
+| `--engine {py,c,rust}` | scanning engine: py (pure-Python, default), c (compiled codeloom_core), rust (compiled codeloom_core_rs, multi-threaded) |
 
 **Optional precision backends** (auto-enabled when present, zero-dep otherwise):
 - `tree-sitter` + grammars → precise multi-language AST parsing
@@ -237,7 +240,7 @@ This is the decision guide: given what you're trying to do, which flag serves it
 
 ### Session / persistence / compaction
 - `codeloom --write MAP.md` — commit the map as a reviewable artifact
-- `codeloom --remember "note" --section X` — persist a conclusion (survives compaction)
+- `codeloom --remember "note" --section X` — persist a conclusion (survives compaction); if "note" names a repo symbol, it smart-dispatches to graph-linked retrieval instead
 - `codeloom --adr "title" --context "..." --decision "..."` — write a structured Architectural Decision Record (the human "why")
 - `codeloom --adr-list` — list saved ADRs
 | `--decide "title" --reason "..."` | record a decision (accepted/rejected) — survives compaction |
@@ -345,8 +348,8 @@ decided and where you left off.
    `codeloom_snippet`, `codeloom_incremental`, `codeloom_verify`,
    `codeloom_trace`, `codeloom_ask` (single natural-language entry point
    that routes deterministically — the agent never picks among tools), and
-   (v0.79) `codeloom_memory_add`, `codeloom_remember`, `codeloom_memory_stats`
-   (82 tools total).
+   (v0.79) `codeloom_memory_add`, `codeloom_remember`, `codeloom_memory_stats`,
+   `codeloom_memory_prune`, `codeloom_query_memory` (82 tools total).
 
 ### 3. Memory OS workflow (v0.79)
 The typed-memory layer (`memory.jsonl`) turns the markdown memory files into
@@ -355,10 +358,11 @@ structured, importance-scored, graph-linked entries:
 1. **Write memory the standard ways** — `--decide`, `--lesson`, `--adr`
    keep writing their markdown files AND append a typed JSONL entry
    (backward-compatible dual write).
-2. **Write arbitrary typed notes** — `--memory-add --type bug|task|note
-   --title "..." [--body "..." --symbols A,B --priority N]` appends a typed
-   entry to `.codeloom-memory/memory.jsonl`; importance comes from the
-   formula (type + keywords + symbols), printed as `importance: N`.
+2. **Write arbitrary typed notes** — `--memory-add --type decision|bug|question|
+   architecture|api|constraint|lesson|todo|warning|goal|hypothesis` (default
+   `goal`) + `--title "..." [--body "..." --symbols A,B --priority N]`
+   appends a typed entry to `.codeloom-memory/memory.jsonl`; importance comes
+   from the formula (type + keywords + symbols), printed as `importance: N`.
 3. **Retrieve graph-linked** — `--memory <symbol>` returns the typed
    entries pinned to that symbol PLUS entries reachable through graph
    neighbors (e.g. a module that imports it), not just exact matches.
@@ -376,8 +380,8 @@ structured, importance-scored, graph-linked entries:
 ```bash
 python3 tests.py
 ```
-Expect `OK` (currently 101 tests; the 7 `TestMemoryOS` cases skip until the
-Memory OS lands in `codeloom.py`). Add tests for any new feature.
+Expect `OK` (101 tests, incl. the 7 `TestMemoryOS` cases). Add tests for any
+new feature.
 
 ### 5. Re-record the demo GIF
 1. Edit `demo.tape` to showcase the features you want (map, graph+focus, calls, diff).
@@ -407,7 +411,7 @@ Memory OS lands in `codeloom.py`). Add tests for any new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (101 tests, 7 MemoryOS skipped until v0.79 lands).
+- `python3 tests.py` → `OK` (101 tests).
 - `codeloom --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codeloom --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codeloom --task "text" <root>` returns a ranked module list.
@@ -424,6 +428,6 @@ Memory OS lands in `codeloom.py`). Add tests for any new feature.
 - `codeloom --incremental <root>` returns changed files (hash cache).
 - `codeloom --trace <cmd> <root>` returns runtime call edges (or none).
 - MCP server keeps an in-memory index (incremental, always fresh); `--get-symbol` uses a lazy per-symbol dbm index (near-resident single-key lookups).
-- MCP smoke test returns `serverInfo` name `codeloom-mcp`; `tools/list` reports 82 tools once v0.79 lands.
+- MCP smoke test returns `serverInfo` name `codeloom-mcp`; `tools/list` reports 82 tools.
 - `scripts/memory_extract.py --dry-run` lists mined bug/api/architecture memories without writing.
 - `demo.gif` exists and a late frame shows the intended feature output.

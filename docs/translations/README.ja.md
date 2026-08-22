@@ -89,6 +89,10 @@ codeloom --resume                                 # restore after compaction
 さらに: `--remember`、`--seen`、`--working-state`、`--lessons`、`--supersede`、
 `--adr`、`--query-memory`。
 
+## Memory OS — グラフがあなたの代わりに覚える
+
+**v0.79** で、各メモリは `.codeloom-memory/memory.jsonl` に追記される**型付きレコード**（型・重要度・信頼度・関連シンボル）になり、取得は**グラフ連動**です: `--memory <シンボル>` はそのシンボルに言及するエントリ*に加えて*、グラフ上の近傍（依存先・依存元・呼び出し元）に紐づいたメモリを重要度順で返します。日誌と、コードベースの形状に配線されたメモリとの違いです。
+
 ### 構造分析
 
 | コマンド | 結果 |
@@ -130,6 +134,8 @@ codeloom --resume                                 # restore after compaction
 ツール選択のミスは起きない。完全な一覧は
 [`docs/mcp-listing.md`](docs/mcp-listing.md)。
 
+v0.79 の MCP サーフェスには **Memory OS トリオ** が加わる: `codeloom_memory_add`（重要度付きの型付きメモリ）、`codeloom_remember`（グラフ連動の取得）、`codeloom_memory_stats`（分布レポート）。`codeloom_ask` から memory/remember/stats キーワードでルーティングされる。
+
 ## PR review bot
 
 `.github/workflows/pr-bot.yml` はすべてのプルリクエストを次の形に変える:
@@ -154,7 +160,7 @@ codeloom --resume                                 # restore after compaction
 
 | | **codeloom** | code-review-graph (30.6k★) | code-context-engine | claude-context |
 |---|---|---|---|---|
-| インストール | **stdlib ファイル 1 個** | pip: **78 パッケージ** + デーモン + TOML 設定 | pip + ONNX + サーバー | npm |
+| インストール | **stdlib ファイル 1 個** | pip: **75 パッケージ** + デーモン + TOML 設定 | pip + ONNX + サーバー | npm |
 | バックグラウンドプロセス | **なし** | `crg-daemon` (16MB RSS、ヘルスチェック) | `cce serve` + リソースガバナー | — |
 | コンパクション後のメモリ | ✅ **決定台帳、計測値: 復旧に 2 呼び出し / ~985 トークン** (95.4% 削減) | ⚠️ markdown の Q&A ジャーナル、コンパクションの言及ゼロ | ⚠️ エージェントが呼ぶ `record_decision` MCP | memsearch プラグイン |
 | MCP サーフェス | **82 + 1 NL ルーター** | 30、ルーターなし | 22 | 多数 |

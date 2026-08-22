@@ -54,24 +54,24 @@ related discussions — not just code.
 - **Growth bounds (v0.78):** each ledger file caps at 200KB, then rotates
   losslessly and deterministically to `.codeloom-memory/archive/` — byte-exact,
   nothing dropped. codeloom **never auto-deletes**; `--memory-prune` is the
-  only shrink path and it is user-initiated, with `--dry-run` to preview
-  before applying.
+  only shrink path and it is user-initiated — it reports (dry-run) by default,
+  and deletes only with `--delete`.
 - **Memory OS (v0.79):** the ledger gains a typed, graph-linked layer —
   see the strategic rows below.
 
-### 3b. Memory OS — typed, graph-linked memory layer 🚧 (landing v0.79) ⭐⭐⭐⭐⭐
+### 3b. Memory OS — typed, graph-linked memory layer ✅ (shipped v0.79) ⭐⭐⭐⭐⭐
 
 The repo's memory becomes structured and wired into the code graph itself —
 the strategic moat row.
 
 | Memory OS capability | Status |
 |---|---|
-| Typed memory objects (`memory.jsonl`: type/id/title/body/`affected_symbols`/`importance`/`confidence`/`tier`/timestamp) | 🚧 landing v0.79 |
-| Importance scoring (base + keywords + type weight + graph centrality + recency, capped 100, deterministic no-LLM) | 🚧 landing v0.79 |
-| Graph-linked retrieval — `--memory <symbol>` returns entries + graph-neighbor entries ranked by importance | 🚧 landing v0.79 |
-| `--memory-stats` distribution report (per-type/tier counts, mean importance, top-N, size) | 🚧 landing v0.79 |
+| Typed memory objects (`memory.jsonl`: type/id/title/body/`affected_symbols`/`importance`/`confidence`/`tier`/timestamp/`created`) | ✅ shipped v0.79 |
+| Importance scoring (10 base + keyword +30 + type weight + graph centrality + recency, capped 100, deterministic no-LLM) | ✅ shipped v0.79 |
+| Graph-linked retrieval — `--memory <symbol>` returns entries + graph-neighbor entries ranked by importance | ✅ shipped v0.79 |
+| `--memory-stats` distribution report (per-type/tier counts, bytes, top linked symbols) | ✅ shipped v0.79 |
 | Auto-extractor `scripts/memory_extract.py` (git-log heuristics: bug/api/architecture, confidence 0.55–0.95, idempotent state, `--dry-run`) | ✅ shipped (companion script) |
-| MCP surface — `codeloom_memory_add` / `codeloom_remember` / `codeloom_memory_stats` (82 tools + 1 router total) | 🚧 landing v0.79 |
+| MCP surface — `codeloom_memory_add` / `codeloom_remember` / `codeloom_memory_stats` (82 tools + 1 router total) | ✅ shipped v0.79 |
 
 ### 4. Live File Watching 🚧
 Every save → incremental AST update → incremental graph update → incremental
@@ -225,45 +225,46 @@ agent's effective surface is **1 tool** (~50 tokens) instead of 82 schemas
 `codeloom_core.c` auto-builds on first use (no manual step, no download); LSP
 auto-detects + auto-starts an installed server for real cross-file resolution.
 
-### 31. Post-Edit Integrity Oracle — `--verify-edit` 🚧 (landing v0.78)
+### 31. Post-Edit Integrity Oracle — `--verify-edit` ✅ (shipped v0.78)
 Preflight (`--check-edit`) answers *before*; `--verify-edit` answers *after*.
 Run it on a just-edited file and get a terminal **GO / CHECK / STOP** verdict
 re-deriving structural integrity (symbols resolvable, call sites intact,
 nothing the edit orphaned). This closes the edit loop: preflight → edit →
 verify → commit.
 
-### 32. Blindspot Detection — `--blindspot` 🚧 (landing v0.78)
+### 32. Blindspot Detection — `--blindspot` ✅ (shipped v0.78)
 Before an edit, list the files you have **never read** that the change
 touches or that depend on it — the unread-file warning that stops "it worked
 here" surprises. Pairs with `--seen` (what was read) to expose what wasn't.
 
-### 33. Local Savings Ledger — `--savings-report` 🚧 (landing v0.78)
+### 33. Local Savings Ledger — `--savings-report` ✅ (shipped v0.78)
 Token-savings accounting that stays on your machine: `--session` log +
 `--session-report` metrics compiled into a per-repo ledger of calls saved,
 tokens saved, and estimated cost avoided. **No telemetry** — the receipts
 are files in your repo, not claims in our README.
 
-### 34. Benchmark Runner — `--eval` 🚧 (landing v0.78)
+### 34. Benchmark Runner — `--eval` ✅ (shipped v0.78)
 Deterministic benchmark runner: run the retrieval/efficiency corpus against a
 repo and get comparable numbers on your own machine (seeds the same
 reproducibility discipline as `benchmarks/`, but self-serve).
 
-### 35. Pre-Commit Risk Hook — `--install-hook` / `--uninstall-hook` 🚧 (landing v0.78)
+### 35. Pre-Commit Risk Hook — `--install-hook` / `--uninstall-hook` ✅ (shipped v0.78)
 Install a git pre-commit hook that runs the deterministic risk screen before
 every commit. **Warn-only by design** — it never blocks, never rewrites your
 commit; it prints the risk verdict and lets you decide.
 
-### 36. MCP Loop-Closure Pair + Resources 🚧 (landing v0.78)
+### 36. MCP Loop-Closure Pair + Resources ✅ (shipped v0.78)
 `verify_edit` and `blindspot` join the MCP surface, and
 `loom://resources` exposes state/delta/hotset/resume as first-class MCP
 resources — so agents can *read* working state without calling a tool.
 
-### 37. Memory OS MCP Trio 🚧 (landing v0.79)
+### 37. Memory OS MCP Trio ✅ (shipped v0.79)
 `codeloom_memory_add` (typed memory objects with importance),
 `codeloom_remember` (graph-linked retrieval by symbol + neighbors) and
 `codeloom_memory_stats` (distribution report) join the surface — **82 tools
-+ 1 router** — and are routed from `codeloom_ask` via the
-memory/remember/stats keywords alongside `query_memory`.
++ 1 router** — with the `memory`/`remember` retrieval phrases routed from
+`codeloom_ask`; all three remain directly callable alongside
+`codeloom_query_memory`.
 
 ---
 

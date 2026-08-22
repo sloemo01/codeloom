@@ -81,6 +81,10 @@ codeloom --resume                                 # restore after compaction
 
 इसके अलावा: `--remember`, `--seen`, `--working-state`, `--lessons`, `--supersede`, `--adr`, `--query-memory`।
 
+## Memory OS — ग्राफ़ आपके लिए याद रखता है
+
+**v0.79** से, हर मेमोरी `.codeloom-memory/memory.jsonl` में जुड़ा एक **टाइप्ड रिकॉर्ड** है (टाइप, इम्पॉर्टेंस, कॉन्फ़िडेंस, प्रभावित सिंबल) और रिट्रीवल **ग्राफ़-लिंक्ड** है: `--memory <सिंबल>` उन एंट्रीज़ को लौटाता है जो सिंबल का ज़िक्र करती हैं *साथ ही* उसके ग्राफ़ नेबर्स से जुड़ी मेमोरी, इम्पॉर्टेंस से रैंक की गई — एक जर्नल और कोडबेस के आकार में वायर की गई मेमोरी के बीच का फ़र्क़।
+
 ### स्ट्रक्चरल इंटेलिजेंस
 
 | कमांड | परिणाम |
@@ -118,6 +122,8 @@ codeloom --resume                                 # restore after compaction
 
 कुल 82 टूल, लेकिन एजेंट का प्रभावी सरफ़ेस **एक ही टूल** है: `codeloom_ask` प्राकृतिक भाषा लेता है और निर्धारित रूप से रूट करता है — टूल-चयन की कोई चूक नहीं। पूरी सूची: [`docs/mcp-listing.md`](docs/mcp-listing.md)।
 
+v0.79 की MCP सरफ़ेस में **Memory OS तिकड़ी** जुड़ती है: `codeloom_memory_add` (इम्पॉर्टेंस वाली टाइप्ड मेमोरी), `codeloom_remember` (ग्राफ़-लिंक्ड रिट्रिवल) और `codeloom_memory_stats` (डिस्ट्रीब्यूशन रिपोर्ट) — `codeloom_ask` से memory/remember/stats कीवर्ड के ज़रिए रूट होते हैं।
+
 ## PR रिव्यू बॉट
 
 `.github/workflows/pr-bot.yml` हर पुल रिक्वेस्ट को इसमें बदल देता है:
@@ -136,7 +142,7 @@ codeloom --resume                                 # restore after compaction
 
 | | **codeloom** | code-review-graph (30.6k★) | code-context-engine | claude-context |
 |---|---|---|---|---|
-| इंस्टॉल | **एक stdlib फ़ाइल** | pip: **78 पैकेज** + डेमन + TOML कॉन्फ़िग | pip + ONNX + सर्वर | npm |
+| इंस्टॉल | **एक stdlib फ़ाइल** | pip: **75 पैकेज** + डेमन + TOML कॉन्फ़िग | pip + ONNX + सर्वर | npm |
 | बैकग्राउंड प्रोसेस | **कोई नहीं** | `crg-daemon` (16MB RSS, हेल्थ चेक) | `cce serve` + रिसोर्स गवर्नर | — |
 | कॉम्पैक्शन मेमोरी | ✅ **निर्णय-लेजर, मापा गया: रिकवरी में 2 कॉल / ~985 tok** (95.4% कम) | ⚠️ markdown Q&A जर्नल, कॉम्पैक्शन का ज़िक्र नहीं | ⚠️ एजेंट-कॉल `record_decision` MCP | memsearch प्लगइन |
 | MCP सरफ़ेस | **82 + 1 NL राउटर** | 30, राउटर नहीं | 22 | कई |

@@ -87,6 +87,10 @@ codeloom --resume                                 # restore after compaction
 此外还有：`--remember`、`--seen`、`--working-state`、`--lessons`、`--supersede`、
 `--adr`、`--query-memory`。
 
+## Memory OS — 图会替你记住
+
+**v0.79** 起，每条记忆都是追加到 `.codeloom-memory/memory.jsonl` 的**类型化记录**（类型、重要性、置信度、受影响符号），检索与**代码图关联**：`--memory <符号>` 返回提及该符号的条目*加上*附着在其图邻居（依赖方、被依赖方、调用方）上的记忆，并按重要性排序。这就是日志与接入代码库形状的记忆之间的区别。
+
 ### 结构化智能
 
 | 命令 | 结果 |
@@ -128,6 +132,8 @@ codeloom --resume                                 # restore after compaction
 不会出现工具选择失误。完整清单：
 [`docs/mcp-listing.md`](docs/mcp-listing.md)。
 
+v0.79 的 MCP 表面新增 **Memory OS 三件套**：`codeloom_memory_add`（带重要性的类型化记忆）、`codeloom_remember`（图关联检索）和 `codeloom_memory_stats`（分布报告），通过 `codeloom_ask` 以 memory/remember/stats 关键字路由。
+
 ## PR 审查机器人
 
 `.github/workflows/pr-bot.yml` 把每一个 pull request 变成：
@@ -152,7 +158,7 @@ codeloom --resume                                 # restore after compaction
 
 | | **codeloom** | code-review-graph (30.6k★) | code-context-engine | claude-context |
 |---|---|---|---|---|
-| 安装 | **一个 stdlib 文件** | pip：**78 个包** + 守护进程 + TOML 配置 | pip + ONNX + 服务器 | npm |
+| 安装 | **一个 stdlib 文件** | pip：**75 个包** + 守护进程 + TOML 配置 | pip + ONNX + 服务器 | npm |
 | 后台进程 | **无** | `crg-daemon`（16MB RSS，健康检查） | `cce serve` + 资源治理 | — |
 | 压缩后记忆 | ✅ **决策台账，实测：2 次调用 / ~985 个 token 即可恢复**（少 95.4%） | ⚠️ markdown 问答日志，零压缩提及 | ⚠️ 代理调用的 `record_decision` MCP | memsearch 插件 |
 | MCP 表面 | **82 + 1 个自然语言路由器** | 30，无路由器 | 22 | 很多 |

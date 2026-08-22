@@ -44,7 +44,7 @@ Where codeloom leads:
 - **79→82 tools behind 1 NL router** — crg's 30 tools have no router (adherence problem the CodeRLM thread hit); v0.78 added `verify_edit` + `blindspot` + `loom://resources`; v0.79 adds the Memory OS trio `codeloom_memory_add` / `codeloom_remember` / `codeloom_memory_stats`.
 - **Fixture-gated grammar claims** — 46 languages golden-file parity in CI.
 - **Zero-dep offline semantic search** — crg needs a 2GB model extra or cloud key; CCE needs ONNX.
-- **Setup-to-first-answer** — measured: 0.13s warm vs crg 41s pip + 4s build + daemon.
+- **Setup-to-first-answer** — measured: 0.13s warm vs crg 8.6s pip + 4s build + daemon.
 - **Local savings ledger, all-local, no telemetry** — `--savings-report` (v0.78) compiles your own `--session` log into per-repo token/cost receipts; the numbers live in your repo, not in our README. CCE's sealed 94% ledger is better evidence discipline — ours is local-first and independently auditable.
 - **Post-edit loop closure** — `--verify-edit` (v0.78) re-derives a GO/CHECK/STOP verdict *after* an edit; jcodemunch's preflight (the strongest in the field) stops at *before*. `--blindspot` (v0.78) adds the unread-file warning — the files your edit breaks that you never read. That's the loop-closure differentiator: preflight → edit → verify → commit.
 

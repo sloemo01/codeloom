@@ -90,16 +90,17 @@ codeloom --resume                                 # restore after compaction
 Also: `--remember`, `--seen`, `--working-state`, `--lessons`, `--supersede`,
 `--adr`, `--query-memory`.
 
-**Growth bounds (landing in v0.78).** Memory can't stack forever: each ledger
+**Growth bounds (v0.78).** Memory can't stack forever: each ledger
 file caps at **200KB**, then rotates **losslessly and deterministically** to
 `.codeloom-memory/archive/` (rotation is byte-exact — nothing is dropped).
 codeloom **never auto-deletes** memory; the only way to shrink it is
-`--memory-prune --dry-run` (see what would be removed, then apply) — the
+`--memory-prune` (reports by default — see what would be removed, then
+apply with `--memory-prune --delete`) — the
 agent's explicit choice, never the tool's.
 
 ## Memory OS — the graph remembers for you
 
-Landing in **v0.79**, Memory OS turns the repo's memory from a plain ledger
+Shipped in **v0.79**, Memory OS turns the repo's memory from a plain ledger
 into a **typed, importance-scored, graph-linked memory layer** — the new
 differentiator.
 
@@ -109,15 +110,18 @@ Every memory is a typed record appended to `.codeloom-memory/memory.jsonl`
 with a fixed schema:
 
 ```json
-{"type": "decision|lesson|architecture|pattern|convention|bugfix|api",
- "id": "sha256-of-content",
+{"type": "decision",            // decision|bug|lesson|architecture|api|constraint|
+                               // question|todo|warning|goal|hypothesis
+ "id": "decision-042",          // deterministic "<type>-NNN" per-type counter
  "title": "use retry(3) not retry(∞)",
  "body": "unbounded hangs agents; 3 keeps backoff bounded",
+ "reason": "",
  "affected_symbols": ["retry", "agent_loop"],
- "importance": 87,
- "confidence": 0.7,
- "tier": "core|extended|archive",
- "timestamp": "2026-08-22T12:00:00+00:00"}
+ "importance": 65,
+ "confidence": 0.9,             // per-type: decision 0.9, bug 0.8, question 0.4 …
+ "tier": "active",              // hot|active|archive
+ "timestamp": "2026-08-22T12:00:00Z",
+ "created": "memory"}           // decide|lesson|adr|goal|hypothesis|checkpoint|extract|memory
 ```
 
 Typed objects beat markdown walls because retrieval can be precise: filter
@@ -129,17 +133,19 @@ symbols a memory touches.
 Every memory gets a 0–100 importance score — deterministic, no LLM:
 
 ```
-importance = base(50)
-           + keywords     (bug/crash/security/API …)
-           + type_weight  (decision +20, api +15, convention +5 …)
-           + graph_centrality (of affected_symbols in the import/call graph)
-           + recency
+importance = base(10)
+           + keywords     (+30 if title/body contains always|never|must|critical|
+                            important|security|do not|dont)
+           + type_weight  (bug +20, architecture/constraint/warning +15,
+                           decision +10, todo/goal/hypothesis/lesson/question/api +5)
+           + graph_centrality (0 affected symbols → +0, 1–2 → +5, 3+ → +10)
+           + recency     (write-time +10; read-time +10 within 7 days, +5 within 30)
            , capped at 100
 ```
 
-`--memory-stats` reports the distribution (counts per type/tier, mean
-importance, top-N by importance, total size) so you can see what the repo
-knows and what it cares about.
+`--memory-stats` reports the distribution (counts per type/tier, total and
+archive bytes, top linked symbols) so you can see what the repo knows and
+what it cares about.
 
 ### Graph-linked retrieval: `--memory <symbol>`
 
@@ -214,9 +220,10 @@ no tool-selection misfires. Full listing:
 
 The v0.79 MCP surface adds the **Memory OS trio**: `codeloom_memory_add`
 (typed memory objects with importance), `codeloom_remember` (graph-linked
-retrieval) and `codeloom_memory_stats` (the distribution report) — routed
-from `codeloom_ask` via the memory/remember/stats keywords alongside
-`query_memory`. v0.78's loop-closure pair is still there: `verify_edit`
+retrieval) and `codeloom_memory_stats` (the distribution report) — the
+`memory`/`remember` retrieval phrases route from `codeloom_ask`, and all
+three stay directly callable (alongside `codeloom_query_memory`). v0.78's
+loop-closure pair is still there: `verify_edit`
 (post-edit integrity oracle) and `blindspot` (unread-file warning), plus
 `loom://resources` exposing state/delta/hotset/resume as resources, not
 just tools.
@@ -253,9 +260,10 @@ claude-context, codeseek, jcodemunch, codegraph, codebase-memory-mcp, repowise
 | MCP surface | **82 + 1 NL router** | 30, no router | 22 | many |
 | Semantic search | ✅ zero-dep, offline | ❌ `[embeddings]` extra (~2GB) or cloud key | ❌ ONNX required | ✅ (Zilliz) |
 | Language proof | **46 fixture-proven in CI** | not published | — | — |
-| Setup→answer | **0.13s warm** | 41s pip + 4s build + daemon | after indexing | after indexing |
+| Setup→answer | **0.13s warm** | 8.6s pip + 4s build + daemon | after indexing | after indexing |
 
-Measured numbers: symbol retrieval 24–36× fewer tokens than crg; compaction
+Measured numbers: symbol retrieval 43–54× fewer tokens than crg (9–10 vs
+428–485); compaction
 recovery **95.4% fewer tokens**; Linux kernel full graph (C engine) ~89-113s. Details and
 reproduction commands in [`benchmarks/README.md`](benchmarks/README.md).
 
@@ -265,7 +273,7 @@ community scale; codebase-memory ships 158 grammars and an arXiv-published
 eval; repowise (AGPL) has defect-validated risk scoring. We claim speed +
 shape + proof-per-grammar + memory depth — not their moats.
 
-Landing in v0.78, we close the loop they leave open: `--verify-edit` gives
+Shipped in v0.78, we close the loop they leave open: `--verify-edit` gives
 the post-edit GO/CHECK/STOP verdict (their preflight stops at *before*),
 `--blindspot` warns when files you never read are about to break,
 `--savings-report` publishes a **local-only** token-savings ledger (no
@@ -307,7 +315,7 @@ retrieved by symbol + graph neighbors (`--memory <symbol>`,
 
 ## Trust & verification
 
-- **CI**: Linux/macOS/Windows × Python 3.8–3.12, 83 tests, ≥46 grammar
+- **CI**: Linux/macOS/Windows × Python 3.8–3.12, 107 tests, ≥46 grammar
   fixtures gated by golden files
 - **Checksums**: every release publishes the SHA-256 of `codeloom.py`;
   verify with `codeloom --verify codeloom.py`
@@ -322,7 +330,7 @@ one file, honest claims.
 
 [简体中文](docs/translations/README.zh-CN.md) · [日本語](docs/translations/README.ja.md) · [Español](docs/translations/README.es.md) · [हिन्दी](docs/translations/README.hi.md)
 
-Generated with v0.77 — may lag after upgrades (v0.78 docs marked inline).
+Generated with v0.79 — may lag after upgrades.
 
 ## Agent skill
 
