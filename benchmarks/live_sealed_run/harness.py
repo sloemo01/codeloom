@@ -25,6 +25,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -39,6 +40,53 @@ except ImportError:
         return len(t) // 4
 
 CodeLoom = os.path.join(os.path.dirname(__file__), "..", "..", "codeloom.py")
+
+# --- rg / grep selection -------------------------------------------------
+# ripgrep may be absent (e.g. bare CI runners). Detect it once at startup;
+# when missing, every `rg` invocation below is transparently translated to
+# an equivalent `grep` invocation with the SAME output shape:
+#   rg -l PAT -g '*.py' .          ->  grep -rl --include=*.py --exclude-dir=.git PAT .
+#   rg -n 'RE' -g '*.py' .         ->  grep -rnE -I --include=*.py --exclude-dir=.git 'RE' .
+# Both emit bare relative paths for -l and `path:line:text` for -n, which is
+# all the harness consumes. Mapping notes:
+#   * -g '*.py' (rg glob) == --include=*.py (grep); grep recurses into
+#     .git by default, so --exclude-dir=.git keeps the file set equivalent.
+#   * rg treats patterns as regex by default == grep -E.
+#   * rg skips binary files by default == grep -I.
+#   * rg -n line numbers == grep -n.
+HAS_RG = shutil.which("rg") is not None
+
+
+def rg(args, cwd, **kw):
+    """Run an rg-style search, falling back to grep when ripgrep is absent.
+
+    Accepts the exact argv shapes used by bare_retrieve() and returns the
+    same subprocess.CompletedProcess shape (capture_output/text=True).
+    """
+    if HAS_RG:
+        return subprocess.run(["rg"] + args, cwd=cwd, **kw)
+    # Translate only the flag patterns this harness uses. Flags may appear
+    # before or after the pattern (both `-l PAT` and `PAT -l` are accepted).
+    args = list(args)
+    mode_l = "-l" in args
+    mode_n = "-n" in args
+    args = [a for a in args if a not in ("-l", "-n")]
+    if "-g" in args:
+        i = args.index("-g")
+        del args[i:i + 2]  # drop `-g '*.py'`; grep filters via --include below
+    # Remaining positional args: [pattern, path] (path defaults to ".")
+    pattern = args[0] if args else ""
+    path = args[1] if len(args) > 1 else "."
+    if mode_l and not mode_n:
+        # grep -l takes the pattern as a literal string (BRE), not a regex
+        return subprocess.run(
+            ["grep", "-rl", "--include=*.py", "--exclude-dir=.git",
+             "-F", pattern, path], cwd=cwd, **kw)
+    if mode_n and not mode_l:
+        return subprocess.run(
+            ["grep", "-rnE", "-I", "--include=*.py", "--exclude-dir=.git",
+             pattern, path], cwd=cwd, **kw)
+    raise NotImplementedError(f"rg fallback: unsupported flag set: {args}")
 
 # 10 fixed tasks on fastapi, with the file that holds the answer
 TASKS = [
@@ -71,9 +119,10 @@ def bare_retrieve(repo, question):
             if m.group(1) not in STOPWORDS:
                 anchor = m.group(1)
                 break
-    # 1. locate the anchor (rg with explicit python glob — portable)
-    rc = subprocess.run(["rg", "-l", anchor, "-g", "*.py", "."],
-                        cwd=repo, capture_output=True, text=True)
+    # 1. locate the anchor (rg with explicit python glob — portable;
+    #    falls back to grep when ripgrep is unavailable)
+    rc = rg(["-l", anchor, "-g", "*.py", "."], cwd=repo,
+            capture_output=True, text=True)
     calls += 1
     files = [f for f in rc.stdout.splitlines() if f][:2]
     ctx = "\n".join(files)
@@ -90,8 +139,8 @@ def bare_retrieve(repo, question):
         except OSError:
             pass
     # 3. grep for callers of the anchor
-    rc = subprocess.run(["rg", "-n", rf"\b{anchor}\w*", "-g", "*.py", "."],
-                        cwd=repo, capture_output=True, text=True)
+    rc = rg(["-n", rf"\b{anchor}\w*", "-g", "*.py", "."], cwd=repo,
+            capture_output=True, text=True)
     calls += 1
     total += len(rc.stdout.encode())
     ctx += "\n---\n" + rc.stdout[:2000]

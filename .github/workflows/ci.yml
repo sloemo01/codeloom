@@ -101,6 +101,8 @@ jobs:
           python-version: "3.12"
       - name: Install benchmark dependencies
         run: python3 -m pip install tiktoken
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
       - name: Run benchmark suite (proof)
         run: |
           set -o pipefail
