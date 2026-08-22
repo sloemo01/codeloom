@@ -33,7 +33,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.75.0"
+SERVER_VERSION = "0.76.0"
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)

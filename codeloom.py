@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-VERSION = "0.75.0"
+VERSION = "0.76.0"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -939,6 +939,12 @@ def _walk(root: str, rules: List[GitignoreRule], max_files: int, files: List[str
             if len(files) >= max_files:
                 return
             files.append(full)
+            # binary docs: ensure a searchable text sidecar exists
+            ext = os.path.splitext(full)[1].lower()
+            if ext in DOC_EXTS:
+                side = ensure_doc_sidecar(full)
+                if side and len(files) < max_files:
+                    files.append(side)
 
 def build_tree(files: List[str], root: str, want_outline: bool) -> Node:
     tree = Node(root or ".", is_dir=True)
@@ -2171,6 +2177,129 @@ def build_graph(files: List[str], root: str) -> dict:
 _TEXT_EXTS = {".md", ".mdx", ".rst", ".txt", ".json", ".yaml", ".yml", ".toml",
               ".ini", ".cfg", ".conf", ".xml", ".html", ".css", ".svg",
               ".csv", ".tsv", ".env", ".sh", ".bash", ".zsh", ".fish"}
+
+# --------------------------------------------------------------------------- #
+# Binary-document extraction -> searchable .txt sidecars (zero-dep: zip+xml
+# via stdlib; pdftotext optional for PDFs). Sidecars land in _TEXT_EXTS so
+# --grep/--map/index pick them up with zero pipeline changes.
+# --------------------------------------------------------------------------- #
+DOC_EXTS = {
+    ".pdf": "pdftotext (optional external)",
+    ".docx": "zip+xml (stdlib)", ".docm": "zip+xml (stdlib)",
+    ".dotx": "zip+xml (stdlib)",
+    ".xlsx": "zip+xml (stdlib)", ".xlsm": "zip+xml (stdlib)",
+    ".pptx": "zip+xml (stdlib)",
+    ".epub": "zip+xml (stdlib)",
+    ".odt": "zip+xml (stdlib)",
+    ".rtf": "control-word strip (stdlib)",
+}
+
+
+def _zip_read_text(path: str, member: str) -> Optional[str]:
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as z:
+            return z.read(member).decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+
+def _xml_texts(xml_text: str, tags: set) -> str:
+    """Extract element text for tags (namespace-stripped)."""
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        out = [m.strip() for m in re.findall(r"<[^>]*>([^<]+)</[^>]*>", xml_text)
+               if m.strip()]
+        return "\n".join(out)
+    out = []
+    for el in root.iter():
+        if el.tag.split("}")[-1] in tags and (el.text or "").strip():
+            out.append((el.text or "").strip())
+    return "\n".join(out)
+
+
+def extract_doc_text(path: str) -> Optional[str]:
+    """Extract plain text from a binary document. None = unsupported or
+    missing tool (PDFs need pdftotext on PATH; we never download anything)."""
+    ext = os.path.splitext(path)[1].lower()
+    try:
+        if ext == ".pdf":
+            import shutil
+            import subprocess as _sp
+            if not shutil.which("pdftotext"):
+                return None
+            r = _sp.run(["pdftotext", "-layout", path, "-"],
+                        capture_output=True, timeout=90)
+            return (r.stdout.decode("utf-8", errors="replace")
+                    if r.returncode == 0 else None)
+        if ext in (".docx", ".docm", ".dotx"):
+            xml = _zip_read_text(path, "word/document.xml")
+            return _xml_texts(xml, {"t"}) if xml else None
+        if ext in (".xlsx", ".xlsm"):
+            ss = _zip_read_text(path, "xl/sharedStrings.xml")
+            return _xml_texts(ss, {"t"}) if ss else None
+        if ext == ".pptx":
+            import zipfile
+            parts = []
+            with zipfile.ZipFile(path) as z:
+                slides = sorted(n for n in z.namelist()
+                                if re.match(r"ppt/slides/slide\d+\.xml$", n))
+                for s in slides:
+                    t = _xml_texts(z.read(s).decode("utf-8", errors="replace"),
+                                   {"t"})
+                    if t:
+                        parts.append(t)
+            return "\n\n".join(parts) if parts else None
+        if ext == ".epub":
+            import zipfile
+            parts = []
+            with zipfile.ZipFile(path) as z:
+                for n in z.namelist():
+                    if n.lower().endswith((".xhtml", ".html", ".htm")):
+                        t = _xml_texts(z.read(n).decode("utf-8", errors="replace"),
+                                       {"p", "h1", "h2", "h3", "li", "td", "th"})
+                        if t:
+                            parts.append(t)
+            return "\n\n".join(parts) if parts else None
+        if ext == ".odt":
+            xml = _zip_read_text(path, "content.xml")
+            if xml:
+                txt = re.sub(r"<[^>]+>", " ", xml)
+                return re.sub(r"\s+", " ", txt).strip() or None
+            return None
+        if ext == ".rtf":
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                data = fh.read()
+            data = re.sub(r"\\'([0-9a-fA-F]{2})",
+                          lambda m: chr(int(m.group(1), 16)), data)
+            data = re.sub(r"\\[a-zA-Z]+-?\d* ?", "", data)
+            data = data.replace("{", "").replace("}", "")
+            return re.sub(r"\s+", " ", data).strip() or None
+    except Exception:
+        return None
+    return None
+
+
+def ensure_doc_sidecar(path: str) -> Optional[str]:
+    """Write <path>.txt next to a binary doc when missing or stale. Returns
+    the sidecar path, or None if extraction isn't possible."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in DOC_EXTS:
+        return None
+    side = path + ".txt"
+    try:
+        if os.path.isfile(side) and os.path.getmtime(side) >= os.path.getmtime(path):
+            return side
+        text = extract_doc_text(path)
+        if text is None:
+            return None
+        with open(side, "w", encoding="utf-8") as fh:
+            fh.write(text + "\n")
+        return side
+    except OSError:
+        return None
 
 IMPORT_LANG_RULES: dict = {
     ".js":   (r"^\s*(?:import\s+.*?from\s+['\"]([^'\"]+)['\"]|require\(['\"]([^'\"]+)['\"]\))", r"^import\s+['\"]([^'\"]+)['\"]"),
@@ -7528,6 +7657,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                 mod = module_name_of(f, root)
                 file_syms: dict = {}
                 ext = os.path.splitext(f)[1].lower()
+                # binary docs: (re)extract the sidecar so search sees new text
+                if ext in DOC_EXTS:
+                    side = ensure_doc_sidecar(f)
+                    if side:
+                        try:
+                            pidx["files"][side] = (os.path.getmtime(side),
+                                                   os.path.getsize(side))
+                        except OSError:
+                            pass
                 if ext == ".py":
                     try:
                         _index_python_bytes(f, mod, file_syms)

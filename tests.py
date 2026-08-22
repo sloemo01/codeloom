@@ -1215,6 +1215,102 @@ class TestCodeLoom(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
+    def test_doc_sidecars_extract_and_search(self):
+        # docx/xlsx/pptx/epub/odt/rtf are extracted via stdlib zip+xml and
+        # their .txt sidecars become grep-searchable; unsupported binary
+        # formats and missing pdftotext degrade gracefully (None, no crash)
+        tmp = tempfile.mkdtemp()
+        try:
+            import zipfile
+            import shutil as _sh
+
+            def zip_doc(members: dict, path: str):
+                with zipfile.ZipFile(path, "w") as z:
+                    for name, data in members.items():
+                        z.writestr(name, data)
+
+            # docx: minimal package with one paragraph
+            docx = os.path.join(tmp, "guide.docx")
+            zip_doc({"word/document.xml":
+                     '<w:document xmlns:w="w"><w:body><w:p><w:r><w:t>'
+                     'deployment secret rotate quarterly</w:t></w:r></w:p>'
+                     '</w:body></w:document>',
+                     "[Content_Types].xml": "<Types/>"}, docx)
+
+            # xlsx: shared strings with one value
+            xlsx = os.path.join(tmp, "prices.xlsx")
+            zip_doc({"xl/sharedStrings.xml":
+                     '<sst xmlns="x"><si><t>widget cost 99</t></si></sst>',
+                     "[Content_Types].xml": "<Types/>"}, xlsx)
+
+            # pptx: one slide
+            pptx = os.path.join(tmp, "deck.pptx")
+            zip_doc({"ppt/slides/slide1.xml":
+                     '<p:sld xmlns:p="p"><p:cSld><p:spTree><p:sp><p:txBody>'
+                     '<a:p xmlns:a="a"><a:r><a:t>quarterly goals</a:t></a:r>'
+                     '</a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>',
+                     "[Content_Types].xml": "<Types/>"}, pptx)
+
+            # epub: one xhtml chapter
+            epub = os.path.join(tmp, "book.epub")
+            zip_doc({"OEBPS/ch1.xhtml":
+                     '<html xmlns="x"><body><h1>Chapter One</h1>'
+                     '<p>The quick brown fox</p></body></html>',
+                     "mimetype": "application/epub+zip"}, epub)
+
+            # odt: content.xml
+            odt = os.path.join(tmp, "notes.odt")
+            zip_doc({"content.xml":
+                     '<office:document-content xmlns:office="o">'
+                     '<office:body><office:text><text:p xmlns:text="t">'
+                     'meeting minutes</text:p></office:text></office:body>'
+                     '</office:document-content>'}, odt)
+
+            # rtf
+            rtf = os.path.join(tmp, "memo.rtf")
+            with open(rtf, "w") as fh:
+                fh.write(r"{\rtf1\ansi memo body text\par}")
+
+            # binary file that must NOT extract
+            blob = os.path.join(tmp, "blob.bin")
+            with open(blob, "wb") as fh:
+                fh.write(b"\x00\x01\x02binary")
+
+            files = [docx, xlsx, pptx, epub, odt, rtf, blob]
+            sidecars = []
+            for f in files:
+                s = codeloom.ensure_doc_sidecar(f)
+                if s:
+                    sidecars.append(s)
+            # all six text formats extract; binary does not
+            self.assertEqual(len(sidecars), 6)
+            for s in sidecars:
+                self.assertTrue(os.path.isfile(s))
+
+            # content lands in the sidecars
+            all_text = ""
+            for s in sidecars:
+                with open(s) as fh:
+                    all_text += fh.read()
+            for needle in ("deployment secret", "widget cost", "quarterly",
+                           "Chapter One", "meeting minutes", "memo body"):
+                self.assertIn(needle, all_text)
+
+            # sidecars are grep-searchable through the normal pipeline
+            out = codeloom.render_grep(sidecars, tmp, "secret rotate")
+            self.assertIn("guide.docx.txt", out)
+
+            # stale sidecar refresh: touch the docx, sidecar regenerates
+            import time as _t
+            _t.sleep(0.02)
+            with open(docx, "a") as fh:
+                fh.write(" ")  # bump mtime
+            os.utime(docx, None)
+            s2 = codeloom.ensure_doc_sidecar(docx)
+            self.assertIsNotNone(s2)
+        finally:
+            shutil.rmtree(tmp)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
