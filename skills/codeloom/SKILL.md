@@ -537,6 +537,43 @@ decided and where you left off.
 | `codeloom_watch` | Incremental daemon-less refresh: re-index only files changed since the last index, keeping the lazy per-symbol store current. Call before queries to guarante... |
 | `codeloom_why` | Decision lookup with evidence stamps (repowise get_why parity): searches recorded memory/ADRs and stamps every matching line [exact]/[fuzzy]/[unverified] so ... |
 
+### 3. Deterministic routing — how `codeloom_ask` works (the 82-behind-1 design)
+
+`codeloom_ask` is not an LLM picking a tool. It is a **deterministic keyword
+router** with fixed branch priority (verified in `codeloom-mcp.py` `_route_ask`):
+
+1. **Edit-safety guard (first)** — "verify", "did i break", "check my edit",
+   "blindspot", "read coverage" → `codeloom_verify_edit` / `codeloom_blindspot`.
+   These win over every other branch on purpose: safety questions must never
+   be mis-routed.
+2. **Task orientation** — "what matters", "which files", "what breaks",
+   "impact of", "blast radius", "read order", "pack" → task/impact/plan/pack.
+3. **Symbol / retrieval** — symbol names, "what is", "where is" → search/
+   read/explain/usages.
+4. **Memory** — "remember this", "what do we know about" → memory write/
+   retrieval (`--memory <symbol>` graph-linked).
+5. **ADRs / checkpoint / resume / session** — "record decision",
+   "save my progress", "what was i doing", "tokens spent".
+6. **Export / cross-repo / files / langs** — "share graph", "across repos",
+   "find file", "what languages".
+7. **Question-shaped fallback** — "why…" → `--why` decision lookup; "who/
+   what/how/where" or ≤4 words → `--answer` cited answer.
+8. **Default (never an error)** — map + task relevance. Even an empty or
+   ambiguous query returns USEFUL context, never nothing.
+
+Consequences for the agent (why this matters):
+- **Never pick among 82 tools** — one NL entry point, deterministic mapping.
+  No LLM tool-selection step, so no tool-selection misfires (the problem
+  jcodemunch hit with its 91-tool surface).
+- **Fail-safe by design** — every branch returns actionable context; the
+  default is the map + task ranking. A "wrong" pick is still helpful.
+- **Deterministic == testable** — same query, same route, every time. The
+  router is exercised by the 107-test suite and the MCP handshake.
+- **Keyword order is load-bearing** — safety (verify/blindspot) and
+  write-vs-read disambiguation ("remember this bug" → write, "what do we
+  know about X" → retrieve) sit BEFORE the broad branches that would
+  swallow them.
+
 ### 3. Memory OS workflow (v0.79)
 The typed-memory layer (`memory.jsonl`) turns the markdown memory files into
 structured, importance-scored, graph-linked entries:
@@ -583,6 +620,12 @@ new feature.
 - Update `README.md` (usage, feature table, roadmap) and `LAUNCH.md` if launch copy changes.
 
 ## Pitfalls
+- **Optional engines auto-build — never a download** (`--engine c` / `--engine rust`):
+  the first run compiles the committed `codeloom_core.c` (`cc -O3`, ~2s) or
+  `codeloom_core_rs.rs` (`rustc -O`) locally — no network, no permission,
+  no pip. If the compiler is missing, codeloom silently falls back to the
+  pure-Python engine and still works. `--build-core` pre-builds explicitly.
+
 
 - `--diff` requires the target to be a git repo with a committed baseline;
   otherwise it reports "No changes vs HEAD."
