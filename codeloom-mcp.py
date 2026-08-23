@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import io
 import os
 import subprocess
 import sys
@@ -35,6 +36,23 @@ import codeloom  # noqa: E402
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
 SERVER_VERSION = "0.79.0"
+
+# Server identity stamp for the stale-server handshake: the exact file mtime
+# (seconds since epoch) and a content hash of THIS file at load time. A
+# long-lived MCP server keeps serving whatever code was on disk when it
+# started — if server_file_mtime / server_sha256 below differ from the file
+# on disk, the server predates the code and must be restarted (kill +
+# respawn), even though SERVER_VERSION is unchanged.
+try:
+    _SERVER_FILE_MTIME = int(os.path.getmtime(__file__))
+except OSError:
+    _SERVER_FILE_MTIME = 0
+try:
+    import hashlib as _hashlib
+    with open(__file__, "rb") as _fh:
+        _SERVER_SHA = _hashlib.sha256(_fh.read()).hexdigest()[:16]
+except OSError:
+    _SERVER_SHA = ""
 
 # --------------------------------------------------------------------------- #
 # Tool definitions (MCP tools/list schema)
@@ -122,17 +140,20 @@ TOOLS: List[Dict[str, Any]] = [
     {
         "name": "codeloom_impact",
         "description": (
-            "Predict the blast radius of changing a single module — one "
-            "symbol per call, e.g. 'core.engine' or 'src/core/engine.py' "
-            "(the CLI rejects multiple symbols). Shows which modules depend "
-            "on it (direct + transitive) and what it depends on. Answers "
-            "'what breaks if I change this?' before the agent edits."
+            "target = module path (a bare symbol name is also accepted and "
+            "resolved to its defining module, marked '(resolved via symbol "
+            "fallback)'). Predict the blast radius of changing a single "
+            "module — one target per call, e.g. 'core.engine' or "
+            "'src/core/engine.py'. Shows which modules depend on it (direct "
+            "+ transitive) and what it depends on. Answers 'what breaks if "
+            "I change this?' before the agent edits."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
-                "module": {"type": "string", "description": "Module to analyze, e.g. 'core.engine' or 'src/core/engine.py'"},
+                "module": {"type": "string", "description": "Module path to analyze, e.g. 'core.engine' or 'src/core/engine.py'. A bare symbol name (e.g. 'wsgi_app') is accepted and resolved to its defining module."},
+                "kind": {"type": "string", "enum": ["module", "symbol"], "description": "kind hint: 'module' (default) for a module path, 'symbol' for a bare symbol name — used when the target shape is ambiguous"},
                 "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["module"],
@@ -280,17 +301,20 @@ TOOLS: List[Dict[str, Any]] = [
     {
         "name": "codeloom_context",
         "description": (
-            "Batch triage card for MULTIPLE symbols in ONE call (repowise "
-            "get_context parity): per-target definition, same-module signatures, "
-            "callers count, and governing ADR titles. Collapses the "
-            "search->read->impact sequence into a single round-trip."
+            "target = symbol names (module paths are also accepted and "
+            "resolve to the module's top symbols, marked '(resolved via "
+            "module fallback)'). Batch triage card for MULTIPLE symbols in "
+            "ONE call (repowise get_context parity): per-target definition, "
+            "same-module signatures, callers count, and governing ADR titles. "
+            "Collapses the search->read->impact sequence into a single "
+            "round-trip."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
                 "targets": {"type": "array", "items": {"type": "string"},
-                            "description": "Symbol names to triage together"},
+                            "description": "Symbol names to triage together, e.g. ['Engine', 'retry']. Module paths (e.g. 'src.flask.app') are also accepted."},
                 "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["targets"],
@@ -333,11 +357,14 @@ TOOLS: List[Dict[str, Any]] = [
     {
         "name": "codeloom_health",
         "description": (
-            "Code health screen (repowise get_health parity, speed-first): "
-            "deterministic detectors — long functions, too-many-params, dead "
-            "symbols, duplicate names — scored 0-10 per file, worst-first. Zero "
-            "LLM calls, sub-second on typical repos, served from the resident "
-            "in-memory index. A fast structural screen, NOT defect-validated."
+            "No target — repo-wide screen. Code health screen (repowise "
+            "get_health parity, speed-first): deterministic detectors — "
+            "long functions, too-many-params, dead symbols, duplicate "
+            "names — scored 0-10 per file, worst-first. Zero LLM calls, "
+            "sub-second on typical repos, served from the resident "
+            "in-memory index. A fast structural screen, NOT "
+            "defect-validated. Also reports server_version + index_commit "
+            "so a stale long-lived MCP server is detectable."
         ),
         "inputSchema": {
             "type": "object",
@@ -489,14 +516,17 @@ TOOLS: List[Dict[str, Any]] = [
     {
         "name": "codeloom_similar",
         "description": (
-            "Find functions/classes with a structurally similar signature (same "
-            "param count) for refactoring. Returns candidates across the codebase."
+            "target = symbol name (a module path is also accepted and "
+            "resolves to the module's top symbols as candidates, marked "
+            "'(resolved via module fallback)'). Find functions/classes with "
+            "a structurally similar signature (same param count) for "
+            "refactoring. Returns candidates across the codebase."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
-                "symbol": {"type": "string", "description": "Symbol to find similar ones for"},
+                "symbol": {"type": "string", "description": "Symbol to find similar ones for, e.g. 'run'. A module path (e.g. 'core.engine') is also accepted."},
                 "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
             },
             "required": ["symbol"],
@@ -519,16 +549,19 @@ TOOLS: List[Dict[str, Any]] = [
     {
         "name": "codeloom_get_symbol",
         "description": (
-            "Token-counted symbol retrieval. By default returns a SUMMARY "
-            "(signature + docstring + call graph) — the 95%+ token-savings mode. "
-            "Pass full=true for the complete source. Agents should use summary "
+            "target = symbol name (a module path like 'src.flask.app' is "
+            "also accepted and resolves to the module's docstring + top "
+            "symbols, marked '(resolved via module fallback)'). Token-counted "
+            "symbol retrieval. By default returns a SUMMARY (signature + "
+            "docstring + call graph) — the 95%+ token-savings mode. Pass "
+            "full=true for the complete source. Agents should use summary "
             "first, then full only when they need the implementation."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
-                "symbol": {"type": "string", "description": "Symbol name to retrieve"},
+                "symbol": {"type": "string", "description": "Symbol name to retrieve, e.g. 'Engine'. A module path (e.g. 'src.flask.app') is also accepted and resolved via module fallback."},
                 "full": {"type": "boolean", "description": "Return full source instead of summary (default false)"},
                 "context_lines": {"type": "integer", "description": "Surrounding lines to include (default 2)"},
                 "max_files": {"type": "integer", "description": "Cap traversal (default 20000)"},
@@ -676,16 +709,18 @@ TOOLS: List[Dict[str, Any]] = [
     {
         "name": "codeloom_remember",
         "description": (
-            "Memory OS retrieval: fetch everything the repo remembers about a "
-            "symbol — linked memory notes, decisions, lessons, and the memory "
-            "graph around it. Ask 'what do we know about Engine'. Graph-linked "
+            "target = symbol name (module paths are also accepted and "
+            "resolve to the module's top symbols). Memory OS retrieval: "
+            "fetch everything the repo remembers about a symbol — linked "
+            "memory notes, decisions, lessons, and the memory graph around "
+            "it. Ask 'what do we know about Engine'. Graph-linked "
             "retrieval via core --memory <symbol>."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "root": {"type": "string", "description": "Absolute path to the repo (default: cwd)"},
-                "symbol": {"type": "string", "description": "Symbol/module to retrieve memory for, e.g. 'Engine' or 'core.engine'"},
+                "symbol": {"type": "string", "description": "Symbol to retrieve memory for, e.g. 'Engine'. A module path (e.g. 'core.engine') is also accepted."},
             },
             "required": ["symbol"],
         },
@@ -1392,6 +1427,181 @@ def _collect_files(root: str, max_files: int) -> List[str]:
 
 
 # --------------------------------------------------------------------------- #
+# Module-style target resolution (the v3 papercut fix).
+#
+# The symbol index keys on BARE symbol names (class/function names), so a
+# module-style target like 'src.flask.app' (or a bare 'wsgi_app' when the
+# agent only knows the module) misses the index. These helpers resolve both
+# directions against the resident index so every symbol-facing tool accepts
+# either shape:
+#   - 'mod.path.NAME' / 'NAME'     -> symbol lookup, then module fallback
+#   - 'src.flask.app' (no symbol)  -> module fallback: the module's docstring
+#                                     + top symbols (get_symbol), the module's
+#                                     symbol list (context), or its top symbols
+#                                     as similar candidates (similar)
+# A 'resolved via module fallback' marker is added so the agent can tell the
+# two resolutions apart instead of guessing.
+# --------------------------------------------------------------------------- #
+
+def _module_match(target: str, by_mod: Dict[str, List[str]]) -> Optional[str]:
+    """Resolve a dotted target to a known module: exact, then suffix match
+    ('flask.app' -> 'src.flask.app'), preferring the shallowest module."""
+    if not target or "." not in target:
+        return None
+    tgt_segs = target.split(".")
+    best = None
+    for mod in by_mod:
+        msegs = mod.split(".")
+        if len(msegs) >= len(tgt_segs) and msegs[-len(tgt_segs):] == tgt_segs:
+            if best is None or len(msegs) < len(best.split(".")):
+                best = mod
+    return best
+
+
+def _resolve_symbol_target(symbol: str, index: dict, entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve a symbol-tool target that may be a bare symbol OR a module-style
+    path ('src.flask.app'). Returns:
+      {"found": bool, "key": str, "module": Optional[str],
+       "note": Optional[str]} — 'note' is set when module fallback fired.
+    """
+    locs = index.get(symbol)
+    if locs:
+        return {"found": True, "key": symbol, "module": locs[0].get("module"), "note": None}
+    mod = _module_match(symbol, _module_symbols(entry))
+    if mod is not None:
+        return {"found": True, "key": mod, "module": mod,
+                "note": f"(resolved via module fallback: '{symbol}' -> module '{mod}')"}
+    # last resort: a dotted name whose LAST segment is a symbol, e.g.
+    # 'src.flask.app.wsgi_app' -> symbol 'wsgi_app' in module 'src.flask.app'
+    parts = symbol.split(".")
+    for i in range(len(parts) - 1, 0, -1):
+        cand = parts[i]
+        if cand in index:
+            return {"found": True, "key": cand,
+                    "module": index[cand][0].get("module"),
+                    "note": f"(resolved via module fallback: '{symbol}' -> symbol '{cand}' in module '{index[cand][0].get('module')}')"}
+    return {"found": False, "key": symbol, "module": None, "note": None}
+
+
+def _module_symbols(entry: Dict[str, Any]) -> Dict[str, List[str]]:
+    """module -> symbol names, cached on the resident index entry (bumped by
+    _Index.symbols whenever the flat index is rebuilt, so it never goes
+    stale)."""
+    cache = entry.get("_mod_syms")
+    if cache is None:
+        cache = _module_symbols_build({})
+        entry["_mod_syms"] = cache
+    return cache
+
+
+def _module_symbols_build(index: dict) -> Dict[str, List[str]]:
+    by_mod: Dict[str, List[str]] = {}
+    for name, locs in index.items():
+        for loc in locs:
+            mod = loc.get("module") or "?"
+            by_mod.setdefault(mod, []).append(name)
+    for mod in by_mod:
+        by_mod[mod] = sorted(set(by_mod[mod]))
+    return by_mod
+
+
+def _module_docstring(files: List[str], root: str, mod: str) -> str:
+    """Module docstring (first line) for the target module, if any."""
+    target = None
+    for f in files:
+        try:
+            if codeloom.module_name_of(f, root) == mod:
+                target = f
+                break
+        except Exception:
+            continue
+    if target is None:
+        return ""
+    try:
+        with open(target, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        import re as _re
+        m = _re.search(r'["\']{3}(.*?)["\']{3}', text, _re.DOTALL)
+        if m:
+            first = m.group(1).strip().splitlines()[0].strip()
+            return first[:200]
+    except OSError:
+        pass
+    return ""
+
+
+def _module_symbol_snippet(files: List[str], root: str, mod: str,
+                           symbols: List[str], limit: int = 10) -> str:
+    """Compact module card for module-fallback get_symbol/context:
+    module docstring + top N symbols with signatures (cheap — byte offsets
+    only, no full source)."""
+    buf = io.StringIO()
+    doc = _module_docstring(files, root, mod)
+    if doc:
+        buf.write("module docstring: %s\n" % doc)
+    shown = [s for s in symbols if s]
+    if not shown:
+        buf.write("(no indexed symbols in this module)\n")
+        return buf.getvalue()
+    buf.write("top %d symbols:\n" % min(len(shown), limit))
+    try:
+        idx = codeloom.build_byte_index(files, root)
+    except Exception:
+        idx = {}
+    for s in shown[:limit]:
+        locs = idx.get(s) or []
+        sig = ""
+        for loc in locs:
+            if loc.get("module") == mod and loc.get("source"):
+                try:
+                    src = loc["source"].strip().splitlines()
+                    if src:
+                        sig = src[0].strip()
+                        if len(sig) > 90:
+                            sig = sig[:90] + "..."
+                except Exception:
+                    sig = ""
+                break
+        buf.write("  %s%s\n" % (s, ("  " + sig) if sig else ""))
+    return buf.getvalue()
+
+
+def _resolve_impact_target(target: str, graph: dict, index: dict,
+                           entry: Dict[str, Any], files: List[str],
+                           root: str) -> Dict[str, Any]:
+    """codeloom_impact accepts BOTH shapes: a module path (the historical
+    contract) and a bare symbol (the papercut fix). Resolution order:
+      1. _resolve_focus (path / package dir / dotted module) against the graph
+      2. module fallback: target as a (possibly suffixed) dotted module
+      3. symbol fallback: find the defining module of a bare symbol via the
+         resident index, then run impact on THAT module
+    Returns {"module": str|None, "note": Optional[str]}."""
+    resolved = _resolve_focus(graph, target, root)
+    if resolved is not None:
+        return {"module": resolved, "note": None}
+    mod = _module_match(target, _module_symbols(entry))
+    if mod is not None:
+        return {"module": mod,
+                "note": f"(resolved via module fallback: '{target}' -> module '{mod}')"}
+    locs = index.get(target)
+    if locs:
+        host = locs[0].get("module")
+        if host and host in graph:
+            return {"module": host,
+                    "note": f"(resolved via symbol fallback: '{target}' -> its module '{host}')"}
+    # last resort: 'mod.path.symbol' -> symbol in module
+    parts = target.split(".")
+    for i in range(len(parts) - 1, 0, -1):
+        cand = parts[i]
+        if cand in index:
+            host = index[cand][0].get("module")
+            if host and host in graph:
+                return {"module": host,
+                        "note": f"(resolved via symbol fallback: '{target}' -> symbol '{cand}' in module '{host}')"}
+    return {"module": None, "note": None}
+
+
+# --------------------------------------------------------------------------- #
 # In-memory index (the "better than daemon" layer).
 # A daemon keeps the index in RAM for fast repeated queries but goes stale and
 # needs a separate process. This keeps the index in memory for the lifetime of
@@ -1508,6 +1718,9 @@ class _Index:
         for f, syms in entry["symbols"].items():
             for name, locs in syms.items():
                 flat.setdefault(name, []).extend(locs)
+        # module->symbols inversion cache, bumped with the flat index so the
+        # module-fallback helpers never serve stale module lists
+        entry["_mod_syms"] = _module_symbols_build(flat)
         return flat
 
     def kg(self, root: str, max_files: int) -> dict:
@@ -1693,6 +1906,35 @@ def _blindspot(target: str) -> str:
                             target, "blindspot")
 
 
+def _summarize_graph_dump(text: str, question: str) -> str:
+    """Collapse an oversized graph dump (ask router) into counts + top-5
+    lines so a natural-language question never floods the agent context.
+    Headers (start with '#') and the module/caller summary line are kept."""
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    head = [ln for ln in lines if ln.startswith("#")]
+    body = [ln for ln in lines if not ln.startswith("#")]
+    counts = [ln for ln in body
+              if ln.strip().startswith(("modules,", "module", "modules"))
+              or ln.strip()[0].isdigit() and "module" in ln.strip()[:20]]
+    edges = [ln for ln in body if "->" in ln or "() ->" in ln]
+    buf = io.StringIO()
+    for h in head:
+        buf.write("%s\n" % h)
+    if counts:
+        buf.write("%s\n" % counts[0].strip())
+    buf.write("(graph summarized for ask — %d edge line(s); "
+              "use codeloom_calls/cross/query for the full dump)\n" % len(edges))
+    shown = 0
+    for ln in body:
+        if "->" not in ln and "() ->" not in ln:
+            continue
+        buf.write("  %s\n" % ln.strip())
+        shown += 1
+        if shown >= 5:
+            break
+    return buf.getvalue()
+
+
 def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any]:
     """Route a natural-language request to the right codeloom tool.
 
@@ -1799,16 +2041,27 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
             return {"content": [{"type": "text", "text": codeloom.render_search(codeloom.build_byte_index(files, root), sym)}]}
         return {"content": [{"type": "text", "text": codeloom.render_task(files, root, q)}]}
 
-    # 3. Call graph / structure — "what calls what / dependencies / map"
+    # 3. Call graph / structure — "what calls what / dependencies / map".
+    # Natural-language flow questions ("how does the request lifecycle work?")
+    # are routed by render_answer's flow gate: when it fires, carry the SAME
+    # honest guidance instead of emitting a graph. Explicit graph requests
+    # stay unchanged; oversized graph dumps (cross/calls) are summarized so
+    # a single ask never floods the agent context.
     if any(k in q for k in ["what calls", "call graph", "dependencies", "imports", "map the",
                             "structure", "what touches", "cross-file", "call path"]):
         if any(k in q for k in ["cross-file", "call path", "what calls what across"]):
-            return {"content": [{"type": "text", "text": codeloom.render_cross_calls(codeloom.build_cross_call_graph(files, root), root)}]}
-        if any(k in q for k in ["what calls", "call graph"]):
-            return {"content": [{"type": "text", "text": codeloom.render_calls(codeloom.build_call_graph_multi(files, root), root)}]}
-        if any(k in q for k in ["dependencies", "imports", "what touches"]):
-            return {"content": [{"type": "text", "text": codeloom.render_graph(codeloom.build_graph(files, root), root)}]}
-        return {"content": [{"type": "text", "text": codeloom.render_text(codeloom.build_map(root, True, max_files))}]}
+            text = codeloom.render_cross_calls(codeloom.build_cross_call_graph(files, root), root)
+        elif any(k in q for k in ["what calls", "call graph"]):
+            text = codeloom.render_calls(codeloom.build_call_graph_multi(files, root), root)
+        elif any(k in q for k in ["dependencies", "imports", "what touches"]):
+            text = codeloom.render_graph(codeloom.build_graph(files, root), root)
+        else:
+            text = codeloom.render_text(codeloom.build_map(root, True, max_files))
+        # ask-graph cap: never dump a huge graph for a natural-language
+        # question — summarize it (counts + top-5 lines) instead.
+        if len(text.split()) > 400:
+            text = _summarize_graph_dump(text, q)
+        return {"content": [{"type": "text", "text": text}]}
 
     # 4. HTTP routes / pub-sub — "what endpoints / what channels"
     if any(k in q for k in ["http route", "endpoint", "api route", "what routes", "url pattern",
@@ -2327,10 +2580,14 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if not module:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'module' argument"}]}
         graph = codeloom.build_graph(files, root)
-        resolved = _resolve_focus(graph, module, root)
-        if resolved is None:
+        index = _INDEX.symbols(root, max_files)
+        entry = _INDEX._get(root, max_files)
+        hit = _resolve_impact_target(module, graph, index, entry, files, root)
+        if hit["module"] is None:
             return {"isError": True, "content": [{"type": "text", "text": f"module not found: {module}"}]}
-        text = codeloom.render_impact(graph, root, resolved)
+        text = codeloom.render_impact(graph, root, hit["module"])
+        if hit["note"]:
+            text = text.rstrip() + "\n\nNOTE: " + hit["note"] + "\n"
     elif name == "codeloom_check_edit":
         symbol = args.get("symbol")
         if not symbol:
@@ -2384,7 +2641,27 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(targets, list) or not all(isinstance(t, str) for t in targets):
             return {"isError": True, "content": [{"type": "text", "text": "'targets' must be an array of strings"}]}
         f = _collect_files(root, max_files)
-        text = codeloom.render_context_card(f, root, targets)
+        # module fallback: module-style targets ('src.flask.app') become the
+        # module's top symbols, marked so the agent knows what happened
+        index = _INDEX.symbols(root, max_files)
+        entry = _INDEX._get(root, max_files)
+        resolved_targets = []
+        notes = []
+        for t in targets:
+            hit = _resolve_symbol_target(t, index, entry)
+            if hit["found"] and hit["note"]:
+                mod = hit["module"] or hit["key"]
+                syms = _module_symbols(entry).get(mod, [])
+                notes.append(f"{t} -> {mod} ({len(syms)} symbols)")
+                for s in syms[:10] or [mod]:
+                    if s not in resolved_targets:
+                        resolved_targets.append(s)
+            elif t not in resolved_targets:
+                resolved_targets.append(t)
+        text = codeloom.render_context_card(f, root, resolved_targets)
+        if notes:
+            text = text.rstrip() + "\n\nNOTE: " + "; ".join(
+                f"'{n}' (resolved via module fallback)" for n in notes) + "\n"
     elif name == "codeloom_answer":
         question = args.get("question")
         if not question:
@@ -2405,6 +2682,18 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             text = codeloom.render_health(files, root, index=idx, calls=kg)
         except Exception:
             text = codeloom.render_health(files, root)
+        # server-version handshake: makes a long-lived (stale) MCP server
+        # detectable — if this differs from the agent's expectation, the
+        # server predates the code and must be restarted (kill + respawn).
+        commit = None
+        try:
+            env = codeloom.meta_envelope(root)
+            commit = env.get("indexed_commit")
+        except Exception:
+            pass
+        text = (f"server_version: {SERVER_VERSION}\n"
+                f"server_file_mtime: {_SERVER_FILE_MTIME}\n"
+                f"index_commit: {commit or '(no git repo / no index)'}\n\n" + text)
     elif name == "codeloom_risk":
         revspec = args.get("revspec") or "HEAD~1..HEAD"
         text = codeloom.render_change_risk(files, root, revspec)
@@ -2447,7 +2736,20 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         symbol = args.get("symbol")
         if not symbol:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
-        text = codeloom.render_similar(files, root, symbol)
+        # module fallback: a module-style target uses the module's top
+        # symbols as the similarity seed, marked so the agent knows
+        index = _INDEX.symbols(root, max_files)
+        entry = _INDEX._get(root, max_files)
+        hit = _resolve_symbol_target(symbol, index, entry)
+        if hit["found"] and hit["note"]:
+            mod = hit["module"] or hit["key"]
+            syms = _module_symbols(entry).get(mod, [])
+            text = f"# similar: {symbol}\n\n{hit['note'] or ''}\n\n"
+            text += _module_symbol_snippet(files, root, mod, syms, limit=10)
+            text += ("\n(module fallback: pass one of the symbols above as the "
+                     "'symbol' argument to run full structural similarity)\n")
+        else:
+            text = codeloom.render_similar(files, root, symbol)
     elif name == "codeloom_deadcode":
         # use the resident in-memory knowledge graph (no re-parse)
         kg_calls = _INDEX.kg(root, max_files)
@@ -2458,16 +2760,44 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
         ctx = args.get("context_lines", 2)
         full = bool(args.get("full", False))
-        # use the in-memory index (incremental, always fresh)
+        # use the in-memory index (incremental, always fresh); a module-style
+        # target ('src.flask.app') falls back to the module's docstring +
+        # top symbols, marked so the agent can tell the two apart.
         index = _INDEX.symbols(root, max_files)
-        locs = index.get(symbol)
-        if not locs:
+        entry = _INDEX._get(root, max_files)
+        hit = _resolve_symbol_target(symbol, index, entry)
+        if not hit["found"]:
             text = f"# get_symbol: {symbol}\nSymbol not found.\n"
+        elif hit["note"] and hit["key"] == hit["module"]:
+            # module fallback: module card (docstring + top symbols) instead
+            # of a single-symbol snippet — the target was a module
+            mod = hit["module"] or hit["key"]
+            syms = _module_symbols(entry).get(mod, [])
+            text = f"# get_symbol: {symbol}\n\n{hit['note']}\n\n"
+            text += _module_symbol_snippet(files, root, mod, syms, limit=10)
+        elif hit["note"]:
+            # dotted-name symbol fallback ('mod.path.symbol'): resolve to the
+            # real symbol and render it normally, keeping the marker
+            resolved_sym = hit["key"]
+            if full:
+                loc = (index.get(resolved_sym) or [None])[0]
+                if loc is None:
+                    text = f"# get_symbol: {symbol}\nSymbol not found.\n"
+                else:
+                    text = (f"# get_symbol: {symbol}\n{loc['module']}:{loc['line']}  [{loc['kind']}]  "
+                            f"bytes {loc['start_byte']}-{loc['end_byte']}  ~{loc['tokens']} tokens\n\n"
+                            f"{loc['source']}\n\n{hit['note']}\n")
+            else:
+                text = codeloom.render_get_symbol(files, root, resolved_sym, ctx, summary=True)
+                text = text.rstrip() + f"\n\n{hit['note']}\n"
         elif full:
-            loc = locs[0]
-            text = (f"# get_symbol: {symbol}\n{loc['module']}:{loc['line']}  [{loc['kind']}]  "
-                    f"bytes {loc['start_byte']}-{loc['end_byte']}  ~{loc['tokens']} tokens\n\n"
-                    f"{loc['source']}\n")
+            loc = (index.get(symbol) or [None])[0]
+            if loc is None:
+                text = f"# get_symbol: {symbol}\nSymbol not found.\n"
+            else:
+                text = (f"# get_symbol: {symbol}\n{loc['module']}:{loc['line']}  [{loc['kind']}]  "
+                        f"bytes {loc['start_byte']}-{loc['end_byte']}  ~{loc['tokens']} tokens\n\n"
+                        f"{loc['source']}\n")
         else:
             # summary-first (95%+ token savings)
             text = codeloom.render_get_symbol(files, root, symbol, ctx, summary=True)
@@ -2611,7 +2941,16 @@ def serve() -> int:
                 "result": {
                     "protocolVersion": PROTOCOL_VERSION,
                     "capabilities": {"tools": {}, "resources": {}},
-                    "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
+                    "serverInfo": {
+                        "name": SERVER_NAME,
+                        "version": SERVER_VERSION,
+                        # stale-server handshake: exact file mtime + content
+                        # hash of this server file at load time. If they
+                        # differ from the on-disk file, this long-lived server
+                        # predates the code — restart it (kill + respawn).
+                        "server_file_mtime": _SERVER_FILE_MTIME,
+                        "server_sha256": _SERVER_SHA,
+                    },
                 },
             })
         elif method == "resources/list":
@@ -2642,9 +2981,15 @@ def serve() -> int:
                             "index_age_days": None,
                             "indexed_commit": None,
                             "stale_warning": False,
+                            "server_version": SERVER_VERSION,
+                            "server_file_mtime": _SERVER_FILE_MTIME,
+                            "server_sha256": _SERVER_SHA,
                         }
                     else:
                         result["_meta"] = codeloom.meta_envelope(root)
+                        result["_meta"]["server_version"] = SERVER_VERSION
+                        result["_meta"]["server_file_mtime"] = _SERVER_FILE_MTIME
+                        result["_meta"]["server_sha256"] = _SERVER_SHA
                 except Exception:
                     pass
             _send({"jsonrpc": "2.0", "id": msg_id, "result": result})

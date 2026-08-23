@@ -188,27 +188,95 @@ static char *match_cdef(const char *line) {
         }
         return NULL;
     }
-    /* C/C++/Rust/JS: "name(" where name is a plain identifier at start,
-       and there's a '{' or the line ends with ')' (function decl). Avoid
-       keywords: if/for/while/switch/return. */
+    /* C/C++/Java/Rust/JS: "[qualifiers] returntype name(" — mirrors the
+       Python engine's .c rule r"^\s*(?:static\s+)?[\w\*]+\s+(\w+)\s*\(",
+       extended to multi-word return types ("unsigned long",
+       "struct node *", "const char *"). Control keywords that take "("
+       (if/while/for/switch/return/sizeof/...) are rejected outright: the
+       Python regex is greedy and would match `if (`; the C engine is
+       correct. Bare `name(` keeps working (JS/legacy). */
     {
-        const char *start = p;
-        while (isalnum((unsigned char)*p) || *p == '_') p++;
-        if (p > start && *p == '(') {
-            size_t len = (size_t)(p - start);
-            char word[256];
-            if (len < 256) {
-                memcpy(word, start, len); word[len] = '\0';
-                static const char *kw[] = {"if","for","while","switch","return",
-                                           "sizeof","typeof","int","char","void",
-                                           "struct","union","enum","sizeof"};
-                for (int i = 0; i < 14; i++) {
-                    if (strcmp(word, kw[i]) == 0) return NULL;
+        char word[128];
+        /* optional storage-class / qualifier words: static extern inline ... */
+        for (;;) {
+            const char *w = p;
+            while (isalnum((unsigned char)*w) || *w == '_') w++;
+            size_t wlen = (size_t)(w - p);
+            if (wlen > 0 && wlen < sizeof(word)) {
+                memcpy(word, p, wlen); word[wlen] = '\0';
+                if (strcmp(word, "static") == 0 || strcmp(word, "extern") == 0 ||
+                    strcmp(word, "inline") == 0 || strcmp(word, "const") == 0 ||
+                    strcmp(word, "register") == 0 || strcmp(word, "volatile") == 0 ||
+                    strcmp(word, "__inline") == 0 || strcmp(word, "__inline__") == 0 ||
+                    strcmp(word, "__restrict") == 0 || strcmp(word, "__restrict__") == 0 ||
+                    strcmp(word, "__const") == 0 || strcmp(word, "__extension__") == 0) {
+                    p = w;
+                    while (isspace((unsigned char)*p)) p++;
+                    continue;
                 }
+            }
+            break;
+        }
+        /* typedef lines are declarations, not function definitions */
+        {
+            const char *w = p;
+            while (isalnum((unsigned char)*w) || *w == '_') w++;
+            if ((size_t)(w - p) == 7 && strncmp(p, "typedef", 7) == 0) return NULL;
+        }
+        static const char *kw[] = {"if","while","for","switch","return",
+                                   "sizeof","typeof","do","else","case","catch",
+                                   "asm","__asm__","__attribute__",
+                                   "static_assert"};
+        static const char *type_kw[] = {"int","char","short","long","signed",
+                                        "unsigned","float","double","void",
+                                        "struct","union","enum","bool","size_t"};
+        for (;;) {
+            while (isspace((unsigned char)*p)) p++;
+            if (*p == '*') {
+                const char *e = p + 1;
+                while (isspace((unsigned char)*e)) e++;
+                if (*e == '(') return NULL;     /* "int (*fp)(" fn-pointer decl */
+                p++;
+                continue;
+            }
+            const char *start = p;
+            while (isalnum((unsigned char)*p) || *p == '_') p++;
+            if (p == start) return NULL;        /* no identifier before '(' */
+            size_t len = (size_t)(p - start);
+            if (len >= sizeof(word)) return NULL;
+            memcpy(word, start, len); word[len] = '\0';
+            const char *q = p;
+            while (isspace((unsigned char)*q)) q++;
+            int is_ctrl = 0, is_type = 0;
+            for (size_t i = 0; i < sizeof(kw)/sizeof(kw[0]); i++)
+                if (strcmp(word, kw[i]) == 0) { is_ctrl = 1; break; }
+            for (size_t i = 0; i < sizeof(type_kw)/sizeof(type_kw[0]); i++)
+                if (strcmp(word, type_kw[i]) == 0) { is_type = 1; break; }
+            if (*q == '(') {
+                if (is_ctrl) return NULL;       /* if (x) / while (p) / for (;;) */
+                if (is_type) continue;          /* "int(" malformed — keep scanning */
+                /* identifier followed by '(' — the function name */
                 char *r = malloc(len + 1);
                 memcpy(r, word, len); r[len] = '\0';
                 return r;
             }
+            if (is_ctrl) return NULL;           /* return 0; / else { ... } */
+            /* Not followed by '(': this word is part of the return type
+               (multi-word type, or a user type name) only if the line can
+               still be a function def — i.e. the next char is '*', another
+               identifier (type name), or the word is a known type keyword.
+               An identifier followed by '=' / ';' / ',' etc. means a
+               variable declaration / expression, not a function def. */
+            if (*q == '*') { p = q; continue; }
+            if (is_type) continue;
+            {
+                const char *q2 = q;
+                while (isspace((unsigned char)*q2)) q2++;
+                if (*q2 == '*' || isalnum((unsigned char)*q2) || *q2 == '_') {
+                    p = q; continue;  /* "struct node *" / "node_t foo" */
+                }
+            }
+            return NULL;
         }
     }
     return NULL;

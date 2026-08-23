@@ -637,6 +637,22 @@ new feature.
 - Update `README.md` (usage, feature table, roadmap) and `LAUNCH.md` if launch copy changes.
 
 ## Pitfalls
+- **Stale long-lived MCP server (v0.79.0+ version handshake)**: a resident
+  MCP server keeps serving whatever code was on disk when it started — after
+  a fix lands, the OLD behavior persists until restart even though
+  `SERVER_VERSION` is unchanged. Detect it: `initialize` `serverInfo` now
+  carries `server_file_mtime` + `server_sha256` (mtime + content hash of
+  `codeloom-mcp.py` at load); `codeloom_health` prints a header
+  (`server_version` / `server_file_mtime` / `index_commit`); every
+  `tools/call` `_meta` carries the same identity. If these differ from the
+  on-disk file, the server predates the code — **restart it (kill +
+  respawn)** before re-testing.
+- **Symbol-tool targets accept module paths too** (v0.79.0): the index keys
+  on bare symbol names, but `codeloom_get_symbol` / `codeloom_context` /
+  `codeloom_similar` / `codeloom_remember` fall back to module resolution
+  when a dotted target ('src.flask.app') misses, and `codeloom_impact`
+  accepts a bare symbol ('wsgi_app') resolving to its defining module —
+  both marked '(resolved via module/symbol fallback)' in the output.
 - **Optional engines auto-build — never a download** (`--engine c` / `--engine rust`):
   the first run compiles the committed `codeloom_core.c` (`cc -O3`, ~2s) or
   `codeloom_core_rs.rs` (`rustc -O`) locally — no network, no permission,

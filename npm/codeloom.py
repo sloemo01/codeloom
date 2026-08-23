@@ -978,6 +978,80 @@ def render_tree(node: Node, prefix: str = "", is_root: bool = True) -> List[str]
                 out.append(f"{prefix}    {o}")
     return out
 
+# --------------------------------------------------------------------------- #
+# Compact / summary-first output layer (--compact, CODELOOM_COMPACT=1, MCP)
+# --------------------------------------------------------------------------- #
+# An agent pays for every token that lands in its context. The expensive
+# renderers (health, map, calls, cross, graph) default to summary-first when
+# serving the MCP server (agent-facing), while bare terminal invocations stay
+# verbose. --compact (or CODELOOM_COMPACT=1) opts the CLI in; --full forces
+# the full output even from MCP.
+COMPACT_MAX_LIMIT = 5          # rows shown in summary mode (top-N)
+COMPACT_TOKEN_CAP = 400        # summary-first renders self-trim below this
+COMPACT_HARD_CAP = 600         # any render beyond this is hard-truncated
+
+def _in_mcp() -> bool:
+    """True when codeloom is imported by the MCP server (codeloom-mcp.py /
+    codeloom_mcp.py shim / 'codeloom-mcp' console script). Agent-facing
+    output must default to compact; the CLI never matches."""
+    base = os.path.basename(sys.argv[0] or "").replace(".py", "")
+    return base.startswith("codeloom-mcp") or base.startswith("codeloom_mcp")
+
+def _compact_default(flag: Optional[bool]) -> bool:
+    """Resolve compact mode: explicit flag wins, else CODELOOM_COMPACT=1,
+    else MCP context (agent context is expensive -> compact by default)."""
+    if flag is not None:
+        return flag
+    if os.environ.get("CODELOOM_COMPACT", "").lower() in ("1", "true", "yes", "on"):
+        return True
+    return _in_mcp()
+
+def _trim(lines: List[str], limit: int) -> List[str]:
+    """Cap a rendered body: lines beyond `limit` collapse into a single
+    '... N more (use --full)' summary line (the shared --compact helper)."""
+    if len(lines) <= limit:
+        return lines
+    keep = max(1, limit - 1)  # reserve one line for the footer
+    return lines[:keep] + ["  ... %d more (use --full)" % (len(lines) - keep)]
+
+def _cap_output(text: str, hard: int = COMPACT_HARD_CAP) -> str:
+    """Hard token cap for agent-facing renders: output above `hard` tokens is
+    truncated with a footer so a single tool call never floods a context."""
+    if estimate_tokens(text) <= hard:
+        return text
+    budget = hard * 4 - 48  # chars; leave room for the footer line
+    lines = text.splitlines()
+    out: List[str] = []
+    used = 0
+    for ln in lines:
+        if used + len(ln) + 1 > budget:
+            break
+        out.append(ln)
+        used += len(ln) + 1
+    out.append("... (truncated at ~%d tokens — use --full for the complete output)" % hard)
+    return "\n".join(out)
+
+def _tree_file_count(node: Node) -> int:
+    """Number of files under a tree node (dirs recurse, files count)."""
+    n = 0
+    for c in node.children:
+        n += _tree_file_count(c) if c.is_dir else 1
+    return n
+
+def _top_level_counts(tree: Node) -> List[Tuple[str, int]]:
+    """File counts per top-level directory (compact map); root-level files
+    group under '(root)'. Sorted by count descending."""
+    counts: Dict[str, int] = {}
+    root_files = 0
+    for c in tree.children:
+        if c.is_dir:
+            counts[c.name + "/"] = _tree_file_count(c)
+        else:
+            root_files += 1
+    if root_files:
+        counts["(root)"] = root_files
+    return sorted(counts.items(), key=lambda kv: -kv[1])
+
 def entry_points(files: List[str]) -> List[str]:
     """Pick the highest-signal entry points, not every README/__init__."""
     eps = [f for f in files if os.path.basename(f) in ENTRY_HINTS]
@@ -2454,7 +2528,8 @@ def build_graph_multi(files: List[str], root: str, parallel: bool = False) -> di
             graph[mod] = deps
     return graph
 
-def render_graph_multi(graph: dict, root: str, start: Optional[str] = None) -> str:
+def render_graph_multi(graph: dict, root: str, start: Optional[str] = None,
+                       compact: Optional[bool] = None) -> str:
     buf = io.StringIO()
     if start:
         fs = focus_subgraph(graph, start)
@@ -2469,6 +2544,10 @@ def render_graph_multi(graph: dict, root: str, start: Optional[str] = None) -> s
     buf.write("# import graph (multi-language)\n")
     edges = [(m, d) for m, deps in sorted(graph.items()) for d in sorted(deps)]
     buf.write(f"{len(graph)} modules, {len(edges)} edges\n\n")
+    if _compact_default(compact):
+        rows = ["  %s -> %s" % (m, d) for m, d in edges[:COMPACT_MAX_LIMIT]]
+        out = buf.getvalue() + "\n".join(_trim(rows, COMPACT_MAX_LIMIT)) + "\n"
+        return _cap_output(out)
     for m, d in edges:
         buf.write(f"  {m} -> {d}\n")
     return buf.getvalue()
@@ -2513,7 +2592,8 @@ def build_cross_repo(repos: List[str], max_files: int = 20000) -> dict:
                 result["graph"].setdefault(other_mod, set()).add(full_mod)
     return result
 
-def render_cross_repo(repos: List[str], max_files: int = 20000) -> str:
+def render_cross_repo(repos: List[str], max_files: int = 20000,
+                      compact: Optional[bool] = None) -> str:
     cr = build_cross_repo(repos, max_files)
     buf = io.StringIO()
     buf.write("# cross-repo knowledge graph\n")
@@ -2523,10 +2603,16 @@ def render_cross_repo(repos: List[str], max_files: int = 20000) -> str:
     buf.write(f"  {len(cr['repos'])} repo(s), {sum(len(v['modules']) for v in cr['repos'].values())} modules\n\n")
     for name, info in cr["repos"].items():
         buf.write(f"## {name} ({info['files']} files, {len(info['modules'])} modules)\n")
-        for mod in info["modules"][:20]:
-            buf.write(f"  {mod}\n")
-        if len(info["modules"]) > 20:
-            buf.write(f"  ... (+{len(info['modules'])-20} more)\n")
+        if _compact_default(compact):
+            for mod in info["modules"][:COMPACT_MAX_LIMIT]:
+                buf.write(f"  {mod}\n")
+            if len(info["modules"]) > COMPACT_MAX_LIMIT:
+                buf.write(f"  ... (+{len(info['modules'])-COMPACT_MAX_LIMIT} more, use --full)\n")
+        else:
+            for mod in info["modules"][:20]:
+                buf.write(f"  {mod}\n")
+            if len(info["modules"]) > 20:
+                buf.write(f"  ... (+{len(info['modules'])-20} more)\n")
         buf.write("\n")
     # cross-repo edges
     buf.write("## Cross-repo edges (service-to-service)\n")
@@ -2544,7 +2630,8 @@ def render_cross_repo(repos: List[str], max_files: int = 20000) -> str:
     else:
         buf.write("  (no package-level cross-repo imports detected)\n")
     buf.write("\n# Build one graph across your services. Query any repo in the set.\n")
-    return buf.getvalue()
+    out = buf.getvalue()
+    return _cap_output(out) if _compact_default(compact) else out
 
 def render_export(root: str, out_path: str, max_files: int = 20000) -> str:
     """--export: write a portable, self-contained graph snapshot (symbols +
@@ -2682,7 +2769,8 @@ def build_call_graph(files: List[str], root: str) -> dict:
                     calls[mod][caller] = callees
     return calls
 
-def render_calls(calls: dict, root: str, start: Optional[str] = None) -> str:
+def render_calls(calls: dict, root: str, start: Optional[str] = None,
+                 compact: Optional[bool] = None) -> str:
     buf = io.StringIO()
     if start:
         # focus: show calls in one module
@@ -2694,10 +2782,16 @@ def render_calls(calls: dict, root: str, start: Optional[str] = None) -> str:
     buf.write("# function call graph\n")
     total = sum(len(c) for c in calls.values())
     buf.write(f"{len(calls)} modules, {total} callers\n\n")
+    rows = []
     for mod, funcs in sorted(calls.items()):
         for caller, callees in sorted(funcs.items()):
             if callees:
-                buf.write(f"  {mod}.{caller}() -> {', '.join(sorted(callees))}\n")
+                rows.append("  %s.%s() -> %s" % (mod, caller, ", ".join(sorted(callees))))
+    if _compact_default(compact):
+        out = buf.getvalue() + "\n".join(_trim(rows, COMPACT_MAX_LIMIT)) + "\n"
+        return _cap_output(out)
+    for r in rows:
+        buf.write(r + "\n")
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
@@ -2831,7 +2925,8 @@ def build_cross_call_graph(files: List[str], root: str) -> dict:
                 calls[mod][caller] = callees
     return calls
 
-def render_cross_calls(calls: dict, root: str, start: Optional[str] = None) -> str:
+def render_cross_calls(calls: dict, root: str, start: Optional[str] = None,
+                       compact: Optional[bool] = None) -> str:
     buf = io.StringIO()
     if start:
         buf.write(f"# cross-file calls in {start}\n")
@@ -2842,10 +2937,16 @@ def render_cross_calls(calls: dict, root: str, start: Optional[str] = None) -> s
     buf.write("# cross-file call graph\n")
     total = sum(len(c) for c in calls.values())
     buf.write(f"{len(calls)} modules, {total} callers\n\n")
+    rows = []
     for mod, funcs in sorted(calls.items()):
         for caller, callees in sorted(funcs.items()):
             if callees:
-                buf.write(f"  {mod}.{caller}() -> {', '.join(sorted(callees))}\n")
+                rows.append("  %s.%s() -> %s" % (mod, caller, ", ".join(sorted(callees))))
+    if _compact_default(compact):
+        out = buf.getvalue() + "\n".join(_trim(rows, COMPACT_MAX_LIMIT)) + "\n"
+        return _cap_output(out)
+    for r in rows:
+        buf.write(r + "\n")
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
@@ -4010,8 +4111,12 @@ def compute_health(files: List[str], root: str, index: dict, calls: dict,
     }
 
 def render_health(files: List[str], root: str, index: Optional[dict] = None,
-                  calls: Optional[dict] = None) -> str:
-    """--health: per-file 0-10 score + findings, ranked worst-first."""
+                  calls: Optional[dict] = None,
+                  compact: Optional[bool] = None) -> str:
+    """--health: per-file 0-10 score + findings, ranked worst-first.
+    Compact mode (MCP default / --compact) is summary-first: totals line +
+    top-5 worst modules with a one-line why, instead of the full findings
+    dump that costs agents ~4k tokens on real repos."""
     t0 = time.time()
     if index is None:
         index = build_byte_index(files, root)
@@ -4025,8 +4130,20 @@ def render_health(files: List[str], root: str, index: Optional[dict] = None,
               % (s["avg_score"], s["files_scanned"], s["total_findings"], dt))
     if not s["worst"]:
         buf.write("No structural findings. Clean.\n")
-        out = buf.getvalue()
-        return out
+        return buf.getvalue()
+    if _compact_default(compact):
+        # summary-first: top-5 worst modules, name + score + one-line why.
+        # The full dump stays available via --full (CLI) or --full (MCP).
+        buf.write("\n## Worst files (top 5 of %d with findings; use --full for all)\n"
+                  % s["files_with_findings"])
+        rows = []
+        for w in s["worst"][:COMPACT_MAX_LIMIT]:
+            rows.append("  %s — %.1f/10 · %s" % (w["file"], w["score"], w["top"]))
+        if s["files_with_findings"] > COMPACT_MAX_LIMIT:
+            rows.append("  ... %d more files with findings (use --full)"
+                        % (s["files_with_findings"] - COMPACT_MAX_LIMIT))
+        buf.write("\n".join(rows) + "\n")
+        return _cap_output(buf.getvalue())
     buf.write("\n## Worst files\n")
     for w in s["worst"]:
         buf.write("  %s — %.1f/10 · %s\n" % (w["file"], w["score"], w["top"]))
@@ -5133,20 +5250,68 @@ def render_context_card(files: List[str], root: str, targets: List[str]) -> str:
         out = "\n".join(lines[:120]) + "\n(truncated to 120 lines)\n"
     return out
 
+_FLOW_ANSWER_TERMS = ("lifecycle", "flow", "pipeline", "request path",
+                      "how does", "call path", "data path", "process flow",
+                      "end to end", "how is the", "how the request")
+
+def _answer_is_flow_question(question: str) -> bool:
+    """True when the question asks about a lifecycle/flow/process rather than
+    naming a concrete symbol. Such questions must never be answered with a
+    single token-overlap symbol guess."""
+    ql = question.lower()
+    return any(t in ql for t in _FLOW_ANSWER_TERMS)
+
+
+def _answer_flow_fallback(files: List[str], root: str, question: str,
+                          top: dict) -> str:
+    """Honest no-confident-match answer for lifecycle/flow questions: never
+    present the token-overlap guess as a real answer. Gives the task-style
+    module ranking (--task parity) + next-step guidance instead."""
+    buf = io.StringIO()
+    buf.write("confidence: no confident match\n\n")
+    buf.write("# answer: %s\n" % question)
+    buf.write("\nNo confident match — this looks like a lifecycle/flow question.\n")
+    buf.write("The best symbol hit (%s: %s:%s, score %.2f) is a token-overlap\n"
+              % (top.get("name", "?"), top.get("module", "?"),
+                 top.get("line", 0), float(top.get("score", 0) or 0)))
+    buf.write("guess, not a confirmed answer.\n")
+    buf.write("\nUse --task '<query>' for module ranking + --impact <candidate>\n")
+    buf.write("for blast radius, or --pack for a task bundle.\n")
+    try:
+        task = render_task(files, root, question, top=3)
+        rows = [ln for ln in task.splitlines()
+                if ln.strip() and not ln.startswith("#")]
+        if rows:
+            buf.write("\n## task-ranked modules\n")
+            for ln in rows:
+                buf.write("%s\n" % ln)
+    except Exception:
+        pass
+    return buf.getvalue()
+
+
 def render_answer(files: List[str], root: str, question: str) -> str:
-    """One-call cited answer (repowise get_answer parity): hybrid search ->
-    top hit with honest confidence + summary-first source + callers/callees.
+    """One-shot cited answer (repowise get_answer parity): exact match ->
+    single hit with honest confidence + summary-first source + callers/callees.
     Confidence thresholds calibrated on the zero-dep scoring scale
-    (~0.7-1.9 observed; exact class match ~1.8, weak partial ~0.7)."""
+    (~0.7-1.9 observed; exact class match ~1.8, weak partial ~0.7).
+
+    Two semantic gates, in order:
+      1. FLOW GATE — lifecycle/flow questions ("how does the request
+         lifecycle work?") that only produce a token-overlap heuristic hit
+         are NOT answered with a single symbol. They get the task-style
+         module ranking + guidance instead (never a wrong confident symbol).
+      2. CONFIDENCE GATE —  a heuristic/partial match is never labeled
+         "high"; only a full name-token match (>= the 1.8 floor) can be.
+    """
     results = hybrid_search(files, root, question, limit=3)
     if not results:
         return "confidence: low\n\nNo matching symbols."
     top = results[0]
     score = float(top.get("score", 0) or 0)
-    conf = "high" if score >= 1.5 else ("medium" if score >= 0.9 else "low")
-    # Heuristic gate derived from the hybrid_search scoring scale
+    # Heuristic gate is standard on the hybrid_search scoring scale
     # (lex = 2.0 per exact name-token match, * kind_b * (0.7 + size_b),
-    # size factor >= 0.9): a single-token FULL match floors at
+    # size factor >= 0.9): a single full match token floors at
     # 2.0 * 1.0 * 0.9 = 1.8 — any score below that cannot be a full match.
     # Additionally, every query token must appear in the top hit's name
     # (exact or substring); a token that contributes only via module/
@@ -5161,6 +5326,22 @@ def render_answer(files: List[str], root: str, question: str) -> str:
     name_covers = all(
         t in top_name_toks or t in top_name_lc for t in q_tokens)
     heuristic_match = (score < full_match_floor) or not name_covers
+    # Gate 1: flow/lifecycle questions with only a heuristic hit -> honest
+    # no-confident-match + task-style module ranking, never a symbol guess.
+    # Only when the top hit is a WEAK partial (sub-threshold or a token that
+    # never touches the name) — a genuine multi-token full match keeps the
+    # confident answer path even if the question also contains flow words.
+    if heuristic_match and _answer_is_flow_question(question):
+        exact_tokens = [t for t in q_tokens
+                        if t in top_name_toks or t in top_name_lc]
+        if len(exact_tokens) <= 1:
+            return _answer_flow_fallback(files, root, question, top)
+    # Gate 2: a heuristic/partial match is never "high" — only a full
+    # name-token match (>= the 1.8 floor) qualifies as confident.
+    if heuristic_match:
+        conf = "low"
+    else:
+        conf = "high" if score >= 1.5 else ("medium" if score >= 0.9 else "low")
     buf = io.StringIO()
     buf.write("confidence: %s\n\n" % conf)
     buf.write("# answer: %s\n" % question)
@@ -5931,18 +6112,160 @@ def _module_preview(path: str, max_chars: int = 200) -> str:
     except OSError:
         return ""
 
+# --------------------------------------------------------------------------- #
+# Structural-first --task ranking (entry points + call-graph centrality beat
+# keyword hits; keywords are a capped tiebreaker, never the primary signal).
+# Deterministic: pure AST/regex over the module graph, stable sort, no LLM.
+# --------------------------------------------------------------------------- #
+
+_ENTRY_BASENAMES = {
+    "app", "main", "server", "api", "index", "cli", "router",
+    "wsgi", "asgi", "views", "handler", "controller", "service",
+}
+
+def _package_exported_names(files: List[str], root: str) -> set:
+    """Collect names re-exported by package __init__ files
+    (`from .app import Flask as Flask`, `from . import json as json`).
+
+    A module that DEFINES one of these names is the package's entry point —
+    e.g. class Flask lives in flask/app.py, so src.flask.app is the module
+    agents should start from for app-lifecycle tasks."""
+    exported: set = set()
+    for f in files:
+        if os.path.basename(f) != "__init__.py":
+            continue
+        ext = os.path.splitext(f)[1].lower()
+        if ext not in (".py", ".pyi", ".pyw"):
+            continue
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        clean = _strip_strings_comments(text, ext)
+        for m in re.finditer(r"^\s*from\s+[\w.]+\s+import\s+(.+)$", clean, re.M):
+            for name in m.group(1).split(","):
+                name = name.strip()
+                if name.startswith("("):
+                    name = name.lstrip("(").strip()
+                alias = name.split(" as ")[-1].strip() if " as " in name else name
+                if re.match(r"^[A-Za-z_]\w*$", alias):
+                    exported.add(alias)
+        for m in re.finditer(r"^\s*from\s+\.\s+import\s+(.+)$", clean, re.M):
+            for name in m.group(1).split(","):
+                alias = name.strip().split(" as ")[-1].strip()
+                if re.match(r"^[A-Za-z_]\w*$", alias):
+                    exported.add(alias)
+    return exported
+
+def _entry_point_score(path: str, root: str, exported: set) -> int:
+    """Structural entry-point signal for a module (0..8, deterministic):
+    +4 defines a class the package re-exports (the entry class),
+    +3 defines a class named after the module itself,
+    +3 route/URL decorators (HTTP entry points),
+    +2 create_app/factory or main entry function,
+    +2 __main__ guard,
+    +2 conventional entry basename (app/main/cli/...)."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in (".py", ".pyi", ".pyw"):
+        return 0
+    mod = module_name_of(path, root)
+    base = mod.rsplit(".", 1)[-1] if "." in mod else mod
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return 0
+    clean = _strip_strings_comments(text, ext)
+    s = 0
+    for m in re.finditer(r"^class\s+(\w+)", clean, re.M):
+        if m.group(1) in exported:
+            s += 4  # package entry class (class Flask in flask/app.py)
+            break
+    if re.search(r"^class\s+" + re.escape(base) + r"\b", clean, re.M):
+        s += 3  # class named after the module (its own entry point)
+    if re.search(r"@[\w.]*\.(?:route|get|post|put|delete|patch|use)\s*\(", clean):
+        s += 3  # route decorators — URL entry points
+    if re.search(r"^def\s+(?:create_app|init_app|main|run|serve)\s*\(", clean, re.M):
+        s += 2  # factory / entry function
+    if re.search(r"if\s+__name__\s*==\s*['\"]__main__['\"]", clean):
+        s += 2  # runnable entry script
+    if base in _ENTRY_BASENAMES:
+        s += 2
+    return min(s, 8)
+
+def task_structural_rank(files: List[str], root: str, task: str, top: int = 10) -> List[dict]:
+    """Structural-first ranking for --task.
+
+    Score = (entry_point + centrality) * 10 + capped keyword delta.
+      - entry_point: does this module define the entry class / routes / a
+        factory or main? (the code agents must touch for app-level tasks)
+      - centrality: direct import in-degree + cross-module call edges
+        (hubs the task's flow actually passes through)
+      - keyword hits: capped, tie-break only — docstring word-count matches
+        (e.g. json.provider's 'response' docstring) can NEVER outrank
+        structural relevance.
+    Deterministic: same repo + same query -> same order, every run."""
+    task_tokens = _tokenize(task)
+    if not task_tokens:
+        return []
+    exported = _package_exported_names(files, root)
+    # import graph (multi-language): direct in-degree = who imports this module
+    graph = build_graph_multi(files, root)
+    indeg: dict = {}
+    for mod, deps in graph.items():
+        for d in deps:
+            indeg[d] = indeg.get(d, 0) + 1
+    # call graph: cross-module call edges (callers of the module's functions + 
+    # modules the module's functions call into)
+    calls = build_cross_call_graph(files, root)
+    call_out: dict = {}
+    for mod, funcs in calls.items():
+        for caller, callees in funcs.items():
+            for callee in callees:
+                cm = callee.rsplit(".", 1)[0]
+                if cm and cm != mod:
+                    call_out.setdefault(mod, set()).add(cm)
+    call_in: dict = {}
+    for mod, targets in call_out.items():
+        for t in targets:
+            call_in[t] = call_in.get(t, 0) + 1
+
+    scored = []
+    for f in files:
+        ext = os.path.splitext(f)[1].lower()
+        if ext not in LANG_RULES and ext not in IMPORT_LANG_RULES:
+            continue
+        mod = module_name_of(f, root)
+        toks = _module_tokens(f)
+        overlap = len(task_tokens & toks)
+        if overlap == 0:
+            continue
+        entry = _entry_point_score(f, root, exported)
+        hub = min(len(call_out.get(mod, set())) + call_in.get(mod, 0), 8)
+        centrality = min(indeg.get(mod, 0), 10) + hub
+        centrality = min(centrality, 12)
+        # keyword hits: capped tiny delta — structural signals dominate
+        mod_tokens = _tokenize(mod)
+        name_bonus = min(len(task_tokens & mod_tokens), 3)
+        score = (centrality + entry) * 10 + min(overlap, 2) * 2 + name_bonus
+        scored.append({"module": mod, "path": f, "score": score,
+                       "overlap": overlap, "centrality": centrality,
+                       "entry": entry})
+    scored.sort(key=lambda s: (-s["score"], s["module"]))
+    return scored[:top]
+
 def render_task(files: List[str], root: str, task: str, top: int = 10) -> str:
-    results = edit_relevance(files, root, task, top)
+    results = task_structural_rank(files, root, task, top)
     buf = io.StringIO()
     buf.write(f"# task: {task}\n")
     if not results:
         buf.write("No modules matched the task. Try different keywords.\n")
         return buf.getvalue()
-    buf.write(f"Top {len(results)} relevant modules (by edit relevance — anchor distance + call path):\n\n")
+    buf.write(f"Top {len(results)} relevant modules (structural relevance — entry points + call-graph centrality, keyword tie-break):\n\n")
     for i, r in enumerate(results, 1):
-        dist = r.get("anchor_dist", "?")
         buf.write(f"{i}. {r['module']}  (score {r['score']}, {r['overlap']} keyword hits, "
-                  f"anchor distance {dist})\n")
+                  f"entry {r['entry']} + centrality {r['centrality']})\n")
     return buf.getvalue()
 
 # --------------------------------------------------------------------------- #
@@ -6003,8 +6326,26 @@ def render_pack(files: List[str], root: str, task: str, top: int = 8,
         buf.write(f"  {i}. {r['path']}  (anchor distance {dist}, {r['overlap']} keyword hits)\n")
     buf.write("\n")
 
-    # 2. THE RELEVANT CODE — byte-precise, embedded, capped
+    # 2. THE RELEVANT CODE — byte-precise, embedded, capped.
+    # Symbol selection follows the task, not file order: functions whose
+    # bodies hit the task's anchor tokens first, then call-graph centrality
+    # (hub score = inbound callers + outbound callees). That makes the
+    # module's entry/dispatch chain — the functions reachable from route
+    # registration -> request dispatch — what gets embedded, instead of
+    # docstring-matched helpers like `_make_timedelta`. Deterministic:
+    # hits desc, hub desc, name length asc, then line order.
     buf.write("## 2. THE RELEVANT CODE (byte-precise, embedded)\n")
+    calls = build_call_graph_multi(files, root)
+    hit_tokens = _anchor_symbols(task) or _tokenize(task)
+    # reverse index: callee -> set of callers (intra- + inter-module), used
+    # for the hub score. Sets only contribute their size — deterministic.
+    callers_of: dict = {}
+    all_defined: set = set()
+    for cm, funcs in calls.items():
+        all_defined |= set(funcs)
+        for caller, callees in funcs.items():
+            for callee in callees:
+                callers_of.setdefault(callee, set()).add(caller)
     for r in results:
         path = r["path"]
         ext = os.path.splitext(path)[1].lower()
@@ -6019,7 +6360,29 @@ def render_pack(files: List[str], root: str, task: str, top: int = 8,
         def_re, _ = CALL_LANG_RULES.get(ext, (None, None))
         if def_re is None:
             continue
-        # embed each top-level symbol, capped at ~40 lines / ~200 tokens
+        # local defined names: the global graph (tree-sitter) drops methods
+        # whose calls are all attribute calls (`self.x()`), so re-add this
+        # module's own def-regex names for the call-site scan below.
+        local_defined = set(all_defined)
+        for dm in re.finditer(def_re, text, re.MULTILINE):
+            dn = next((g for g in dm.groups() if g), None)
+            if dn:
+                local_defined.add(dn)
+        # call sites per defined name in this module (attribute calls like
+        # `self.dispatch_request(...)` included; def lines excluded) — so the
+        # dispatch chain hubs up even though the global graph ignores methods
+        call_sites: dict = {}
+        strip = _strip_strings_comments(text, ext)
+        for line, clean_line in zip(text.splitlines(), strip.splitlines()):
+            if re.match(def_re, clean_line):
+                continue  # definition line, not a call site
+            for cm in re.finditer(r"(?:\w+\.)?(\w+)\s*\(", clean_line):
+                c = cm.group(1)
+                if c in local_defined:
+                    call_sites[c] = call_sites.get(c, 0) + 1
+        # score each symbol: (hit, hub, name_len, line) -> embed top 12
+        mod_calls = calls.get(mod, {})
+        symbols = []
         for m in re.finditer(def_re, text, re.MULTILINE):
             name = next((g for g in m.groups() if g), None)
             if not name:
@@ -6028,6 +6391,15 @@ def render_pack(files: List[str], root: str, task: str, top: int = 8,
             # extract the symbol body (up to ~40 lines)
             lines = text[m.start():].splitlines()
             body = "\n".join(lines[:40])
+            hit = 1 if (hit_tokens & _tokenize(body)) else 0
+            hub = (len(callers_of.get(name, ()))
+                   + min(call_sites.get(name, 0), 20)
+                   + len(mod_calls.get(name, ())))
+            symbols.append((hit, hub, len(name), line, name, body, lines))
+        # task-relevant first: keyword hits, then hubs (dispatch chain),
+        # then shorter names, then file order. Deterministic across runs.
+        symbols.sort(key=lambda s: (-s[0], -s[1], s[2], s[3]))
+        for hit, hub, _name_len, line, name, body, lines in symbols[:12]:
             if estimate_tokens(body) > 200:
                 # too big — signature + docstring + pointer
                 sig = lines[0][:80] if lines else name
@@ -8551,7 +8923,7 @@ def uninstall_hook(root: str) -> str:
     return f"removed codeloom-managed pre-commit hook ({hook})."
 
 
-def render_text(m: dict) -> str:
+def render_text(m: dict, compact: Optional[bool] = None) -> str:
     ep = m["entry_points"]
     buf = io.StringIO()
     buf.write(f"# codeloom — {m['root']}\n")
@@ -8560,6 +8932,14 @@ def render_text(m: dict) -> str:
         buf.write("\n## Entry points\n")
         for e in ep:
             buf.write(f"  {os.path.relpath(e, m['root'])}\n")
+    if _compact_default(compact):
+        # summary-first map: file counts by top-level dir + entry points only
+        # (the full tree stays one --full away).
+        buf.write("\n## Structure (files by top-level dir; use --full for the tree)\n")
+        for name, n in _top_level_counts(m["tree"]):
+            buf.write(f"  {name}  {n} file(s)\n")
+        buf.write(f"\n# {m['file_count']} files total — run with --full for the complete tree\n")
+        return _cap_output(buf.getvalue())
     buf.write("\n## Structure\n")
     for line in render_tree(m["tree"]):
         buf.write(line + "\n")
@@ -9116,7 +9496,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--similar", metavar="SYMBOL", help="find structurally similar functions/classes (refactoring)")
     p.add_argument("--deadcode", action="store_true", help="find functions defined but never called")
     p.add_argument("--get-symbol", metavar="SYMBOL", help="token-counted symbol snippet (byte offsets + token estimate)")
-    p.add_argument("--full", action="store_true", help="with --get-symbol, return the full source (default is summary)")
+    p.add_argument("--full", action="store_true", help="with --get-symbol, return the full source (default is summary); with --compact renderers, force the complete output")
+    p.add_argument("--compact", action="store_true", default=None,
+                   help="summary-first output for agent context: health top-5 worst files, map counts + entry points, calls/cross/graph top-5 rows with a '... N more' footer (~400-token cap). Default for MCP calls; CODELOOM_COMPACT=1 opts the CLI in")
     p.add_argument("--snippet", nargs=3, metavar=("PATH", "START", "END"), help="extract a byte-range snippet from a file")
     p.add_argument("--incremental", action="store_true", help="show files changed since last run (hash-based cache)")
     p.add_argument("--verify", metavar="FILE", help="print SHA-256 of a file (security check)")
@@ -9804,7 +10186,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
         if args.health:
-            print(render_health(files, root))
+            print(render_health(files, root, compact=args.compact))
             return 0
 
         if args.risk is not None:
@@ -9896,7 +10278,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     else:
                         print(f"module not found: {args.focus}", file=sys.stderr)
                         return 1
-            print(render_cross_calls(calls, root, start=focus))
+            print(render_cross_calls(calls, root, start=focus, compact=args.compact))
             return 0
 
     # --impact / --task / --plan / --pack: task-aware intelligence
@@ -10196,7 +10578,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Cross-repo mode: one graph across multiple repo roots
     if args.cross_repo:
-        print(render_cross_repo(args.cross_repo, args.max_files))
+        print(render_cross_repo(args.cross_repo, args.max_files, compact=args.compact))
         return 0
 
     # Call-graph mode (multi-language)
@@ -10229,7 +10611,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     else:
                         print(f"module not found: {args.focus}", file=sys.stderr)
                         return 1
-            text = render_calls(calls, root, start=focus)
+            text = render_calls(calls, root, start=focus, compact=args.compact)
             if args.cost:
                 text += render_token_report({}, text)
             print(text)
@@ -10263,9 +10645,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     else:
                         print(f"module not found: {args.focus}", file=sys.stderr)
                         return 1
-            text = render_graph_multi(graph, root, start=focus)
+            text = render_graph_multi(graph, root, start=focus, compact=args.compact)
         else:
-            text = render_graph_multi(graph, root)
+            text = render_graph_multi(graph, root, compact=args.compact)
         if args.cost:
             text += render_token_report({}, text)
         print(text)
@@ -10283,7 +10665,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         }
         print(json.dumps(payload, indent=2))
     else:
-        text = render_text(m)
+        text = render_text(m, compact=args.compact)
         if args.cost:
             text += render_token_report(m, text)
         print(text)

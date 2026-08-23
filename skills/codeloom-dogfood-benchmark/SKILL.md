@@ -47,6 +47,7 @@ Deterministic head-to-head that answers "how good is codeloom vs a plain agent?"
 - `--task` on flask ranked `src.flask.json.provider` #1 for "request lifecycle" (docstring keyword hit on 'response'), `src.flask.app` only #4 — keyword-score misfire on small repos.
 
 ## Pitfalls (each cost real time)
+- **Stale long-lived MCP server (v0.79.0+ handshake)**: a resident MCP server keeps serving whatever code was on disk when it started — after a fix lands, the OLD behavior persists until restart even though `SERVER_VERSION` is unchanged. Detect it via the version handshake: `initialize` `serverInfo.server_file_mtime`/`server_sha256` (file mtime + content hash of `codeloom-mcp.py` at load) and `codeloom_health`'s header (`server_version` / `server_file_mtime` / `index_commit`); every `tools/call` `_meta` also carries `server_version`/`server_file_mtime`/`server_sha256`. If they differ from the on-disk file, the server predates the code — **restart it (kill + respawn)** before re-testing. Never benchmark a stale server.
 - `--index --engine c` + `--get-symbol`: lazy dbm corruption (empty stubs) — clear `.codeloom-index.lazy`/`.codeloom-index.json` to recover
 - MCP `verify_edit`: always target the repo ROOT, never a single file (file targets read a stale snapshot → false GO)
 - MCP `memory_add`: pass `symbols` as a JSON array, not a string
