@@ -185,6 +185,8 @@ recuperación tras compactación con **95.4% menos tokens**; grafo completo del
 kernel de Linux en ~89–113s (motor C). Detalles y comandos de reproducción en
 [`benchmarks/README.md`](benchmarks/README.md).
 
+**Comparación honesta de dogfood (2026-08-23, pallets/flask, misma sesión)**: también enfrentamos codeloom a un agente de grep+read plano en un repositorio pequeño — y el resultado es honestamente mixto. En repos pequeños con conteo de payload del terminal, codeloom usó **más** tokens totales (+14,5%) y más tiempo de pared (+2,6×) que el agente de grep+read; ganó en evidencia — `--impact` dio el radio de explosión (5 directos + 33 transitivos en 0,23 s), `--task` clasificó exactamente los 4 módulos, y `--checkpoint`/`--checkpoint-restore` reprodujeron el diff de edición exacto. Las afirmaciones de eficiencia de tokens anteriores (98,8%, 43–54×) valen para **repos grandes y cadenas de llamadas frente a líneas base grep+read** — ese es el ámbito donde se midieron, no en tareas pequeñas de una sola llamada.
+
 Dónde los competidores van por delante, dicho sin rodeos: jcodemunch tiene una
 verificación previa de seguridad más amplia (segura para editar/borrar,
 verificación del compilador SCIP); codegraph tiene escala de comunidad de
@@ -226,7 +228,7 @@ memoria — no sus fosos.
 
 ## Confianza y verificación
 
-- **CI**: Linux/macOS/Windows × Python 3.8–3.12, 77 pruebas, ≥46 fixtures de
+- **CI**: Linux/macOS/Windows × Python 3.8–3.12, 111 pruebas, ≥46 fixtures de
   gramática controlados por archivos golden
 - **Sumas de verificación**: cada versión publica el SHA-256 de `codeloom.py`;
   verifica con `codeloom --verify codeloom.py`

@@ -359,7 +359,10 @@ def baseline_tokens(repo: str, query: str) -> int:
     """grep -rn <symbol> repo + read top 3 matching files, whole-file bytes.
 
     Excludes the memory dir: a wiped agent greps the CODEBASE, not its own
-    (erased) .codeloom-memory — seeding must not inflate the baseline."""
+    (erased) .codeloom-memory — seeding must not inflate the baseline.
+    Deterministic: the scratch repo's absolute path (random per run) is
+    replaced with a fixed token in the COUNTED text — grep prints matching
+    paths, so raw output would make the baseline drift run-to-run."""
     mem_dir = os.path.join(repo, ".codeloom-memory")
 
     def keep(p: str) -> bool:
@@ -369,7 +372,7 @@ def baseline_tokens(repo: str, query: str) -> int:
         ["grep", "-rn", "--exclude-dir=.codeloom-memory", query, repo],
         capture_output=True, text=True, timeout=120
     )
-    tok = count_tokens(r.stdout)
+    tok = count_tokens(r.stdout.replace(repo, "<REPO>"))
     paths = []
     for line in r.stdout.splitlines():
         if ":" in line:
@@ -526,21 +529,25 @@ def main() -> int:
                 nb = probe_neighbors.get(q, set())
             # a neighbor module that has a symbol we can pin (not q itself).
             # Prefer a DISTINCT symbol per query so one entry can't satisfy
-            # two queries' graph-hit counts.
+            # two queries' graph-hit counts. Scan ALL neighbor modules for a
+            # free symbol first; only reuse an already-used symbol when the
+            # whole neighbor pool is exhausted (tiny repos).
             target = None
             for cand in sorted(nb):
                 cand_syms = [s for m, s in syms if m == cand and s != q]
-                if not cand_syms:
-                    continue
-                cand_syms = sorted(cand_syms)
-                for nsym in cand_syms:
+                for nsym in sorted(cand_syms):
                     if nsym not in used_nsym:
                         target = (cand, nsym)
                         break
-                if target is None:
-                    target = (cand, cand_syms[i % len(cand_syms)])
                 if target is not None:
                     break
+            if target is None:
+                for cand in sorted(nb):
+                    cand_syms = sorted(s for m, s in syms
+                                       if m == cand and s != q)
+                    if cand_syms:
+                        target = (cand, cand_syms[i % len(cand_syms)])
+                        break
             if target is None:
                 graph_seeds[q] = None
                 print(f"  graph seed skipped for {q}: no import/call neighbor module "

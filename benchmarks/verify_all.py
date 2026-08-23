@@ -17,6 +17,83 @@ FAIL = 0
 FAILURES = []
 
 
+# --- demo-repo fixture ------------------------------------------------------
+# demo-repo/ is gitignored (never shipped), so a fresh checkout has NO fixture
+# and every command below would crash with FileNotFoundError instead of
+# reporting PASS/FAIL. Self-heal: create a deterministic minimal repo whose
+# module names, symbols and import edges are the ones the checks below rely on
+# (src.core.engine, src.core.config, Engine, retry, app.main). Content is
+# regenerated every run, so the fixture can never drift stale.
+FIXTURE_FILES = {
+    "app/main.py": (
+        "from core.engine import Engine, init_engine\n"
+        "\n"
+        "def create_app():\n"
+        "    return init_engine({})\n"
+        "\n"
+        "if __name__ == \"__main__\":\n"
+        "    create_app()\n"
+    ),
+    "src/core/engine.py": (
+        "from core.config import load_config\n"
+        "\n"
+        "class Engine:\n"
+        "    \"\"\"The application engine — central hub.\"\"\"\n"
+        "    def __init__(self):\n"
+        "        self.ready = False\n"
+        "\n"
+        "    def start(self):\n"
+        "        self.ready = True\n"
+        "        return self\n"
+        "\n"
+        "\n"
+        "def retry(fn, times=3):\n"
+        "    for _ in range(times):\n"
+        "        try:\n"
+        "            return fn()\n"
+        "        except Exception:\n"
+        "            pass\n"
+        "    return None\n"
+        "\n"
+        "\n"
+        "def init_engine(config):\n"
+        "    e = Engine()\n"
+        "    e.settings = load_config(config)\n"
+        "    return e\n"
+    ),
+    "src/core/config.py": (
+        "class Settings:\n"
+        "    def __init__(self):\n"
+        "        self.debug = False\n"
+        "\n"
+        "def load_config(path):\n"
+        "    return Settings()\n"
+    ),
+}
+
+
+def ensure_fixture():
+    """Create demo-repo if missing (or if it lacks the engine module the
+    hardcoded checks resolve). Never overwrites an existing, richer fixture."""
+    need = os.path.join(REPO, "src", "core", "engine.py")
+    if os.path.isfile(need):
+        return
+    for rel, body in FIXTURE_FILES.items():
+        p = os.path.join(REPO, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(body)
+    for pkg in ("src", "src/core"):
+        init = os.path.join(REPO, pkg, "__init__.py")
+        if not os.path.isfile(init):
+            with open(init, "w", encoding="utf-8") as fh:
+                fh.write("")
+    print(f"[setup] created demo fixture at {REPO}")
+
+
+ensure_fixture()
+
+
 def run(args, cwd=REPO, timeout=120):
     r = subprocess.run([sys.executable, LOOM] + args, capture_output=True, text=True, cwd=cwd, timeout=timeout)
     return r.returncode, r.stdout, r.stderr
@@ -40,7 +117,7 @@ print("=" * 60)
 # --- 1. Core map commands ---
 print("\n[1] Core map commands")
 rc, out, err = run([])
-check("map (default)", rc == 0 and "codeloom" in out.lower() or "entry points" in out.lower(), f"rc={rc}")
+check("map (default)", rc == 0 and ("codeloom" in out.lower() or "entry points" in out.lower()), f"rc={rc}")
 rc, out, err = run(["--json"])
 check("--json", rc == 0 and out.strip().startswith("{"), "not JSON")
 rc, out, err = run(["--no-outline"])
@@ -55,7 +132,7 @@ check("--version", rc == 0 and "codeloom" in out)
 # --- 2. Structural ---
 print("\n[2] Structural")
 rc, out, err = run(["--graph"])
-check("--graph", rc == 0 and "depends_on" in out or "graph" in out.lower(), f"rc={rc}")
+check("--graph", rc == 0 and ("depends_on" in out or "graph" in out.lower()), f"rc={rc}")
 rc, out, err = run(["--graph", "--focus", "src.core.engine"])
 check("--graph --focus", rc == 0)
 rc, out, err = run(["--calls"])

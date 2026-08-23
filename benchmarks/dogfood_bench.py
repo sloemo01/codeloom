@@ -218,6 +218,11 @@ def run_b(repo, task, expect, loom, seed):
         evidence["memory_stats_rc"] = rc
         outputs.append(row["out"])
 
+        # Normalize the scratch dir out of counted payloads: mkdtemp names are
+        # random per run, so embedding them makes token metrics drift run-to-run.
+        for r in rows:
+            r["out"] = r["out"].replace(scratch, "<SCRATCH>")
+        outputs = [o.replace(scratch, "<SCRATCH>") for o in outputs]
         return rows, "\n".join(outputs), evidence
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
@@ -238,8 +243,20 @@ def summarize(rows, answer):
 
 
 def completeness(answer, expect):
-    """Which expected symbols appear in the side's answer text."""
-    return {e: (e in answer) for e in expect}
+    """Which expected symbols appear in the side's answer text.
+
+    Word-boundary match, not raw substring: `route` must not count as found
+    just because `route53_lookup` or `subroute` appears in the output.
+    Case-sensitive for identifiers (a symbol named `Router` is not `router`)."""
+    return {e: bool(re.search(r"\b" + re.escape(e) + r"\b", answer))
+            for e in expect}
+
+
+def fmt_num(x):
+    """Ints stay ints; floats get 3 significant decimals (no float noise)."""
+    if isinstance(x, float):
+        return f"{x:.3f}".rstrip("0").rstrip(".")
+    return str(x)
 
 
 def render_markdown(args, repo, loom, metrics, ev, comp_a, comp_b):
@@ -268,7 +285,7 @@ def render_markdown(args, repo, loom, metrics, ev, comp_a, comp_b):
             ratio = "—"
         else:
             ratio = f"{100.0 * (bv - av) / av:+.1f}%"
-        lines.append(f"| {name} | {av} | {bv} | {ratio} |")
+        lines.append(f"| {name} | {fmt_num(av)} | {fmt_num(bv)} | {ratio} |")
     lines.append("")
     lines.append("| completeness (expect symbol present in answer) | A | B |")
     lines.append("|---|---|---|")
@@ -282,7 +299,7 @@ def render_markdown(args, repo, loom, metrics, ev, comp_a, comp_b):
     if losses:
         lines.append(f"**LOSS — B exceeded A on {len(losses)} metric(s):**")
         for name, av, bv in losses:
-            lines.append(f"- {name}: A {av} vs B {bv}")
+            lines.append(f"- {name}: A {fmt_num(av)} vs B {fmt_num(bv)}")
     else:
         lines.append("**B did not exceed A on any metric.**")
     lines.append("")

@@ -170,6 +170,8 @@ v0.79 的 MCP 表面新增 **Memory OS 三件套**：`codeloom_memory_add`（带
 **少 95.4% tokens**；Linux 内核完整图约 89–113 秒（C 引擎）。细节和
 复现命令见 [`benchmarks/README.md`](benchmarks/README.md)。
 
+**自家用的坦诚对比（2026-08-23，pallets/flask，同会话）**：在小仓库上我们也拿 codeloom 和「grep + read」的普通代理比过，结果喜忧参半——按终端负载计数，codeloom 消耗的**总 token 更多（+14.5%）**、耗时也更长（+2.6×）；它的胜场在证据上：`--impact` 给出爆炸半径（0.23 秒内 5 直接 + 33 传递依赖），`--task` 精确排出了那 4 个模块，`--checkpoint`/`--checkpoint-restore` 完整复现了编辑 diff。上面那些 token 效率数据（98.8%、43–54×）适用于**大仓库和调用链 vs grep+read 基线**——那才是它们的测量场景，而不是小型单次任务。
+
 竞品领先的地方，直说无妨：jcodemunch 有更广的安全预检
 （编辑/删除安全、SCIP 编译器验证）；codegraph 有 67k★ 的
 社区规模；codebase-memory 提供 158 种文法和一个 arXiv 发表的
@@ -207,7 +209,7 @@ v0.79 的 MCP 表面新增 **Memory OS 三件套**：`codeloom_memory_add`（带
 
 ## 信任与验证
 
-- **CI**：Linux/macOS/Windows × Python 3.8–3.12，77 个测试，≥46 个文法
+- **CI**：Linux/macOS/Windows × Python 3.8–3.12，111 个测试，≥46 个文法
   fixture 由 golden files 把关
 - **校验和**：每个版本公布 `codeloom.py` 的 SHA-256；
   用 `codeloom --verify codeloom.py` 验证

@@ -1661,10 +1661,12 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
         return {"content": [{"type": "text", "text": _blindspot(target)}]}
 
     # 1. Task-orientation (the moat) — "what matters / what breaks / read order / context"
+    import re as _re_pack
+    _pack_q = bool(_re_pack.search(r"\bpack\b", q))
     if any(k in q for k in ["what matters", "relevant to", "which files", "for this task",
                             "what breaks", "impact of", "blast radius", "if i change",
                             "read order", "reading plan", "how to approach", "context for",
-                            "pack", "whole context", "understand this task"]):
+                            "whole context", "understand this task"]) or _pack_q:
         if any(k in q for k in ["what breaks", "impact of", "blast radius", "if i change"]):
             # extract a module name if present
             import re
@@ -1679,7 +1681,7 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
                     task = codeloom.render_task(files, root, q, top=3)
                     return {"content": [{"type": "text", "text": impact + "\n" + task}]}
             return {"content": [{"type": "text", "text": codeloom.render_task(files, root, q)}]}
-        if any(k in q for k in ["pack", "whole context", "context for", "understand this task"]):
+        if _pack_q or any(k in q for k in ["whole context", "context for", "understand this task"]):
             return {"content": [{"type": "text", "text": codeloom.render_pack(files, root, q)}]}
         if any(k in q for k in ["read order", "reading plan", "how to approach"]):
             return {"content": [{"type": "text", "text": codeloom.build_plan(files, root, q)}]}
@@ -1691,6 +1693,7 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
     # 'remember' retrieval branch (symbol "did"). These are read phrases,
     # not writes and not symbol lookups.
     if any(k in q for k in ["read memory", "my memory", "what did i remember",
+                            "what do i remember", "what i remember", "do i remember",
                             "what do i know", "show memory", "what does the repo remember"]):
         return {"content": [{"type": "text", "text": codeloom.memory_read(root)}]}
 

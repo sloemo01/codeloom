@@ -20,7 +20,8 @@
 - **No third-party verification is implied.** Nothing here has been
   independently verified — treat this as a self-published comparison.
 - **Dogfood honesty:** our own head-to-head on a small repo (flask,
-  2026-08-23) showed codeloom using MORE tokens/time than a plain agent;
+  2026-08-23) showed codeloom using MORE tokens (+14.5%) and wall time
+  (+2.6x) than a plain agent — it won on evidence and memory, not tokens;
   published efficiency numbers are scoped to big-repo chains vs grep+read
   baselines.
 
@@ -80,7 +81,7 @@ Where our measurements put codeloom ahead:
   `benchmarks/README.md`)** — measured: 0.13s warm vs crg 8.6s pip + 4s build
   + daemon.
 - **Local savings ledger, all-local, no telemetry** — `--savings-report` (v0.78) compiles your own `--session` log into per-repo token/cost receipts; the numbers live in your repo, not in our README. CCE's sealed 94% ledger is better evidence discipline — ours is local-first and independently auditable.
-- **Post-edit loop closure** — `--verify-edit` (v0.78) re-derives a GO/CHECK/STOP verdict *after* an edit; jcodemunch's preflight (the strongest in the field) stops at *before*. `--blindspot` (v0.78) adds the unread-file warning — the files your edit breaks that you never read. That's the loop-closure differentiator: preflight → edit → verify → commit.
+- **Post-edit loop closure** — `--verify-edit` (v0.78) re-derives a GO/CHECK/STOP verdict *after* an edit, diffing the working-tree graph against the **full HEAD graph** (`git ls-tree`), so pre-existing cycles never trigger STOP — only cycles the diff actually introduces. jcodemunch's preflight (the strongest in the field) stops at *before*. `--blindspot` (v0.78) adds the unread-file warning — the files your edit breaks that you never read. That's the loop-closure differentiator: preflight → edit → verify → commit.
 
 Where competitors lead (stated plainly):
 - **crg**: community scale, 5 translated READMEs, eval runner, multi-repo registry, incremental rebuilds.

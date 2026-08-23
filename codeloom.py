@@ -4075,6 +4075,16 @@ def compute_change_risk(root: str, index: dict, calls: dict,
     # --- diff shape -------------------------------------------------------
     numstat = _git_out(root, ["diff", "--numstat", revspec])
     if numstat is None:
+        # Single-commit repo: HEAD~1..HEAD has no parent. Diff against the
+        # empty tree instead of lying "not a git repo".
+        if revspec == "HEAD~1..HEAD":
+            n = _git_out(root, ["rev-list", "--count", "HEAD"])
+            if n is not None and n.strip() == "1":
+                numstat = _git_out(
+                    root, ["diff-tree", "--numstat", "-r", "HEAD"])
+                if numstat is not None:
+                    revspec = "(initial commit)"
+    if numstat is None:
         return {"error": "not a git repo or unknown revspec '%s'" % revspec}
     files_touched = []
     added = deleted = 0
@@ -4683,7 +4693,11 @@ _CORE_NAME = "codeloom_core"
 def _find_core_engine(engine: str = "c") -> Optional[str]:
     """Locate the compiled accelerator binary (C or Rust) next to codeloom.py.
     engine='c' -> codeloom_core; engine='rust' -> codeloom_core_rs.
-    Auto-builds the Rust core from committed source if missing (rustc present)."""
+    Auto-builds a missing core from its committed source (no download) when
+    the matching compiler is present: cc for the C core, rustc for the Rust
+    core. This keeps --engine c and --engine rust symmetric: both are
+    optimization hints, and both fail loudly (with an honest per-compiler
+    message) only when the source AND the compiler are both absent."""
     name = "codeloom_core" if engine == "c" else "codeloom_core_rs"
     here = os.path.dirname(os.path.abspath(__file__))
     cands = [os.path.join(here, name), os.path.join(here, name + ".exe")]
@@ -4694,11 +4708,21 @@ def _find_core_engine(engine: str = "c") -> Optional[str]:
     on_path = shutil.which(name)
     if on_path:
         return on_path
-    # Rust core not built — auto-compile from committed source (no download)
-    if engine == "rust":
+    # not built — auto-compile from committed source (no download)
+    import subprocess as _sp
+    if engine == "c":
+        src = os.path.join(here, "codeloom_core.c")
+        if os.path.isfile(src) and shutil.which("cc"):
+            out = os.path.join(here, name)
+            try:
+                r = _sp.run(["cc", "-O3", "-o", out, src], capture_output=True, text=True, timeout=180)
+                if r.returncode == 0 and os.path.isfile(out):
+                    return out
+            except Exception:
+                pass
+    elif engine == "rust":
         src = os.path.join(here, "codeloom_core_rs.rs")
         if os.path.isfile(src) and shutil.which("rustc"):
-            import subprocess as _sp
             out = os.path.join(here, name)
             try:
                 r = _sp.run(["rustc", "-O", "-o", out, src], capture_output=True, text=True, timeout=180)
@@ -4707,6 +4731,20 @@ def _find_core_engine(engine: str = "c") -> Optional[str]:
             except Exception:
                 pass
     return None
+
+def _find_rs_watcher() -> Optional[str]:
+    """Locate the standalone Rust CLI (codeloom_rs) that has the `watch`
+    subcommand. The single-file scan core (codeloom_core_rs) does NOT have a
+    watch mode — passing it 'watch ROOT' silently scans an empty stdin and
+    exits, which --watch used to mistake for a working watcher."""
+    name = "codeloom_rs"
+    here = os.path.dirname(os.path.abspath(__file__))
+    cands = [os.path.join(here, name), os.path.join(here, name + ".exe")]
+    for c in cands:
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    import shutil
+    return shutil.which(name)
 
 def _find_core() -> Optional[str]:
     """Locate the compiled codeloom_core binary next to codeloom.py or on PATH.
@@ -5344,8 +5382,9 @@ def render_index(files: List[str], root: str, max_files: int, parallel: bool = F
         if not _find_core_engine(engine):
             raise SystemExit(
                 f"[error] --engine {engine} requested but no core binary is built "
-                f"and no compiler (cc/rustc) is available to auto-build it.\n"
-                f"  Fix: run `--build-core` (or install cc/rustc) OR use --engine py.\n"
+                f"and it could not be auto-built.\n"
+                f"  {_core_unavailable_help(engine)}\n"
+                f"  Fix: install the compiler (or run --build-core) OR use --engine py.\n"
                 f"  (Refusing to write an empty index.)")
         scan = _c_scan(files, engine=engine)  # scan each file ONCE, reuse for symbols + kg
         index = _c_symbol_index(files, root, scan=scan)
@@ -5359,7 +5398,7 @@ def render_index(files: List[str], root: str, max_files: int, parallel: bool = F
     else:
         index = build_persistent_index(files, root, parallel=parallel)
         kg = build_knowledge_graph(files, root, parallel=parallel)
-    save_persistent_index(root, index, files, kg=kg, skip_json=(engine == "c"))
+    save_persistent_index(root, index, files, kg=kg, skip_json=False)
     n_syms = sum(len(v) for v in index.values())
     n_edges = sum(len(v) for v in kg["calls"].values()) + sum(len(v) for v in kg["imports"].values())
     buf = io.StringIO()
@@ -7104,11 +7143,15 @@ def _git_quiet(root: str, argv: List[str]) -> Optional[str]:
     except Exception:
         return None
 
-def _git_changed_files(root: str) -> List[str]:
-    """Working-tree changed files (tracked, incl. staged) relative to root."""
+def _git_changed_files(root: str) -> Tuple[Optional[List[str]], str]:
+    """Working-tree changed files (tracked, incl. staged) relative to root.
+
+    Returns (None, error) when git itself fails (not a repo, unreadable) so
+    callers can distinguish 'clean tree' from 'cannot tell' — the old
+    silent-[] shape made a non-git dir look like a clean GO."""
     out = _git_quiet(root, ["status", "--porcelain"])
     if out is None:
-        return []
+        return None, "not a git repository (git status failed)"
     changed = []
     for ln in out.splitlines():
         if len(ln) < 4:
@@ -7123,11 +7166,78 @@ def _git_changed_files(root: str) -> List[str]:
             except Exception:
                 continue
         changed.append(path)
-    return changed
+    return changed, ""
 
-def _git_head_text(root: str, rel: str) -> Optional[str]:
-    """File content at HEAD (None if untracked/new)."""
-    return _git_quiet(root, ["show", "HEAD:" + rel])
+
+class _HeadReader:
+    """Batch reader for file contents at HEAD.
+
+    One `git cat-file --batch` session serves every blob, instead of one
+    `git show` subprocess per file (which costs ~13ms of process spawn each —
+    ~90s on a 7k-file repo). Reads are lazy and buffered per file: a caller
+    that only needs a few files pays for exactly those."""
+
+    def __init__(self, root: str):
+        import subprocess as _sp
+        self._sp = _sp
+        self._ls: Optional[str] = None
+        self._ls_failed: bool = False
+        self._buf: dict = {}
+        self._proc: Optional[_sp.Popen] = None
+        self._root = root
+
+    @property
+    def ls(self) -> Optional[str]:
+        """`git ls-tree -r --name-only HEAD` output (None on failure)."""
+        if self._ls is None and not self._ls_failed:
+            self._ls = _git_quiet(self._root, ["ls-tree", "-r", "--name-only", "HEAD"])
+            self._ls_failed = self._ls is None
+        return self._ls
+
+    def _get_proc(self):
+        if self._proc is None:
+            self._proc = self._sp.Popen(
+                ["git", "cat-file", "--batch"],
+                cwd=self._root, stdin=self._sp.PIPE,
+                stdout=self._sp.PIPE, stderr=self._sp.DEVNULL)
+        return self._proc
+
+    def _fetch(self, rel: str) -> Optional[str]:
+        """One buffered blob read (None when HEAD:rel does not exist)."""
+        if rel in self._buf:
+            return self._buf[rel]
+        try:
+            p = self._get_proc()
+            assert p.stdin is not None and p.stdout is not None
+            p.stdin.write(("HEAD:%s\n" % rel).encode())
+            p.stdin.flush()
+            hdr = p.stdout.readline().split()
+            if len(hdr) != 3:
+                self._buf[rel] = None
+                return None
+            size = int(hdr[2])
+            data = p.stdout.read(size)
+            p.stdout.read(1)  # trailing newline
+            out = data.decode("utf-8", errors="replace")
+        except Exception:
+            out = None
+        self._buf[rel] = out
+        return out
+
+    def text(self, rel: str) -> Optional[str]:
+        """File content at HEAD (None if untracked/new)."""
+        return self._fetch(rel)
+
+    def close(self) -> None:
+        if self._proc is not None:
+            try:
+                self._proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                self._proc.wait(timeout=10)
+            except Exception:
+                self._proc.kill()
 
 
 def verify_edit(root: str, severity: str = "warn") -> str:
@@ -7135,11 +7245,29 @@ def verify_edit(root: str, severity: str = "warn") -> str:
     caller maps STOP+strict to exit code 1."""
     buf = io.StringIO()
     buf.write(f"# codeloom --verify-edit ({severity})\n")
-    changed = _git_changed_files(root)
+    changed, gerr = _git_changed_files(root)
+    if changed is None:
+        # git itself failed (not a repo, no HEAD, unreadable): an empty
+        # working tree is NOT a verified-clean tree — say so instead of
+        # silently reporting GO.
+        buf.write("VERDICT: ERROR\n")
+        buf.write(f"  cannot read the git tree: {gerr}\n")
+        buf.write("  run from inside a git repository (or pass its root).\n")
+        return buf.getvalue()
     if not changed:
         buf.write("VERDICT: GO\n")
         buf.write("  no working-tree changes (clean).\n")
         return buf.getvalue()
+    head = _HeadReader(root)
+    try:
+        return _verify_edit_report(root, changed, head)
+    finally:
+        head.close()
+
+def _verify_edit_report(root: str, changed: List[str],
+                        head: "_HeadReader") -> str:
+    """Verdict computation over a known-dirty tree (HEAD via `head`)."""
+    buf = io.StringIO()
     # files available for import resolution
     files: List[str] = []
     gi = os.path.join(root, ".gitignore")
@@ -7154,7 +7282,7 @@ def verify_edit(root: str, severity: str = "warn") -> str:
     # resolve when computing what the edit dangles. ls-tree lists files at
     # HEAD including ones since deleted in the working tree.
     head_modules = {}
-    ls = _git_quiet(root, ["ls-tree", "-r", "--name-only", "HEAD"])
+    ls = head.ls
     if ls:
         for rel in ls.splitlines():
             if rel.endswith(".py"):
@@ -7167,7 +7295,7 @@ def verify_edit(root: str, severity: str = "warn") -> str:
         if not os.path.isfile(abs_path):
             continue
         mod = module_name_of(abs_path, root)
-        old_text = _git_head_text(root, rel)
+        old_text = head.text(rel)
         if old_text is None:
             continue  # new file: nothing pre-existing to dangle
         e, _s = _import_edges(old_text, mod, root, head_modules)
@@ -7234,7 +7362,7 @@ def verify_edit(root: str, severity: str = "warn") -> str:
             if not rel.endswith(".py"):
                 continue
             mod = module_name_of(os.path.join(root, rel), root)
-            head_text = _git_head_text(root, rel)
+            head_text = head.text(rel)
             if head_text is None:
                 continue
             e, _s = _import_edges(head_text, mod, root, head_modules)
@@ -7330,7 +7458,10 @@ def render_blindspot(root: str, severity: str = "warn") -> str:
     buf.write(f"# codeloom --blindspot ({root})\n")
     hot = set(get_hot_set(root))
     if not hot:
-        buf.write("VERDICT: SKIP — no hot set yet (run --mark-seen after reading).\n")
+        buf.write("VERDICT: SKIP — nothing marked as read yet.\n")
+        buf.write("  No hot set exists in this repo (--mark-seen writes it), so there\n")
+        buf.write("  is nothing to compare the impact-derived read set against.\n")
+        buf.write("  Fix: run `codeloom --mark-seen <files...>` after reading them.\n")
         return buf.getvalue()
     gi = os.path.join(root, ".gitignore")
     rules = parse_gitignore(gi) if os.path.isfile(gi) else []
@@ -7768,7 +7899,7 @@ def _memory_epoch(ts: str) -> Optional[float]:
     UTC — the naive/aware subtraction crash and the silent recency=0 for
     naive timestamps were both bugs)."""
     import datetime as _dt
-    if not ts:
+    if not isinstance(ts, str) or not ts:
         return None
     try:
         t = _dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
@@ -7799,12 +7930,23 @@ def _memory_sort_key(entry: dict) -> Tuple:
     """Deterministic retrieval ranking: importance desc, then recency desc,
     then timestamp desc (newest first), then id for a stable total order.
     Timestamps are compared as epoch floats so mixed naive/aware stamps
-    never raise (naive treated as UTC, unparseable = oldest)."""
+    never raise (naive treated as UTC, unparseable = oldest). Schema-corrupt
+    entries (string importance, non-string id) sort as lowest importance
+    instead of crashing retrieval — corrupt-line tolerance covers JSON-valid
+    but wrong-typed lines, not just unparseable JSON."""
     ep = _memory_epoch(entry.get("timestamp", ""))
-    return (-int(entry.get("importance", 0) or 0),
+    imp = entry.get("importance", 0) or 0
+    try:
+        imp = int(imp)
+    except (ValueError, TypeError):
+        imp = 0
+    ident = entry.get("id")
+    if not isinstance(ident, str):
+        ident = str(ident) if ident is not None else ""
+    return (-imp,
             -_memory_recency(entry),
             -(ep if ep is not None else -1.0),
-            entry.get("id", ""))
+            ident)
 
 
 def _memory_scan_id(root: str, type_: str) -> Tuple[int, int]:
@@ -7898,13 +8040,32 @@ def memory_append(root: str, type_: str, title: str, body: str = "",
             pass
     entry["importance"] = imp
     entry["tier"] = _memory_tier(imp)
+    line = _json.dumps(entry, ensure_ascii=False) + "\n"
+    cap = _memory_cap(root, MEMORY_JSONL)
     try:
         with open(_memory_jsonl_path(root), "a", encoding="utf-8") as fh:
-            fh.write(_json.dumps(entry, ensure_ascii=False) + "\n")
-        memory_rotate_jsonl(root)
+            fh.write(line)
+        # cap check AFTER the append (post-append size): a single entry
+        # larger than the cap must not rotate itself out on the next call
+        # (that would shuttle it between live and archive — lossless but
+        # invisible to default --memory/--memory-stats). If the whole file
+        # exceeds the cap, rotate OLDEST lines out; a lone oversized entry
+        # stays live (it IS the newest) and the file is allowed to exceed
+        # the cap until a smaller entry triggers rotation.
+        if _memory_jsonl_size(root) > cap:
+            memory_rotate_jsonl(root)
     except OSError as e:
         entry["error"] = str(e)
     return entry
+
+
+def _memory_jsonl_size(root: str) -> int:
+    """Byte size of memory.jsonl (0 when missing)."""
+    p = _memory_jsonl_path(root)
+    try:
+        return os.path.getsize(p)
+    except OSError:
+        return 0
 
 
 def memory_rotate_jsonl(root: str) -> bool:
@@ -7916,7 +8077,7 @@ def memory_rotate_jsonl(root: str) -> bool:
     if not os.path.isfile(p):
         return False
     try:
-        with open(p, "r", encoding="utf-8") as fh:
+        with open(p, "r", encoding="utf-8", errors="replace") as fh:
             lines = fh.readlines()
     except OSError:
         return False
@@ -7925,7 +8086,11 @@ def memory_rotate_jsonl(root: str) -> bool:
     if size <= cap:
         return False
     removed = []
-    while lines and sum(len(l.encode("utf-8")) for l in lines) > cap:
+    # Leave at least one line in place: when a single entry alone exceeds
+    # the cap, rotating it out would hide the just-written entry from
+    # default (live-only) retrieval entirely — the file is allowed to ride
+    # above the cap until a smaller entry triggers rotation.
+    while len(lines) > 1 and sum(len(l.encode("utf-8")) for l in lines) > cap:
         removed.append(lines.pop(0))
     if not removed:
         return False
@@ -7944,8 +8109,14 @@ def memory_rotate_jsonl(root: str) -> bool:
 
 def _memory_line(entry: dict) -> str:
     """One retrieval line: 'T [priority] type: title — body[:200]'."""
-    t = (entry.get("title") or "").strip()
-    b = (entry.get("body") or "").strip()
+    t = entry.get("title")
+    b = entry.get("body")
+    if not isinstance(t, str):
+        t = str(t) if t is not None else ""
+    if not isinstance(b, str):
+        b = str(b) if b is not None else ""
+    t = t.strip()
+    b = b.strip()
     out = "%s [%s] %s: %s" % (entry.get("tier", "?"),
                               entry.get("importance", 0),
                               entry.get("type", "?"),
@@ -7995,6 +8166,18 @@ def _memory_resolve(sym: str, modules: Set[str],
     return None
 
 
+def _memory_symbol_list(entry: dict) -> List[str]:
+    """Non-empty string symbols from an entry's affected_symbols. Corrupt
+    shapes (string instead of list, non-string members, non-iterable) are
+    normalized instead of crashing retrieval/stats."""
+    raw = entry.get("affected_symbols")
+    if isinstance(raw, str):
+        raw = [raw]
+    elif not isinstance(raw, (list, tuple, set)):
+        return []
+    return [s.strip() for s in raw if isinstance(s, str) and s.strip()]
+
+
 def memory_symbol_resolve(files: List[str], root: str, sym: str) -> bool:
     """True when `sym` names a module/symbol in the repo OR is pinned in
     memory.jsonl — used by --remember's smart dispatch (retrieval vs the
@@ -8003,7 +8186,7 @@ def memory_symbol_resolve(files: List[str], root: str, sym: str) -> bool:
     if _memory_resolve(sym.strip(), modules, symbols) is not None:
         return True
     low = sym.strip().lower()
-    return any(low in [s.lower() for s in (e.get("affected_symbols") or [])]
+    return any(low in [s.lower() for s in _memory_symbol_list(e)]
                for e in _memory_entries(root))
 
 
@@ -8043,7 +8226,7 @@ def render_memory_graph(files: List[str], root: str, symbol: str,
     modules, symbols = _memory_symbols(tfiles, tgt)
     low = sym.lower()
     direct = [e for e in entries
-              if any(s.lower() == low for s in (e.get("affected_symbols") or []))]
+              if any(s.lower() == low for s in _memory_symbol_list(e))]
     direct.sort(key=_memory_sort_key)
     buf.write("\n## entries linked to %s\n" % sym)
     if direct:
@@ -8087,7 +8270,7 @@ def render_memory_graph(files: List[str], root: str, symbol: str,
             neigh_symbols.add(name)
     reach = [e for e in entries
              if any(s.lower() in {x.lower() for x in neigh_symbols}
-                    for s in (e.get("affected_symbols") or []))]
+                    for s in _memory_symbol_list(e))]
     direct_ids = {id(e) for e in direct}
     reach = [e for e in reach if id(e) not in direct_ids]
     reach.sort(key=_memory_sort_key)
@@ -8139,10 +8322,8 @@ def render_memory_stats(root: str) -> str:
     buf.write(f"\ntotal bytes: {total_bytes}\narchive bytes: {archive_bytes}\n")
     counts: Dict[str, int] = {}
     for e in entries:
-        for s in (e.get("affected_symbols") or []):
-            s = s.strip()
-            if s:
-                counts[s] = counts.get(s, 0) + 1
+        for s in _memory_symbol_list(e):
+            counts[s] = counts.get(s, 0) + 1
     buf.write("\ntop linked symbols:\n")
     if counts:
         for s, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:5]:
@@ -8431,6 +8612,14 @@ def render_checkpoint(root: str, note: Optional[str] = None) -> str:
         buf.write(seen)
     # journal a checkpoint event so the working-state Status reflects it
     journal_append(root, "checkpoint", "checkpoint saved", body=note or "")
+    # typed mirror: checkpoint is a documented Memory OS source
+    # (created: checkpoint) — the session journal AND memory.jsonl both
+    # record it, matching --goal/--decide/--lesson dual-write parity.
+    me = memory_append(root, "goal", note or "checkpoint saved",
+                       created="checkpoint")
+    if me.get("error"):
+        buf.write(f"\nmemory: jsonl mirror FAILED ({me['error']}); the "
+                  f"checkpoint file was still written\n")
     # write it to disk
     try:
         with open(_checkpoint_path(root), "w", encoding="utf-8") as f:
@@ -8898,6 +9087,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         vroot = os.path.abspath(args.verify_edit)
         report = verify_edit(vroot, args.severity)
         print(report)
+        if "VERDICT: ERROR" in report:
+            # the oracle could not run (not a repo): exit non-zero so a
+            # pre-commit hook / CI gate can't mistake it for a clean GO
+            return 1
         if args.severity == "strict" and "VERDICT: STOP" in report:
             return 1
         return 0
@@ -9127,14 +9320,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.watch:
         # incremental daemon-less refresh: only changed files re-indexed.
         # Engine auto-selection: native C watcher (kqueue/inotify) >
-        # Rust polling watcher > pure-Python one-shot. With --watch-merge
+        # codeloom_rs polling watcher > pure-Python one-shot. With --watch-merge
         # semantics folded in via --watch-live, output feeds the index.
         core = _find_core()
-        rs = _find_core_engine("rust")
-        if core or rs:
+        rs_watch = _find_rs_watcher()
+        if core or rs_watch:
             # one command = watcher piped straight into the index merger:
             #   <watcher> | codeloom --watch-merge ROOT
-            watcher_cmd = [core, "--watch", root] if core else [rs, "watch", root]
+            watcher_cmd = [core, "--watch", root] if core else [rs_watch, "watch", root]
             engine_name = "native C (kqueue/inotify)" if core else "Rust polling"
             print("watch-live: %s engine feeding --watch-merge" % engine_name)
             import subprocess as _sp
@@ -9386,13 +9579,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not os.path.isfile(core_src):
             print(f"C core source not found at {core_src}")
             return 1
-        if _find_core():
+        # check for an EXISTING binary directly — _find_core() auto-builds, so
+        # calling it here would make --build-core lie "already built" right
+        # after silently compiling the core itself.
+        here = os.path.dirname(os.path.abspath(__file__))
+        existing = [os.path.join(here, _CORE_NAME), os.path.join(here, _CORE_NAME + ".exe")]
+        if any(os.path.isfile(c) and os.access(c, os.X_OK) for c in existing):
             print("C accelerator already built — nothing to do.")
             return 0
+        import shutil as _shutil
+        if not _shutil.which("cc"):
+            print(_core_unavailable_help("c"))
+            return 1
         print("building codeloom_core (cc -O3 codeloom_core.c)…")
         import subprocess as _sp
-        out = os.path.join(os.path.dirname(core_src), "codeloom_core")
-        r = _sp.run(["cc", "-O3", "-o", out, core_src], capture_output=True, text=True)
+        out = os.path.join(here, "codeloom_core")
+        try:
+            r = _sp.run(["cc", "-O3", "-o", out, core_src], capture_output=True, text=True)
+        except FileNotFoundError:
+            print(_core_unavailable_help("c"))
+            return 1
         if r.returncode == 0:
             print(f"built {out} — now use --index --engine c")
             return 0
@@ -9490,7 +9696,22 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
         if args.risk is not None:
-            print(render_change_risk(files, root, args.risk))
+            # --risk [REVSPEC] with a bare directory argument: argparse binds
+            # the trailing positional to REVSPEC (nargs='?'), which would
+            # make `codeloom --risk /path/to/repo` report "unknown revspec
+            # '/path/to/repo'" AND scan the wrong root (cwd). If the value is
+            # a directory (repo root), it is really the positional root —
+            # recover both: scan that root and use the default revspec.
+            revspec = args.risk
+            if os.path.isdir(os.path.abspath(revspec)):
+                vroot = os.path.abspath(revspec)
+                gi = os.path.join(vroot, ".gitignore")
+                rules = parse_gitignore(gi) if os.path.isfile(gi) else []
+                vfiles: List[str] = []
+                _walk(vroot, rules, args.max_files, vfiles)
+                print(render_change_risk(vfiles, vroot, "HEAD~1..HEAD"))
+            else:
+                print(render_change_risk(files, root, revspec))
             return 0
 
         if args.pattern:
@@ -9908,22 +10129,28 @@ def main(argv: Optional[List[str]] = None) -> int:
             focus_path = os.path.join(root, focus) if not os.path.isabs(focus) else focus
             if os.path.isdir(focus_path):
                 focus = module_name_of(focus_path, root)
-            elif focus.endswith(".py") or os.path.isfile(focus_path):
-                focus = module_name_of(focus_path, root)
+            elif focus.endswith(".py") or os.path.isfile(focus_path) or os.path.isfile(focus_path + ".py"):
+                focus = module_name_of(focus_path + (".py" if os.path.isfile(focus_path + ".py") else ""), root)
             if focus not in graph:
-                # try suffix match (e.g. 'main' matches 'src.main')
-                fsegs = focus.split(".")
-                match = None
-                for mod in graph:
-                    msegs = mod.split(".")
-                    if len(msegs) >= len(fsegs) and msegs[-len(fsegs):] == fsegs:
-                        if match is None or len(msegs) < len(match.split(".")):
-                            match = mod
-                if match is not None:
-                    focus = match
-                else:
-                    print(f"module not found: {args.focus}", file=sys.stderr)
-                    return 1
+                # a real file that's absent from the graph is a module with no
+                # edges (imports nothing, nothing imports it) — focus it anyway
+                # instead of reporting "module not found"
+                fpath = os.path.join(root, focus.replace(".", os.sep) + ".py")
+                if not (os.path.isfile(focus_path) or os.path.isfile(focus_path + ".py")
+                        or os.path.isfile(fpath)):
+                    # try suffix match (e.g. 'main' matches 'src.main')
+                    fsegs = focus.split(".")
+                    match = None
+                    for mod in graph:
+                        msegs = mod.split(".")
+                        if len(msegs) >= len(fsegs) and msegs[-len(fsegs):] == fsegs:
+                            if match is None or len(msegs) < len(match.split(".")):
+                                match = mod
+                    if match is not None:
+                        focus = match
+                    else:
+                        print(f"module not found: {args.focus}", file=sys.stderr)
+                        return 1
             text = render_graph_multi(graph, root, start=focus)
         else:
             text = render_graph_multi(graph, root)

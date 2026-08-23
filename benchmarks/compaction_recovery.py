@@ -24,8 +24,10 @@ Usage:
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 try:
     import tiktoken
@@ -119,6 +121,20 @@ def main():
     args = ap.parse_args()
     repo = os.path.abspath(args.repo)
 
+    # Work on a scratch clone: --decide/--checkpoint write into the repo's
+    # .codeloom-memory, and --resume re-reads it — seeding the TARGET repo
+    # would (a) mutate the user's checkout and (b) make repeated runs drift
+    # (each run appends ledger entries, so resume bytes grow run-over-run).
+    scratch = tempfile.mkdtemp(prefix="codeloom-compaction-")
+    try:
+        subprocess.run(["git", "clone", "-q", "--local", repo, scratch],
+                       check=True)
+        _run(scratch)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _run(repo: str) -> None:
     # seed the decision ledger exactly like a real mid-task checkpoint
     subprocess.run([sys.executable, CodeLoom, "--decide",
                     "use retry(3) not retry(inf) for the login flow"],

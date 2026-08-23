@@ -61,7 +61,16 @@ import tempfile
 
 BUG_RE = re.compile(
     r"\b(?:fix(?:es|ed)?|hotfix(?:es)?|bug(?:s)?|resolve[ds]?|"
-    r"close[sd]?(?!-)|issue|crash(?:es|ed)?|panic|segfault|regression)\b",
+    r"close[sd]?(?!-)|issues?|crash(?:es|ed)?|panic(?:s|ed)?|"
+    r"segfault(?:s|ed)?|regression(?:s)?)\b",
+    re.IGNORECASE,
+)
+# Concrete bug NOUNS (vs. the generic fix verbs above). A commit that is a
+# pure typo/spelling fix ("fix typo: architecture") must NOT produce a bug
+# memory unless one of these nouns is present ("fix typo and crash" -> bug).
+BUG_NOUN_RE = re.compile(
+    r"\b(?:bugs?|issues?|crash(?:es|ed)?|panic(?:s|ed)?|"
+    r"segfault(?:s|ed)?|regression(?:s)?)\b",
     re.IGNORECASE,
 )
 BUG_BOOST_RE = re.compile(r"\b(regression|critical)\b", re.IGNORECASE)
@@ -78,10 +87,17 @@ ARCH_STRONG_RE = re.compile(r"\b(migrat\w*|refactor\w*|re-architect\w*|redesign\
 ARCH_WORD_RE = re.compile(r"\barchitect\w*\b", re.IGNORECASE)
 TYPO_RE = re.compile(r"\b(typos?|spelling)\b", re.IGNORECASE)
 # Negated phrases ("no issue", "not a crash", "without any bug", "never
-# panics") must not trigger a bug memory. Stripped before matching.
+# panics", "no longer crashes", "doesn't crash") must not trigger a bug
+# memory. Stripped before matching. Note: "no regression" is stripped too --
+# a message that ONLY negates (e.g. "no regressions") implies a positive
+# fix elsewhere in the message; if there is no other bug trigger, nothing
+# extracts, which is the safe direction.
 NEGATION_RE = re.compile(
-    r"\b(?:no|not|never|without)\s+(?:(?:any|a|an|more)\s+)?"
-    r"(?:bugs?|issues?|crash(?:es|ed)?|panic|segfault|regression)\b",
+    r"\b(?:(?:no|not|never|without|no\s+more|no\s+longer)\s+"
+    r"(?:(?:any|a|an|more)\s+)?|"
+    r"(?:doesn't|doesnt|don't|dont|didn't|didnt|won't|wont|cannot|can't|cant)\s+)"
+    r"(?:bugs?|issues?|crash(?:es|ed)?|panic(?:s|ed)?|segfault(?:s|ed)?|"
+    r"regression(?:s)?)\b",
     re.IGNORECASE,
 )
 
@@ -111,15 +127,25 @@ def classify(message):
     found = []
     buggy = NEGATION_RE.sub(" ", message)
     if BUG_RE.search(buggy):
-        conf = BUG_CONFIDENCE
-        if BUG_BOOST_RE.search(buggy):
-            conf += BUG_BOOST
-        found.append(("bug", round(min(conf, MAX_CONFIDENCE), 2)))
+        # A commit that is ONLY a typo/spelling fix ("fix typo: architecture")
+        # is not a bug fix; require a concrete bug noun unless the commit is
+        # already about a bug ("fix: typo in the crash handler" still counts).
+        if TYPO_RE.search(buggy) and not BUG_NOUN_RE.search(buggy):
+            pass  # pure typo fix -- no bug memory
+        else:
+            _append_bug(found, buggy)
     if API_RE.search(message):
         found.append(("api", API_CONFIDENCE))
     if _is_architecture(message):
         found.append(("architecture", ARCH_CONFIDENCE))
     return found
+
+
+def _append_bug(found, buggy):
+    conf = BUG_CONFIDENCE
+    if BUG_BOOST_RE.search(buggy):
+        conf += BUG_BOOST
+    found.append(("bug", round(min(conf, MAX_CONFIDENCE), 2)))
 
 
 def _is_architecture(message):
@@ -166,12 +192,17 @@ def derive_symbols(files):
 # git history
 # --------------------------------------------------------------------------
 
-GIT_FORMAT = "%x1e%H%x1f%s%x1f%b"
+GIT_FORMAT = "%x1e%H%x1f%s%x1f%b%x1d"
 
 # git's "no commits yet" / unborn HEAD exit status (128) + message fragment
 # (differs by version: "does not have any commits yet" / "does not have any
-# commits"). An empty repo is NOT an error -- it just has nothing to extract.
-_EMPTY_REPO_MARKERS = ("does not have any commits", "does not have any commits yet")
+# commits" / older git's "bad default revision 'HEAD'"). An empty repo is
+# NOT an error -- it just has nothing to extract.
+_EMPTY_REPO_MARKERS = (
+    "does not have any commits",
+    "does not have any commits yet",
+    "bad default revision",
+)
 
 
 def resolve_repo(repo):
@@ -217,13 +248,27 @@ def _parse_log(text):
         chunk = chunk.strip("\n")
         if not chunk:
             continue
-        lines = chunk.split("\n")
+        # %b bodies are multi-line, so the body is terminated with \x1d
+        # (group separator) before the file list. Anything before \x1d is
+        # the header+body; anything after it is the file list.
+        if "\x1d" in chunk:
+            head, _, file_blob = chunk.partition("\x1d")
+        else:
+            # Defensive: records without the terminator (e.g. hand-crafted
+            # input) fall back to treating everything after the header as
+            # files -- matching the historical behavior.
+            head, file_blob = chunk, ""
+        lines = head.split("\n")
         header = lines[0].split("\x1f", 2)
         if len(header) < 2:
             continue  # malformed record -- skip deterministically
         sha, subject = header[0], header[1]
         body = header[2] if len(header) > 2 else ""
-        files = [ln.strip() for ln in lines[1:] if ln.strip()]
+        if len(lines) > 1:
+            # Defensive: a stray newline inside the subject (shouldn't
+            # happen with %s) would otherwise push body text into files.
+            body = "\n".join([body] + lines[1:]) if body else "\n".join(lines[1:])
+        files = [ln.strip() for ln in file_blob.split("\n") if ln.strip()]
         commits.append(
             {"sha": sha, "subject": subject.strip(), "body": body.strip(), "files": files}
         )
@@ -476,7 +521,9 @@ def main(argv=None):
     if failed:
         summary += " (%d core call(s) failed)" % failed
     print(summary)
-    return 0
+    # A core call that failed means memories were NOT created: that is a
+    # real error, not a clean "nothing to do" run.
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

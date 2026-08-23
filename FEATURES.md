@@ -249,7 +249,10 @@ are files in your repo, not claims in our README.
 ### 34. Benchmark Runner — `--eval` ✅ (shipped v0.78)
 Deterministic benchmark runner: run the retrieval/efficiency corpus against a
 repo and get comparable numbers on your own machine (seeds the same
-reproducibility discipline as `benchmarks/`, but self-serve).
+reproducibility discipline as `benchmarks/`, but self-serve). **Network note:**
+with no `--root`, the runner clones the fastapi fixture from GitHub into
+`/tmp/bench-fastapi` (same as the `benchmarks/` suite); pass `--root` pointing
+at an existing local checkout to keep the run fully offline.
 
 ### 35. Pre-Commit Risk Hook — `--install-hook` / `--uninstall-hook` ✅ (shipped v0.78)
 Install a git pre-commit hook that runs the deterministic risk screen before

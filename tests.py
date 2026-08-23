@@ -306,6 +306,46 @@ class TestCodeLoom(unittest.TestCase):
         self.assertIn("tests.test_cli", fs["depended_on_by"])
         self.assertIn("src.utils.retry", fs["depends_on"])
 
+    def test_graph_focus_missing_neighbor_module(self):
+        # Regression (a8df4c2): reachable() must NOT KeyError when a module
+        # named by an edge is absent from the graph keys — build_graph_multi
+        # omits leaf modules (no deps -> no key), so focusing a chain like
+        # a -> b -> c walks into the missing 'c'.
+        graph = {"a": {"b"}, "b": {"c"}}
+        fs = codeloom.focus_subgraph(graph, "a")
+        self.assertEqual(fs["module"], "a")
+        self.assertEqual(fs["depends_on"], ["b", "c"])
+        self.assertEqual(fs["depended_on_by"], [])
+        # inverse direction must also survive a missing neighbor
+        self.assertEqual(codeloom.reachable(graph, "c", "in"), {"a", "b"})
+        self.assertEqual(codeloom.reachable(graph, "a", "out"), {"b", "c"})
+
+    def test_graph_focus_cli_missing_leaf_module(self):
+        # End-to-end regression (a8df4c2): --graph --focus on a module whose
+        # transitive neighbor is a leaf absent from the graph keys must exit
+        # 0 and render the focus (was: unhandled KeyError traceback).
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(repo)
+            for n, body in [
+                    ("a.py", "import b\n\ndef fa():\n    return b.fb()\n"),
+                    ("b.py", "import c\n\ndef fb():\n    return c.fc()\n"),
+                    ("c.py", "def fc():\n    return 1\n")]:
+                with open(os.path.join(repo, n), "w") as f:
+                    f.write(body)
+            r = subprocess.run(
+                [sys.executable, os.path.join(TESTS_DIR, "codeloom.py"),
+                 "--graph", "--focus", "a", repo],
+                capture_output=True, text=True, timeout=120)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("KeyError", r.stderr)
+            self.assertIn("## depends_on", r.stdout)
+            self.assertIn("  b", r.stdout)
+            self.assertIn("  c", r.stdout)
+        finally:
+            force_rmtree(tmp)
+
     def test_call_graph(self):
         files = []
         for root, _, fs in os.walk(self.repo):
@@ -1080,6 +1120,77 @@ class TestCodeLoom(unittest.TestCase):
             import os
             self.assertTrue(os.path.isfile(core))
 
+    def test_engine_guard_no_core_no_empty_index(self):
+        # Regression (9453831): --index --engine c/rust with no core binary
+        # available must exit 1 with an actionable fix line and must NOT
+        # write an empty index file (was: exit 0 + a lying "saved to").
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(repo)
+            with open(os.path.join(repo, "a.py"), "w") as f:
+                f.write("def fa():\n    return 1\n")
+            # isolated copy of the script with NO core binaries / sources
+            # beside it (the checkout itself has real cores, so a plain
+            # subprocess would find them; the copy cannot)
+            iso = os.path.join(tmp, "iso")
+            os.makedirs(iso)
+            shutil.copy(os.path.join(TESTS_DIR, "codeloom.py"),
+                        os.path.join(iso, "codeloom.py"))
+            env = dict(os.environ)
+            env["PATH"] = "/usr/bin:/bin"  # no cc/rustc auto-build paths
+            for engine in ("c", "rust"):
+                idx = os.path.join(repo, ".codeloom-index.json")
+                if os.path.exists(idx):
+                    os.remove(idx)
+                r = subprocess.run(
+                    [sys.executable, os.path.join(iso, "codeloom.py"),
+                     "--index", "--engine", engine, repo],
+                    capture_output=True, text=True, env=env, timeout=120)
+                self.assertEqual(r.returncode, 1,
+                                 "engine %s: expected exit 1, got %d\n%s"
+                                 % (engine, r.returncode, r.stdout))
+                self.assertIn("no core binary is built", r.stderr)
+                self.assertIn("Refusing to write an empty index", r.stderr)
+                self.assertFalse(os.path.exists(idx),
+                                 "empty index written despite missing core")
+        finally:
+            force_rmtree(tmp)
+
+    def test_engine_guard_empty_core_results(self):
+        # Second guard (9453851): even WITH a core binary, if the scan
+        # yields no symbols the index must not be saved (exit 1, actionable).
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(repo)
+            with open(os.path.join(repo, "a.py"), "w") as f:
+                f.write("def fa():\n    return 1\n")
+            iso = os.path.join(tmp, "iso")
+            os.makedirs(iso)
+            shutil.copy(os.path.join(TESTS_DIR, "codeloom.py"),
+                        os.path.join(iso, "codeloom.py"))
+            # a core that consumes stdin and emits nothing (broken core)
+            fake = os.path.join(iso, "codeloom_core")
+            with open(fake, "w") as f:
+                f.write("#!/bin/sh\ncat >/dev/null\nexit 0\n")
+            os.chmod(fake, 0o755)
+            env = dict(os.environ)
+            env["PATH"] = "/usr/bin:/bin"
+            r = subprocess.run(
+                [sys.executable, os.path.join(iso, "codeloom.py"),
+                 "--index", "--engine", "c", repo],
+                capture_output=True, text=True, env=env, timeout=120)
+            self.assertEqual(r.returncode, 1,
+                             "expected exit 1, got %d\n%s" % (r.returncode, r.stdout))
+            self.assertIn("produced no symbols", r.stderr)
+            self.assertIn("Refusing to save an empty index", r.stderr)
+            self.assertFalse(
+                os.path.exists(os.path.join(repo, ".codeloom-index.json")),
+                "empty index written despite zero symbols from core")
+        finally:
+            force_rmtree(tmp)
+
     def test_install_grammars_prints(self):
         # without --yes, install_grammars prints the command (doesn't install)
         out = codeloom.install_grammars(do_install=False)
@@ -1148,6 +1259,28 @@ class TestCodeLoom(unittest.TestCase):
                          "VERSION/SERVER_VERSION/pyproject drift: "
                          "%r / %r / %r" % (codeloom.VERSION, mcp_version,
                                            pyproject_version))
+
+    def test_npm_mirror_byte_identical(self):
+        # Regression (7130874 + c2134ca re-sync): npm/ is a byte-identical
+        # mirror of the single-file tool + MCP server + LICENSE + README,
+        # refreshed by npm/sync.sh. A one-sided edit (fix in codeloom.py but
+        # no re-sync) silently ships an OLD tool to npm users — exactly the
+        # drift class that made npm/codeloom.py lag the --graph --focus fix.
+        # This test pins the mirror to the source of truth.
+        here = TESTS_DIR
+        for name in ("codeloom.py", "codeloom-mcp.py", "codeloom_mcp.py",
+                     "LICENSE", "README.md"):
+            src = os.path.join(here, name)
+            mirror = os.path.join(here, "npm", name)
+            self.assertTrue(os.path.isfile(mirror),
+                            "npm/%s missing (run npm/sync.sh)" % name)
+            with open(src, "rb") as f:
+                a = f.read()
+            with open(mirror, "rb") as f:
+                b = f.read()
+            self.assertEqual(a, b,
+                             "npm/%s drifted from %s — re-run npm/sync.sh"
+                             % (name, name))
 
     def test_mcp_tool_registry_unique_and_complete(self):
         # The MCP TOOLS registry is the server's contract with the agent.
@@ -1233,6 +1366,56 @@ class TestCodeLoom(unittest.TestCase):
             resp = next(x for x in got if x.get("id") == 2)
             self.assertIn("_meta", resp["result"])
             self.assertIn("stale_warning", resp["result"]["_meta"])
+        finally:
+            force_rmtree(tmp)
+
+    def test_mcp_envelope_truthful_resident_vs_disk(self):
+        # Regression (9453831): the freshness envelope must report WHERE the
+        # answer came from. Resident-index tools (codeloom_search/health/
+        # deadcode/get_symbol) serve from the always-fresh in-memory index:
+        # source=resident-in-memory, stale_warning=false, no disk age/commit.
+        # Disk-served tools (codeloom_query loads the persistent index) must
+        # keep reporting the disk index's TRUE staleness instead of inheriting
+        # the resident claim. Both in ONE server session so the resident
+        # index exists when the query runs.
+        import json
+        here = TESTS_DIR
+        mcp = os.path.join(here, "codeloom-mcp.py")
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, "m.py"), "w") as f:
+                f.write("class Q:\n    pass\n")
+            reqs = [
+                {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                 "params": {"name": "codeloom_search",
+                            "arguments": {"root": tmp, "symbol": "Q"}}},
+                {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                 "params": {"name": "codeloom_query",
+                            "arguments": {"root": tmp, "query": "symbol Q"}}},
+            ]
+            payload = "\n".join(json.dumps(r) for r in reqs) + "\n"
+            r = subprocess.run([sys.executable, mcp], input=payload,
+                               capture_output=True, text=True, timeout=120)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            got = [json.loads(l) for l in r.stdout.splitlines() if l.strip()]
+            sresp = next(x for x in got if x.get("id") == 2)
+            self.assertNotIn("isError", sresp.get("result", {}))
+            smeta = sresp["result"]["_meta"]
+            self.assertEqual(smeta["source"], "resident-in-memory")
+            self.assertFalse(smeta["stale_warning"])
+            self.assertTrue(smeta["indexed"])
+            self.assertIsNone(smeta["index_age_days"])
+            qresp = next(x for x in got if x.get("id") == 3)
+            qmeta = qresp["result"]["_meta"]
+            # codeloom_query reads the on-disk index: it must NOT inherit the
+            # resident claim, and must stay honest about the missing index
+            # (nothing was ever saved to disk)
+            self.assertNotEqual(qmeta.get("source"), "resident-in-memory",
+                                "disk-served tool must not claim a resident source")
+            self.assertFalse(qmeta["indexed"])
+            self.assertTrue(qmeta["stale_warning"])
+            self.assertIsNone(qmeta["index_age_days"])
         finally:
             force_rmtree(tmp)
 
@@ -1732,6 +1915,83 @@ class TestVerifyEdit(unittest.TestCase):
             self.assertIn("VERDICT: STOP", r.stdout)
             self.assertIn("new-cycle", r.stdout)
             self.assertIn("c -> a", r.stdout)
+        finally:
+            force_rmtree(os.path.dirname(repo))
+
+    def _git_repo_no_commit(self, files):
+        """A git repo with files in the working tree but ZERO commits
+        (no HEAD baseline): --verify-edit must not crash on missing HEAD."""
+        base = tempfile.mkdtemp()
+        repo = os.path.join(base, "repo")
+        os.makedirs(repo)
+        for rel, content in files.items():
+            p = os.path.join(repo, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w") as f:
+                f.write(content)
+        for c in (["init", "-q"], ["config", "user.email", "t@t"],
+                  ["config", "user.name", "t"]):
+            subprocess.run(["git"] + c, cwd=repo, timeout=30,
+                           capture_output=True, text=True)
+        return repo
+
+    def test_verify_edit_untracked_file_no_stop(self):
+        # Regression: an UNTRACKED file has no HEAD text — the full-HEAD
+        # pre-edit graph must treat it as new (nothing pre-existing to
+        # dangle), so a broken import inside it is a CHECK (vendored/
+        # unresolvable), never a STOP and never a crash. The tracked repo
+        # has a clean committed baseline.
+        repo = self._git_repo({
+            "tracked.py": "def ok():\n    return 1\n",
+        })
+        try:
+            with open(os.path.join(repo, "untracked.py"), "w") as f:
+                f.write("from missing import x\n\ndef f():\n    return x()\n")
+            r = self._run_verify(repo)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("Traceback", r.stderr)
+            self.assertIn("VERDICT: CHECK", r.stdout)
+            self.assertIn("untracked", r.stdout)
+            self.assertNotIn("VERDICT: STOP", r.stdout)
+            self.assertNotIn("dangling-import", r.stdout)
+            # strict still must not elevate an untracked suspect to STOP
+            r2 = self._run_verify(repo, "--severity", "strict")
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            self.assertNotIn("VERDICT: STOP", r2.stdout)
+        finally:
+            force_rmtree(os.path.dirname(repo))
+
+    def test_verify_edit_no_commits_clean_go(self):
+        # Regression: a repo with ZERO commits (all files untracked) has no
+        # HEAD tree — ls-tree/HEAD:file both fail. verify-edit must not
+        # crash and must still resolve working-tree imports: GO.
+        repo = self._git_repo_no_commit({
+            "a.py": "import b\n\ndef fa():\n    return b.fb()\n",
+            "b.py": "def fb():\n    return 1\n",
+        })
+        try:
+            r = self._run_verify(repo)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("Traceback", r.stderr)
+            self.assertIn("VERDICT: GO", r.stdout)
+        finally:
+            force_rmtree(os.path.dirname(repo))
+
+    def test_verify_edit_no_commits_broken_import_check(self):
+        # No-commit repo with an unresolvable import: CHECK (vendored), not
+        # STOP (no HEAD baseline means nothing pre-existing can dangle) and
+        # not a crash.
+        repo = self._git_repo_no_commit({
+            "a.py": "from missing import x\n\ndef fa():\n    return x()\n",
+        })
+        try:
+            r = self._run_verify(repo)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("Traceback", r.stderr)
+            self.assertIn("VERDICT: CHECK", r.stdout)
+            self.assertIn("vendored_import", r.stdout)
+            self.assertNotIn("VERDICT: STOP", r.stdout)
+            self.assertNotIn("dangling-import", r.stdout)
         finally:
             force_rmtree(os.path.dirname(repo))
 

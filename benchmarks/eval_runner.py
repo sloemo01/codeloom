@@ -62,16 +62,26 @@ def run(cmd, cwd=None, timeout=600):
 
 
 def ensure_root(root):
-    """Root must be a git checkout; clone fastapi if missing (same pattern as
-    token_efficiency.py's ensure_repo)."""
+    """Root must be a git checkout. The DEFAULT root is cloned if missing
+    (same pattern as token_efficiency.py's ensure_repo); an EXPLICIT --root
+    is never cloned — network access must not be required when the user
+    points the runner at a local checkout, so a non-git explicit root fails
+    fast with a clear message instead of a network fetch (or a crash when
+    offline)."""
     root = os.path.abspath(root)
     if os.path.isdir(os.path.join(root, ".git")):
         return root
-    print(f"[setup] cloning {FASTAPI_URL} -> {root} (shallow) ...")
-    subprocess.run(["git", "clone", "-q", "--depth", "1", FASTAPI_URL, root],
-                   check=True)
-    print("[setup] cloned.")
-    return root
+    if root == os.path.abspath(DEFAULT_ROOT):
+        print(f"[setup] cloning {FASTAPI_URL} -> {root} (shallow) ...")
+        subprocess.run(["git", "clone", "-q", "--depth", "1", FASTAPI_URL, root],
+                       check=True)
+        print("[setup] cloned.")
+        return root
+    raise RuntimeError(
+        f"--root {root} is not a git checkout (no {os.path.join(root, '.git')}). "
+        f"Clone the corpus yourself (e.g. `git clone --depth 1 "
+        f"{FASTAPI_URL} {root}`) or drop --root to use the default clone.")
+
 
 
 # --------------------------------------------------------------------------- #
@@ -153,7 +163,7 @@ def parse_compaction(text):
         if m:
             cl_calls, cl_kb = int(m.group(1)), float(m.group(2))
             continue
-        m = re.search(r"tokens \(est\): bare (\d+) vs codeloom (\d+) = ([\d.]+)% fewer",
+        m = re.search(r"tokens \(est\): bare (\d+) vs codeloom (\d+) = (-?[\d.]+)% fewer",
                       line)
         if m:
             bare_tok, cl_tok = int(m.group(1)), int(m.group(2))
@@ -165,7 +175,11 @@ def parse_compaction(text):
                          "bare_calls": int(m.group("bare_calls")),
                          "bare_kb": float(m.group("bare_kb")),
                          "codeloom_calls": int(m.group("cl_calls"))})
-    loss = [r for r in rows if r["bare_calls"] <= r["codeloom_calls"]]
+    loss = [r for r in rows if r["bare_calls"] < r["codeloom_calls"]]
+    # A token loss is a loss too: a negative reduction (codeloom burned MORE
+    # tokens than the bare path) must surface in the loss section, never be
+    # silently swallowed by the calls-only comparison.
+    token_loss = (red_pct is not None and red_pct < 0 and bare_tok is not None)
     return {
         "bare": {"calls": bare_calls, "kb": bare_kb,
                  "tokens_est": bare_tok},
@@ -174,6 +188,7 @@ def parse_compaction(text):
         "tokens_reduction_pct": red_pct,
         "rows": rows,
         "loss_rows": loss,
+        "token_loss": token_loss,
     }
 
 
@@ -263,9 +278,14 @@ def run_bench(root, json):
 
 def print_loss_rows(data):
     loss = data.get("loss_rows") or []
-    if not loss:
+    if not loss and not data.get("token_loss"):
         return
     print("\nLOSS ROWS (published, never filtered):")
+    if data.get("token_loss"):
+        print("  [compaction] TOKEN LOSS: codeloom tokens "
+              f"({data['codeloom']['tokens_est']}) exceeded bare "
+              f"({data['bare']['tokens_est']}) — reduction "
+              f"{data['tokens_reduction_pct']:.1f}%")
     for r in loss:
         if "symbol" in r:
             print(f"  [token] {r['repo']}/{r['symbol']}: "
@@ -293,7 +313,8 @@ def render(data, kind):
         print(f"  codeloom:{cl['calls']} calls, {cl['kb']:.1f} KB, "
               f"{cl['tokens_est']} tokens (est)")
         if data.get("tokens_reduction_pct") is not None:
-            print(f"  {data['tokens_reduction_pct']:.1f}% fewer tokens, "
+            pct = data["tokens_reduction_pct"]
+            print(f"  {pct:.1f}% {'fewer' if pct >= 0 else 'MORE'} tokens, "
                   f"{data['bare']['calls']/max(data['codeloom']['calls'],1):.1f}x "
                   f"fewer calls")
     if kind == "sealed":

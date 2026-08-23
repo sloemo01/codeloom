@@ -62,12 +62,12 @@ typedef struct {
     int n_calls;
 } FileResult;
 
-/* Trim surrounding whitespace in place. */
+/* Trim surrounding whitespace in place. Safe on empty strings. */
 static char *trim(char *s) {
     while (isspace((unsigned char)*s)) s++;
-    char *end = s + strlen(s) - 1;
-    while (end > s && isspace((unsigned char)*end)) end--;
-    end[1] = '\0';
+    size_t len = strlen(s);
+    while (len > 0 && isspace((unsigned char)s[len - 1])) len--;
+    s[len] = '\0';
     return s;
 }
 
@@ -551,25 +551,53 @@ static int scan_file(const char *path, const char *ext, FileResult *fr) {
     return 1;
 }
 
+/* Emit a JSON string literal with proper escaping (quotes, backslash,
+   control chars). The old code printed raw %s — a file path or identifier
+   containing a quote or backslash produced invalid JSON that the Python
+   side silently dropped. */
+static void json_quote(FILE *out, const char *s) {
+    fputc('"', out);
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        switch (*p) {
+            case '"':  fputs("\\\"", out); break;
+            case '\\': fputs("\\\\", out); break;
+            case '\n': fputs("\\n", out); break;
+            case '\r': fputs("\\r", out); break;
+            case '\t': fputs("\\t", out); break;
+            default:
+                if (*p < 0x20) fprintf(out, "\\u%04x", *p);
+                else fputc(*p, out);
+        }
+    }
+    fputc('"', out);
+}
+
 static void print_json(const FileResult *fr) {
-    printf("{\"file\":\"%s\",\"symbols\":[", fr->file);
+    printf("{\"file\":");
+    json_quote(stdout, fr->file);
+    printf(",\"symbols\":[");
     for (int i = 0; i < fr->n_syms; i++) {
         if (i) printf(",");
-        /* JSON-escape names (crude but adequate for identifiers) */
-        printf("{\"name\":\"%s\",\"kind\":\"%s\"}", fr->syms[i].name, fr->syms[i].kind);
+        printf("{\"name\":");
+        json_quote(stdout, fr->syms[i].name);
+        printf(",\"kind\":");
+        json_quote(stdout, fr->syms[i].kind);
+        printf("}");
     }
     printf("],\"imports\":[");
     for (int i = 0; i < fr->n_imports; i++) {
         if (i) printf(",");
-        printf("\"%s\"", fr->imports[i]);
+        json_quote(stdout, fr->imports[i]);
     }
     printf("],\"calls\":[");
     for (int i = 0; i < fr->n_calls; i++) {
         if (i) printf(",");
-        printf("{\"caller\":\"%s\",\"targets\":[", fr->calls[i].caller);
+        printf("{\"caller\":");
+        json_quote(stdout, fr->calls[i].caller);
+        printf(",\"targets\":[");
         for (int j = 0; j < fr->calls[i].n; j++) {
             if (j) printf(",");
-            printf("\"%s\"", fr->calls[i].targets[j]);
+            json_quote(stdout, fr->calls[i].targets[j]);
         }
         printf("]}");
     }
@@ -577,17 +605,101 @@ static void print_json(const FileResult *fr) {
 }
 
 /* Native file watcher: kqueue (macOS/BSD) or inotify (Linux). Watches a
-   directory tree recursively and prints code file paths that change. */
+   directory tree recursively and prints code file changes as JSON lines
+   matching the --watch-merge contract:
+     {"file":"<abs path>"}                     modified or created
+     {"file":"<abs path>","removed":true}      deleted or renamed away
+   The banner goes to stderr so stdout stays a clean JSON pipe. */
+static void watch_emit_file(const char *path) {
+    printf("{\"file\":");
+    json_quote(stdout, path);
+    printf("}\n");
+    fflush(stdout);
+}
+
+static void watch_emit_removed(const char *path) {
+    printf("{\"file\":");
+    json_quote(stdout, path);
+    printf(",\"removed\":true}\n");
+    fflush(stdout);
+}
+
 #ifdef __APPLE__
 /* Recursive kqueue watcher: registers every file and directory under root,
    catching content edits (NOTE_WRITE) AND create/delete/rename. When a dir
-   changes, re-walk to pick up newly created files. This is a genuine native
-   watcher — the thing codegraph has. */
+   changes, re-scan it to pick up newly created files. */
 #define MAX_WATCH 8192
+#define MAX_DIRS 4096
 static int g_fds[MAX_WATCH];
+static char *g_paths[MAX_WATCH];
 static int g_nfds = 0;
+static int g_dfds[MAX_DIRS];
+static char *g_dpaths[MAX_DIRS];
+static int g_ndirs = 0;
 
-static void add_dir_watches(int kq, const char *dir) {
+static int add_file_watch(int kq, const char *full) {
+    if (g_nfds >= MAX_WATCH) return 0;
+    int fd = open(full, O_RDONLY);
+    if (fd < 0) return 0;
+    struct kevent ev;
+    EV_SET(&ev, (uintptr_t)fd, EVFILT_VNODE, EV_ADD | EV_ENABLE | EV_CLEAR,
+           NOTE_WRITE | NOTE_EXTEND | NOTE_RENAME | NOTE_DELETE, 0, NULL);
+    if (kevent(kq, &ev, 1, NULL, 0, NULL) < 0) { close(fd); return 0; }
+    g_fds[g_nfds] = fd;
+    g_paths[g_nfds] = strdup(full);
+    g_nfds++;
+    return 1;
+}
+
+static void drop_file_watch(int i) {
+    if (i < 0 || i >= g_nfds) return;
+    close(g_fds[i]);
+    free(g_paths[i]);
+    g_fds[i] = g_fds[g_nfds - 1];
+    g_paths[i] = g_paths[g_nfds - 1];
+    g_nfds--;
+}
+
+static int path_is_watched_file(const char *full) {
+    for (int i = 0; i < g_nfds; i++)
+        if (strcmp(g_paths[i], full) == 0) return 1;
+    return 0;
+}
+
+static int dir_is_watched(const char *dir) {
+    for (int i = 0; i < g_ndirs; i++)
+        if (strcmp(g_dpaths[i], dir) == 0) return 1;
+    return 0;
+}
+
+/* Track a directory fd in the dir table. */
+static void add_dir_watch(int kq, const char *dir) {
+    if (g_ndirs >= MAX_DIRS || dir_is_watched(dir)) return;
+    int fd = open(dir, O_RDONLY);
+    if (fd < 0) return;
+    struct kevent ev;
+    EV_SET(&ev, (uintptr_t)fd, EVFILT_VNODE, EV_ADD | EV_ENABLE | EV_CLEAR,
+           NOTE_WRITE | NOTE_DELETE | NOTE_RENAME, 0, NULL);
+    if (kevent(kq, &ev, 1, NULL, 0, NULL) < 0) { close(fd); return; }
+    g_dfds[g_ndirs] = fd;
+    g_dpaths[g_ndirs] = strdup(dir);
+    g_ndirs++;
+}
+
+static void drop_dir_watch(int i) {
+    if (i < 0 || i >= g_ndirs) return;
+    close(g_dfds[i]);
+    free(g_dpaths[i]);
+    g_dfds[i] = g_dfds[g_ndirs - 1];
+    g_dpaths[i] = g_dpaths[g_ndirs - 1];
+    g_ndirs--;
+}
+
+/* Register watches for dir and everything under it. When `emit` is set,
+   newly found code files are emitted as created (used when a dir event
+   fires); the initial scan passes emit=0 so startup stays quiet. */
+static void scan_dir_tree(int kq, const char *dir, int emit) {
+    add_dir_watch(kq, dir);
     DIR *dp = opendir(dir);
     if (!dp) return;
     struct dirent *de;
@@ -596,78 +708,134 @@ static void add_dir_watches(int kq, const char *dir) {
         char full[4096];
         snprintf(full, sizeof(full), "%s/%s", dir, de->d_name);
         if (de->d_type == DT_DIR) {
-            add_dir_watches(kq, full);           /* recurse */
-        } else if (de->d_type == DT_REG && g_nfds < MAX_WATCH) {
+            scan_dir_tree(kq, full, emit);
+        } else if (de->d_type == DT_REG) {
             const char *ext = strrchr(de->d_name, '.');
-            if (ext && is_c_ext(ext)) {
-                int fd = open(full, O_RDONLY);
-                if (fd >= 0) {
-                    struct kevent ev;
-                    EV_SET(&ev, (uintptr_t)fd, EVFILT_VNODE,
-                           EV_ADD | EV_ENABLE | EV_CLEAR,
-                           NOTE_WRITE | NOTE_EXTEND | NOTE_RENAME | NOTE_DELETE, 0, NULL);
-                    kevent(kq, &ev, 1, NULL, 0, NULL);
-                    g_fds[g_nfds++] = fd;
-                }
+            if (ext && is_c_ext(ext) && !path_is_watched_file(full)) {
+                if (add_file_watch(kq, full) && emit) watch_emit_file(full);
             }
         }
     }
     closedir(dp);
 }
 
+static void handle_dir_event(int kq, int didx) {
+    /* files created inside dir; new subdirs get registered recursively */
+    scan_dir_tree(kq, g_dpaths[didx], 1);
+}
+
 static void watch_dir(const char *root) {
     int kq = kqueue();
     if (kq < 0) { perror("kqueue"); return; }
-    /* also watch the root dir itself for entry changes */
-    int rfd = open(root, O_RDONLY);
-    if (rfd >= 0) {
-        struct kevent ev;
-        EV_SET(&ev, (uintptr_t)rfd, EVFILT_VNODE, EV_ADD | EV_ENABLE | EV_CLEAR,
-               NOTE_WRITE | NOTE_DELETE | NOTE_RENAME, 0, NULL);
-        kevent(kq, &ev, 1, NULL, 0, NULL);
-        g_fds[g_nfds++] = rfd;
-    }
-    add_dir_watches(kq, root);
-    printf("watching %s (kqueue, %d files)…\n", root, g_nfds);
-    fflush(stdout);
+    scan_dir_tree(kq, root, 0);
+    fprintf(stderr, "watching %s (kqueue, %d files)…\n", root, g_nfds);
+    fflush(stderr);
     struct kevent out;
     for (;;) {
         struct timespec ts = {0, 250000000}; /* 250ms */
         int n = kevent(kq, NULL, 0, &out, 1, &ts);
-        if (n > 0 && out.udata == NULL) {
-            /* identify which watched fd fired by matching udata-free events:
-               we registered without udata, so resolve via g_fds index */
-            for (int i = 0; i < g_nfds; i++) {
-                if ((uintptr_t)g_fds[i] == out.ident) {
-                    /* find path by fd is not tracked; emit marker + let the
-                       merger re-scan that dir cheaply. Emitting 'changed'
-                       keeps the pipe contract; the Python side re-walks. */
-                    break;
-                }
+        if (n <= 0) continue;
+        int fi = -1;
+        for (int i = 0; i < g_nfds; i++)
+            if ((uintptr_t)g_fds[i] == out.ident) { fi = i; break; }
+        if (fi >= 0) {
+            if (out.fflags & (NOTE_DELETE | NOTE_RENAME)) {
+                watch_emit_removed(g_paths[fi]);
+                drop_file_watch(fi);
+            } else {
+                watch_emit_file(g_paths[fi]);
             }
-            printf("changed\n");
-            fflush(stdout);
+            continue;
+        }
+        int di = -1;
+        for (int i = 0; i < g_ndirs; i++)
+            if ((uintptr_t)g_dfds[i] == out.ident) { di = i; break; }
+        if (di >= 0) {
+            if (out.fflags & NOTE_DELETE) {
+                /* dir removed: emit removed for every registered file under it */
+                const char *dp = g_dpaths[di];
+                size_t dlen = strlen(dp);
+                for (int i = g_nfds - 1; i >= 0; i--) {
+                    if (strncmp(g_paths[i], dp, dlen) == 0 &&
+                        (g_paths[i][dlen] == '/' || g_paths[i][dlen] == '\0')) {
+                        watch_emit_removed(g_paths[i]);
+                        drop_file_watch(i);
+                    }
+                }
+                drop_dir_watch(di);
+            } else {
+                handle_dir_event(kq, di);
+            }
         }
     }
 }
 #elif defined(__linux__)
 #include <sys/inotify.h>
+#define MAX_WD 4096
+static int g_wds[MAX_WD];
+static char *g_wpaths[MAX_WD];
+static int g_nwds = 0;
+
+static int add_inotify_watch(int fd, const char *dir) {
+    if (g_nwds >= MAX_WD) return 0;
+    int wd = inotify_add_watch(fd, dir, IN_MODIFY | IN_CLOSE_WRITE | IN_CREATE |
+                               IN_DELETE | IN_MOVED_TO | IN_MOVED_FROM);
+    if (wd < 0) return 0;
+    g_wds[g_nwds] = wd;
+    g_wpaths[g_nwds] = strdup(dir);
+    g_nwds++;
+    return 1;
+}
+
+static const char *wd_path(int wd) {
+    for (int i = 0; i < g_nwds; i++)
+        if (g_wds[i] == wd) return g_wpaths[i];
+    return NULL;
+}
+
+static void add_inotify_tree(int fd, const char *dir) {
+    add_inotify_watch(fd, dir);
+    DIR *dp = opendir(dir);
+    if (!dp) return;
+    struct dirent *de;
+    while ((de = readdir(dp)) != NULL) {
+        if (de->d_name[0] == '.') continue;
+        char full[4096];
+        snprintf(full, sizeof(full), "%s/%s", dir, de->d_name);
+        if (de->d_type == DT_DIR) add_inotify_tree(fd, full);
+    }
+    closedir(dp);
+}
+
 static void watch_dir(const char *root) {
     int fd = inotify_init();
     if (fd < 0) { perror("inotify"); return; }
-    inotify_add_watch(fd, root, IN_MODIFY | IN_CREATE | IN_DELETE | IN_MOVED_TO | IN_MOVED_FROM);
-    printf("watching %s (inotify)…\n", root);
-    fflush(stdout);
-    char buf[4096];
+    add_inotify_tree(fd, root);
+    fprintf(stderr, "watching %s (inotify)…\n", root);
+    fflush(stderr);
+    char buf[8192];
     for (;;) {
         ssize_t len = read(fd, buf, sizeof(buf));
         if (len < 0) continue;
-        /* print changed code files */
         for (ssize_t i = 0; i < len; ) {
             struct inotify_event *ev = (struct inotify_event *)&buf[i];
-            if (ev->len) {
+            if (ev->len && ev->name[0] != '.') {
+                const char *base = wd_path(ev->wd);
+                char full[4096];
+                if (base) snprintf(full, sizeof(full), "%s/%s", base, ev->name);
+                else snprintf(full, sizeof(full), "%s", ev->name);
+                int is_dir = (ev->mask & IN_ISDIR) != 0;
                 const char *ext = strrchr(ev->name, '.');
-                if (ext && is_c_ext(ext)) { printf("%s\n", ev->name); fflush(stdout); }
+                int code = (!is_dir && ext && is_c_ext(ext));
+                if ((ev->mask & (IN_DELETE | IN_MOVED_FROM)) && !is_dir) {
+                    if (code) { watch_emit_removed(full); }
+                } else if (ev->mask & (IN_CREATE | IN_MOVED_TO | IN_CLOSE_WRITE)) {
+                    if (is_dir) {
+                        add_inotify_tree(fd, full);   /* watch the new tree */
+                    } else if (code) {
+                        watch_emit_file(full);
+                    }
+                }
             }
             i += sizeof(struct inotify_event) + ev->len;
         }
@@ -781,7 +949,7 @@ int main(int argc, char **argv) {
                         strcmp(de->d_name, "dist") == 0 ||
                         strcmp(de->d_name, ".venv") == 0 ||
                         strcmp(de->d_name, "venv") == 0) continue;
-                    if (ndirs >= cap) { cap *= 2; dirs = realloc(dirs, cap * sizeof(char)); }
+                    if (ndirs >= cap) { cap *= 2; dirs = realloc(dirs, cap * sizeof(char *)); }
                     dirs[ndirs++] = strdup(full);
                 } else if (de->d_type == DT_REG) {
                     const char *ext = strrchr(de->d_name, '.');
