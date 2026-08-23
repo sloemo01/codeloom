@@ -4913,11 +4913,20 @@ def _c_walk(root: str, engine: str = "c") -> List[str]:
     except Exception:
         return []
     out = [l for l in r.stdout.splitlines() if l.strip()]
+    # Skip artifact/build dirs the Python walker excludes (gitignore parity
+    # plus target/: the Rust engine's build dir pollutes the file list with
+    # binary .rlib/.d files whose bytes kill a text-mode shard decode — the
+    # 2026-08-23 dogfood failure: --engine c on codeloom itself returned
+    # 'no symbols' from 81 binary .rlib files).
+    _C_SKIP_DIRS = (".git", "node_modules", ".venv", "venv", "__pycache__",
+                    "dist", "build", "target", ".cargo", ".tox", ".mypy_cache",
+                    ".pytest_cache", ".ruff_cache", ".eggs", ".cache")
     return [
         os.path.join(root, l.lstrip("./")) if not os.path.isabs(l) else l
         for l in out
         if os.path.basename(l.rstrip("/")) not in _ENGINE_SELF_FILES
         and os.path.splitext(l)[1].lower() in CALL_LANG_RULES
+        and not any(("/" + d + "/") in ("/" + l.lstrip("./") + "/") for d in _C_SKIP_DIRS)
     ]
 
 def _c_scan(files: List[str], engine: str = "c") -> List[dict]:
