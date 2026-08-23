@@ -705,7 +705,7 @@ TOOLS: List[Dict[str, Any]] = [
                 "type": {"type": "string", "enum": ["decision", "bug", "question", "architecture", "api", "constraint", "lesson", "todo", "warning", "goal", "hypothesis"], "description": "Memory entry type (default: decision); matches core MEMORY_TYPES"},
                 "title": {"type": "string", "description": "Short title for the memory entry"},
                 "body": {"type": "string", "description": "Full body/details of the memory entry"},
-                "symbols": {"type": "string", "description": "Comma-separated symbols this memory links to (optional)"},
+                "symbols": {"type": "array", "items": {"type": "string"}, "description": "Symbols this memory links to (optional); array of names, or a comma-separated string for older clients"},
                 "priority": {"type": "integer", "description": "Optional importance override 0-100 (higher = more important); core importance formula caps at 100"},
             },
             "required": ["title", "body"],
@@ -1599,11 +1599,91 @@ def _run_core_or_cli(candidates: tuple, cli_argv: List[str], target: str, label:
             f"({'/'.join(candidates)} missing and `{' '.join(cli_argv)}` failed: {hint}).\n")
 
 
+def _resolve_git_root(path: str) -> Optional[str]:
+    """Walk up from path (file or dir) to the containing git repository
+    root (.git present, or `git -C <dir> rev-parse --show-toplevel` succeeds).
+    Returns None when the path is not inside any git repo."""
+    p = os.path.abspath(path)
+    if os.path.isfile(p):
+        p = os.path.dirname(p)
+    while True:
+        if os.path.isdir(os.path.join(p, ".git")):
+            return p
+        parent = os.path.dirname(p)
+        if parent == p:
+            return None
+        p = parent
+
+
+def _verify_edit_scoped(report: str, target: str, root: str) -> str:
+    """Scope a whole-tree --verify-edit report down to ONE target file:
+    keep only driver lines whose module is the target's module, then
+    recompute the verdict from the surviving drivers (STOP > CHECK > GO).
+    Lines that carry no module (header, tree-wide statements like
+    'no working-tree changes') are kept verbatim so the report stays
+    readable and honest."""
+    try:
+        mod = codeloom.module_name_of(os.path.abspath(target), root)
+    except Exception:
+        mod = os.path.basename(target)
+    import re as _re
+    # module token match: 'mod' as a standalone module name — never a prefix
+    # of a longer module (app must not match app2/app.extra) and not inside
+    # the word 'someapp'. Dots in dotted module names are literal.
+    mod_pat = _re.compile(r"(?<![\w.])" + _re.escape(mod) + r"(?![\w])")
+    lines = report.splitlines()
+    kept = []
+    stops, checks = 0, 0
+    for ln in lines:
+        stripped = ln.strip()
+        if stripped.startswith("STOP") or stripped.startswith("CHECK"):
+            # driver lines are '  STOP  [dangling-import]  mod -> dep: why'
+            if mod_pat.search(ln):
+                kept.append(ln)
+                if stripped.startswith("STOP"):
+                    stops += 1
+                else:
+                    checks += 1
+            continue
+        if "VERDICT:" in stripped:
+            continue  # recomputed below
+        kept.append(ln)
+    if stops:
+        verdict = "STOP — %d provably-dangling pre-edit edge(s)/new cycle(s) for %s." % (stops, mod)
+    elif checks:
+        verdict = "CHECK — %d suspect(s) for %s; review, not blocking." % (checks, mod)
+    else:
+        verdict = "GO — no dangling edges, no new cycles for %s." % mod
+    kept.append("VERDICT: %s" % verdict)
+    kept.append("  (scoped to target file %s; whole-tree drivers for other files hidden)" % os.path.basename(target))
+    return "\n".join(kept)
+
+
 def _verify_edit(target: str) -> str:
-    """Edit-safety preflight: core verify_edit/render_verify_edit, else CLI."""
-    return _run_core_or_cli(("verify_edit", "render_verify_edit"),
-                            [sys.executable, _CLI_PATH, "--verify-edit", target],
-                            target, "verify_edit")
+    """Edit-safety preflight: core verify_edit/render_verify_edit, else CLI.
+
+    The target may be a repo ROOT or a single FILE. verify_edit() itself
+    only accepts a git repo root (passing a file path makes git fail with
+    'not a git repository'), so a file target is resolved to its containing
+    repo and the verdict is re-scoped to that file's module.
+    """
+    target = os.path.abspath(target)
+    if not os.path.isfile(target):
+        # root/dir target: unchanged path (verify_edit handles dirs in-repo)
+        return _run_core_or_cli(("verify_edit", "render_verify_edit"),
+                                [sys.executable, _CLI_PATH, "--verify-edit", target],
+                                target, "verify_edit")
+    repo_root = _resolve_git_root(target)
+    if repo_root is None:
+        return ("# codeloom_verify_edit\nVERDICT: ERROR\n"
+                f"  {target} is not inside a git repository.\n"
+                "  run --verify-edit from inside a git repository (or pass its root).\n")
+    # report against the repo root so imports resolve; re-scope the verdict
+    # to the target file's module so the answer covers THIS edit's diff.
+    report = _run_core_or_cli(("verify_edit", "render_verify_edit"),
+                              [sys.executable, _CLI_PATH, "--verify-edit", repo_root],
+                              repo_root, "verify_edit")
+    return _verify_edit_scoped(report, target, repo_root)
 
 
 def _blindspot(target: str) -> str:
@@ -1900,19 +1980,35 @@ def _memory_symbol(root: str, symbol: str) -> str:
         return f"# memory retrieval failed: {e}"
 
 
+def _coerce_symbols(symbols: Any) -> Optional[List[str]]:
+    """Accept a JSON array of symbol names OR the legacy comma-separated
+    string (schema was type:string before 0.79.0-era hardening; some clients
+    still send the old shape). Returns None when nothing usable was passed."""
+    if symbols is None:
+        return None
+    if isinstance(symbols, str):
+        parts = symbols.split(",")
+    elif isinstance(symbols, (list, tuple)):
+        parts = list(symbols)
+    else:
+        parts = [symbols]
+    syms = [s.strip() for s in parts if isinstance(s, str) and s and s.strip()]
+    return syms or None
+
+
 def _memory_add(root: str, title: str, body: str, mtype: str,
-                symbols: str, priority: Optional[int]) -> str:
+                symbols: Any, priority: Optional[int]) -> str:
     """Memory OS write: core memory_append() if landed, else subprocess
     fallback to `python3 codeloom.py --memory-add ...` (tests.py convention)."""
     if mtype not in ("decision", "bug", "question", "architecture", "api",
                      "constraint", "lesson", "todo", "warning", "goal",
                      "hypothesis"):
         mtype = "decision"
+    syms = _coerce_symbols(symbols)
     fn = getattr(codeloom, "memory_append", None)
     if callable(fn):
         try:
-            syms = [s.strip() for s in (symbols or "").split(",") if s and s.strip()]
-            entry: Any = fn(root, mtype, title, body=body, symbols=syms or None,
+            entry: Any = fn(root, mtype, title, body=body, symbols=syms,
                             priority=priority, created="memory")
             if entry.get("error"):
                 return f"# memory-add failed: {entry['error']}"
@@ -1927,8 +2023,8 @@ def _memory_add(root: str, title: str, body: str, mtype: str,
     argv += ["--type", mtype, "--title", title]
     if body:
         argv += ["--body", body]
-    if symbols:
-        argv += ["--symbols", symbols]
+    if syms:
+        argv += ["--symbols", ",".join(syms)]
     if priority is not None:
         argv += ["--priority", str(int(priority))]
     try:

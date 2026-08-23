@@ -4690,6 +4690,16 @@ def render_precision(files: List[str], root: str, symbol: str) -> str:
 # speed. Pure-Python remains the zero-dependency default.
 _CORE_NAME = "codeloom_core"
 
+# The accelerator's own source/binary files. They live next to codeloom.py,
+# so a repo-root --engine c/rust walk would otherwise index the engine
+# itself — junk symbols from codeloom_core.c (its libc helpers, etc.) would
+# appear as if they were the target repo's code. Never index these.
+_ENGINE_SELF_FILES = frozenset({
+    "codeloom_core.c", "codeloom_core", "codeloom_core.exe",
+    "codeloom_core_rs.rs", "codeloom_core_rs", "codeloom_core_rs.exe",
+    "codeloom_rs",
+})
+
 def _find_core_engine(engine: str = "c") -> Optional[str]:
     """Locate the compiled accelerator binary (C or Rust) next to codeloom.py.
     engine='c' -> codeloom_core; engine='rust' -> codeloom_core_rs.
@@ -4786,11 +4796,17 @@ def _c_walk(root: str, engine: str = "c") -> List[str]:
     except Exception:
         return []
     out = [l for l in r.stdout.splitlines() if l.strip()]
-    return [os.path.join(root, l.lstrip("./")) if not os.path.isabs(l) else l for l in out]
+    return [
+        os.path.join(root, l.lstrip("./")) if not os.path.isabs(l) else l
+        for l in out
+        if os.path.basename(l.rstrip("/")) not in _ENGINE_SELF_FILES
+    ]
 
 def _c_scan(files: List[str], engine: str = "c") -> List[dict]:
     """Run the accelerator core over files. Returns per-file dicts
-    {file, symbols:[{name,kind}], imports:[...], calls:[...]}. Empty on error.
+    {file, symbols:[{name,kind,line,start_byte,end_byte,sig?}], imports:[...],
+    calls:[...]}. Empty on error. A core emitting only {name,kind} (older
+    binaries) is handled by _c_symbol_index's precise-extraction fallback.
     Shards the file list across parallel core processes (each core is
     single-threaded; on a 64k-file kernel repo this turns ~80s of scanning
     into ~15-20s across cores). Each shard uses stdin mode (no argv limits).
@@ -4839,7 +4855,16 @@ def _c_scan(files: List[str], engine: str = "c") -> List[dict]:
 def _c_symbol_index(files: List[str], root: str, scan: Optional[List[dict]] = None) -> dict:
     """Build a symbol index (name -> locs) using the C core's fast scan.
     Faster than Python parsing; used by --engine c. Snippet is the def line.
-    `scan` is an optional pre-computed _c_scan() result (avoids re-scanning)."""
+    `scan` is an optional pre-computed _c_scan() result (avoids re-scanning).
+
+    Records carry the full persistent-index schema (module, path, kind, line,
+    start_byte, end_byte, tokens, source) so --get-symbol/--read/--cross work
+    identically for C-engine and Python-engine indexes. A core that emits
+    per-symbol spans (line/start_byte/end_byte — codeloom_core.c) is used
+    directly; a core that emits only {name, kind} (e.g. the Rust core) falls
+    back to the precise Python extractors per file, keeping --engine c
+    byte-accurate on every supported core.
+    """
     idx: dict = {}
     if scan is None:
         scan = _c_scan(files)
@@ -4849,17 +4874,92 @@ def _c_symbol_index(files: List[str], root: str, scan: Optional[List[dict]] = No
         p = fr.get("file", "")
         if p:
             mod_map[p] = module_name_of(p, root)
+    # files whose core records lack per-symbol spans -> precise re-extract
+    need_precise = {}
+    for fr in scan:
+        path = fr.get("file", "")
+        if not path:
+            continue
+        syms = fr.get("symbols", []) or []
+        if syms and not any("line" in s or "start_byte" in s for s in syms):
+            ext = os.path.splitext(path)[1].lower()
+            if ext == ".py" or ext in CALL_LANG_RULES:
+                need_precise[path] = ext
+    precise_idx: dict = {}
+    if need_precise:
+        for path, ext in need_precise.items():
+            mod = mod_map.get(path) or module_name_of(path, root)
+            if ext == ".py":
+                _index_python_bytes(path, mod, precise_idx)
+            else:
+                _index_other_bytes(path, mod, ext, precise_idx)
+        # keep only the names the core actually saw (its scanner defines the
+        # symbol set; the precise pass only supplies offsets/source for them)
+        core_names = set()
+        for fr in scan:
+            for s in fr.get("symbols", []):
+                core_names.add(s.get("name", ""))
+        for name in list(precise_idx.keys()):
+            if name not in core_names:
+                del precise_idx[name]
     for fr in scan:
         path = fr.get("file", "")
         if not path:
             continue
         mod = mod_map.get(path) or module_name_of(path, root)
+        # precise extraction exists for this file -> reuse it verbatim
+        if path in need_precise:
+            for name, locs in precise_idx.items():
+                file_locs = [l for l in locs if l.get("path") == path]
+                if file_locs:
+                    idx.setdefault(name, []).extend(file_locs)
+            continue
         for s in fr.get("symbols", []):
             name = s.get("name", "")
             if not name:
                 continue
+            line = s.get("line")
+            sb = s.get("start_byte")
+            eb = s.get("end_byte")
+            if line is not None and sb is not None and eb is not None:
+                src = s.get("source", "")
+                if not src and eb > sb:
+                    try:
+                        with open(path, "r", encoding="utf-8",
+                                  errors="replace") as fh:
+                            fh.seek(sb)
+                            src = fh.read(eb - sb)
+                    except (OSError, ValueError):
+                        src = ""
+                if src and eb - sb > 0:
+                    idx.setdefault(name, []).append({
+                        "module": mod, "path": path, "kind": "function",
+                        "line": line, "start_byte": sb, "end_byte": eb,
+                        "tokens": estimate_tokens(src), "source": src,
+                    })
+                    continue
+                # span present but source unreadable -> still record offsets
+                idx.setdefault(name, []).append({
+                    "module": mod, "path": path, "kind": "function",
+                    "line": line, "start_byte": sb, "end_byte": eb,
+                    "tokens": 3, "source": "",
+                })
+                continue
+            # core gave no span at all -> precise re-extract for this file
+            ext = os.path.splitext(path)[1].lower()
+            if ext == ".py" or ext in CALL_LANG_RULES:
+                per_file: dict = {}
+                if ext == ".py":
+                    _index_python_bytes(path, mod, per_file)
+                else:
+                    _index_other_bytes(path, mod, ext, per_file)
+                locs = per_file.get(name)
+                if locs:
+                    idx.setdefault(name, []).extend(locs)
+                    continue
+            # last resort: name/line only (keeps --cross/--search working)
             idx.setdefault(name, []).append({
-                "module": mod, "kind": "function", "line": 1,
+                "module": mod, "path": path, "kind": "function", "line": 1,
                 "sig": name, "tokens": 3,
             })
     return idx
@@ -5379,6 +5479,10 @@ def render_index(files: List[str], root: str, max_files: int, parallel: bool = F
     (codeloom_core_rs). Pure-Python ('py') is the default. If an engine core is
     requested but unavailable, this FAILS LOUDLY (no silent empty index)."""
     if engine in ("c", "rust"):
+        # defensive: never index the engine's own sources/bins even if they
+        # reached the file list through some other walker path
+        files = [f for f in files
+                 if os.path.basename(f.rstrip("/")) not in _ENGINE_SELF_FILES]
         if not _find_core_engine(engine):
             raise SystemExit(
                 f"[error] --engine {engine} requested but no core binary is built "

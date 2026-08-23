@@ -40,8 +40,17 @@ Deterministic head-to-head that answers "how good is codeloom vs a plain agent?"
 - Crossover: ~1–2k files
 - Biggest retrieval gap: `--answer` heuristic can misfire ("Request class" vs lifecycle)
 - Real bugs found: `--graph --focus` KeyError on missing neighbor module (fixed: graph.get guard in reachable(), codeloom.py:2585)
+- REAL BUG (v0.79.0, reproduced on clean clone): `--index --engine c` then `--get-symbol` → `.codeloom-index.lazy` dbm entries all become `line 1, bytes 0-0, ~3 tokens` (empty stubs). Fix: delete `.codeloom-index.lazy` + `.codeloom-index.json`; pure-python path is correct. Untested on rust engine.
+- MCP `verify_edit(target=<file>)` on a dirty tree → false "GO — no working-tree changes (clean)"; target=<repo root> returns the correct CHECK. Server reads a stale snapshot for file targets.
+- MCP `memory_add` with `symbols` as a string (what the schema accepts) → `'list' object has no attribute 'split'`; the server expects a list.
+- MCP `context` tool param is `targets` (not `symbols`); MCP `memory` tool was NOT loaded into the native Hermes session (only via CLI `--memory --target-root`).
+- `--task` on flask ranked `src.flask.json.provider` #1 for "request lifecycle" (docstring keyword hit on 'response'), `src.flask.app` only #4 — keyword-score misfire on small repos.
 
 ## Pitfalls (each cost real time)
+- `--index --engine c` + `--get-symbol`: lazy dbm corruption (empty stubs) — clear `.codeloom-index.lazy`/`.codeloom-index.json` to recover
+- MCP `verify_edit`: always target the repo ROOT, never a single file (file targets read a stale snapshot → false GO)
+- MCP `memory_add`: pass `symbols` as a JSON array, not a string
+- MCP `ask` on flask: matches `Request` class, not the lifecycle flow — verify `confidence: high` results against source
 - `--risk` silently ignores the positional root — must run from INSIDE the repo
 - `--blindspot` returns SKIP/no-op until `--mark-seen` is set (silent no-op trap)
 - `--memory-prune` has no `--dry-run` — dry-run is the default; `--delete` opts in

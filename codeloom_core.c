@@ -16,7 +16,12 @@
  * line-based multi-language scanner (C-compatible definition/import regexes).
  *
  * Output line per file:
- *   {"file":"...","symbols":[{"name":...,"kind":...}],"imports":["...",...]}
+ *   {"file":"...","symbols":[{"name":...,"kind":...,"line":N,
+ *    "start_byte":N,"end_byte":N,"sig":"..."}],"imports":["...",...]}
+ * The per-symbol byte range spans the def line through the body end
+ * (dedent-based for Python, brace-balance for brace languages), which lets
+ * --engine c build the same full persistent records (byte offsets + source)
+ * as the pure-Python engine.
  *
  * This is honest: it accelerates the scanning that Python regex does, at C
  * speed. It is NOT a tree-sitter parser — that stays an optional Python
@@ -44,6 +49,10 @@
 typedef struct {
     char name[128];
     char kind[16];
+    int line;               /* 1-based definition line */
+    long start_byte;        /* byte offset of the definition line start */
+    long end_byte;          /* byte offset just past the body end */
+    char sig[256];          /* first non-empty line of the span (def line) */
 } Sym;
 
 typedef struct {
@@ -481,10 +490,52 @@ static int scan_file(const char *path, const char *ext, FileResult *fr) {
                  strcmp(ext, ".mjs") == 0 || strcmp(ext, ".cjs") == 0 ||
                  strcmp(ext, ".svelte") == 0 || strcmp(ext, ".vue") == 0);
     char current_func[128] = "";
+    /* Open symbol-body spans. Python closes on dedent below the def's own
+       indent; brace languages close when the brace depth returns to zero.
+       This gives each symbol a real byte range (def line .. body end) so the
+       persistent index can serve full source slices like the Python engine. */
+#define MAX_OPEN 512
+    int open_sym[MAX_OPEN];
+    int open_indent[MAX_OPEN];
+    int open_depth[MAX_OPEN];
+    int n_open = 0;
+    long line_start = 0;   /* byte offset of the current line start */
+    int lineno = 0;        /* 1-based */
     while (fgets(line, sizeof(line), fp)) {
+        int this_len = (int)strlen(line);
+        int this_indent = 0;
+        while (this_indent < this_len &&
+               (line[this_indent] == ' ' || line[this_indent] == '\t'))
+            this_indent++;
+        int brace_delta = 0;
+        for (int b = 0; b < this_len; b++) {
+            if (line[b] == '{') brace_delta++;
+            else if (line[b] == '}') brace_delta--;
+        }
         char *t = trim(line);
-        if (t[0] == '\0' || t[0] == '#' || t[0] == '/' || t[0] == '*' || t[0] == ';')
-            continue;
+        int is_code = (t[0] != '\0' && t[0] != '#' && t[0] != '/' &&
+                       t[0] != '*' && t[0] != ';');
+        /* close spans whose body ended on this line */
+        if (is_py) {
+            while (n_open > 0 && is_code &&
+                   this_indent <= open_indent[n_open - 1]) {
+                fr->syms[open_sym[n_open - 1]].end_byte = line_start;
+                n_open--;
+            }
+        } else {
+            while (n_open > 0) {
+                int top = n_open - 1;
+                open_depth[top] += brace_delta;
+                if (open_depth[top] > 0) break;
+                /* depth back to zero: body ends at end of this line */
+                fr->syms[open_sym[top]].end_byte = line_start + this_len;
+                n_open--;
+                if (brace_delta < 0) break;  /* only one def closes per '}' */
+            }
+        }
+        if (!is_code) {
+            goto next_line;
+        }
         char *name = NULL;
         if (is_py) {
             name = match_def(t);
@@ -498,10 +549,31 @@ static int scan_file(const char *path, const char *ext, FileResult *fr) {
             name = match_cdef(t);
         }
         if (name && fr->n_syms < MAX_SYMS) {
-            snprintf(fr->syms[fr->n_syms].name, sizeof(fr->syms[0].name), "%s", name);
-            strcpy(fr->syms[fr->n_syms].kind, "function");
-            fr->n_syms++;
+            int i = fr->n_syms++;
+            snprintf(fr->syms[i].name, sizeof(fr->syms[0].name), "%s", name);
+            strcpy(fr->syms[i].kind, "function");
+            fr->syms[i].line = lineno + 1;   /* 1-based, matches Python engine */
+            fr->syms[i].start_byte = line_start;
+            fr->syms[i].end_byte = line_start + this_len;
+            snprintf(fr->syms[i].sig, sizeof(fr->syms[0].sig), "%s", t);
             snprintf(current_func, sizeof(current_func), "%s", name);
+            if (n_open < MAX_OPEN) {
+                open_sym[n_open] = i;
+                open_indent[n_open] = this_indent;
+                if (is_py) {
+                    open_depth[n_open] = 1; /* stays open until dedent */
+                    n_open++;
+                } else {
+                    open_depth[n_open] = brace_delta;
+                    n_open++;
+                    /* one-line body (e.g. `int f(){return 1;}`): closed
+                       immediately; a pure decl (`void f(int);`) closes too */
+                    if (brace_delta <= 0) {
+                        fr->syms[i].end_byte = line_start + this_len;
+                        n_open--;
+                    }
+                }
+            }
             free(name);
         }
         char *imp = match_import(t);
@@ -546,6 +618,13 @@ static int scan_file(const char *path, const char *ext, FileResult *fr) {
                 }
             }
         }
+next_line:
+        line_start += this_len;
+        lineno++;
+    }
+    /* EOF: close every still-open span at end-of-file */
+    while (n_open > 0) {
+        fr->syms[open_sym[--n_open]].end_byte = line_start;
     }
     fclose(fp);
     return 1;
@@ -582,6 +661,12 @@ static void print_json(const FileResult *fr) {
         json_quote(stdout, fr->syms[i].name);
         printf(",\"kind\":");
         json_quote(stdout, fr->syms[i].kind);
+        printf(",\"line\":%d,\"start_byte\":%ld,\"end_byte\":%ld",
+               fr->syms[i].line, fr->syms[i].start_byte, fr->syms[i].end_byte);
+        if (fr->syms[i].sig[0] != '\0') {
+            printf(",\"sig\":");
+            json_quote(stdout, fr->syms[i].sig);
+        }
         printf("}");
     }
     printf("],\"imports\":[");
