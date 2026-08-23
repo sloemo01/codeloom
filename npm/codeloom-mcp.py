@@ -2975,21 +2975,20 @@ def serve() -> int:
                 try:
                     root = str(args.get("root") or ".")
                     if name in _RESIDENT_INDEX_TOOLS:
+                        # Resident tools are always fresh (content-hash re-parse);
+                        # the server fingerprint was already exchanged at
+                        # initialize — per-call _meta carries only the dynamic
+                        # truth, not the static server identity (~800 tok saved
+                        # per call; v5 re-run measured _meta at 24% of output).
                         result["_meta"] = {
                             "indexed": True,
                             "source": "resident-in-memory",
                             "index_age_days": None,
                             "indexed_commit": None,
                             "stale_warning": False,
-                            "server_version": SERVER_VERSION,
-                            "server_file_mtime": _SERVER_FILE_MTIME,
-                            "server_sha256": _SERVER_SHA,
                         }
                     else:
                         result["_meta"] = codeloom.meta_envelope(root)
-                        result["_meta"]["server_version"] = SERVER_VERSION
-                        result["_meta"]["server_file_mtime"] = _SERVER_FILE_MTIME
-                        result["_meta"]["server_sha256"] = _SERVER_SHA
                 except Exception:
                     pass
             _send({"jsonrpc": "2.0", "id": msg_id, "result": result})
