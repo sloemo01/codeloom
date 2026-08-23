@@ -637,7 +637,23 @@ new feature.
 - Update `README.md` (usage, feature table, roadmap) and `LAUNCH.md` if launch copy changes.
 
 ## Pitfalls
-- **Stale long-lived MCP server (v0.79.0+ version handshake)**: a resident
+- **Dual-path verification is mandatory (deadcode/call-graph fixes)**: codeloom has TWO
+  call-graph implementations — the regex/`_scan_calls` path and the tree-sitter
+  fast-path (`_ts_call_edges`). A fix to one is NOT a fix to both. If you change
+  call-edge logic (class definitions, module-level calls, attribute calls), you
+  MUST verify in an environment where tree-sitter + grammars are installed
+  (the fast path), because a grammar-less sandbox exercises only the regex path
+  and can ship an incomplete fix. 2026-08-23: df2d3b1 fixed only the regex path;
+  b4f1dc6 closed the tree-sitter gap after the regression was caught on the real
+  repo. Repro check: `REGISTRY = Registry()` at module top-level must NOT flag
+  `Registry` dead WITH a grammar installed, and a genuinely-dead class must
+  STILL be flagged (no over-correction). Run `python3 -c "import tree_sitter"` to
+  confirm which path you're testing.
+- **Dead-symbol output needs manual triage before acting**: the CLI dead-code
+  detector misses `self.`/`cls.` calls, qualified module references
+  (`MODULE.sym()`), `export *` barrels, and interface-typed callers — so a large
+  repo's dead list is mostly false positives. Verify with `rg -l \<name>` across
+  the repo before claiming a symbol dead.
   MCP server keeps serving whatever code was on disk when it started — after
   a fix lands, the OLD behavior persists until restart even though
   `SERVER_VERSION` is unchanged. Detect it: `initialize` `serverInfo` now

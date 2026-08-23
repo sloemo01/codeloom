@@ -2927,6 +2927,20 @@ def build_cross_call_graph(files: List[str], root: str) -> dict:
                 continue
             caller = node.name
             callees = set()
+            # local variables bound to imported classes: r = Registry()
+            # so r.register() can resolve to the class's module.
+            local_types: dict = {}
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Assign) and len(sub.targets) == 1:
+                    tgt = sub.targets[0]
+                    if isinstance(tgt, ast.Name) and isinstance(sub.value, ast.Call):
+                        f = sub.value.func
+                        if isinstance(f, ast.Name) and f.id in import_maps.get(mod, {}):
+                            local_types[tgt.id] = import_maps[mod][f.id]
+                    elif isinstance(tgt, ast.Name) and isinstance(sub.value, ast.Name):
+                        # variable alias: r2 = r
+                        if sub.value.id in local_types:
+                            local_types[tgt.id] = local_types[sub.value.id]
             for sub in ast.walk(node):
                 if not isinstance(sub, ast.Call):
                     continue
@@ -2945,15 +2959,28 @@ def build_cross_call_graph(files: List[str], root: str) -> dict:
                     if isinstance(obj, ast.Name) and obj.id in import_maps.get(mod, {}):
                         base = import_maps[mod][obj.id]
                         callees.add(f"{base}.{fn.attr}")
+                    elif isinstance(obj, ast.Name) and obj.id in local_types:
+                        base = local_types[obj.id]
+                        callees.add(f"{base}.{fn.attr}")
+                    elif isinstance(obj, ast.Name) and obj.id in symbols.get(mod, {}):
+                        # local class reference: Registry().register()
+                        for q in symbols[mod][obj.id]:
+                            callees.add(f"{q}.{fn.attr}")
+                    elif isinstance(obj, ast.Call) and isinstance(obj.func, ast.Name) \
+                            and obj.func.id in import_maps.get(mod, {}):
+                        # inline instantiation: Registry().run(...)
+                        base = import_maps[mod][obj.func.id]
+                        callees.add(f"{base}.{fn.attr}")
                     else:
-                        # method on a local class instance — best-effort
+                        # method on a local class instance / self — best-effort
                         if fn.attr in symbols.get(mod, {}):
                             callees |= symbols[mod][fn.attr]
             # filter to codebase-defined symbols only
             callees = {c for c in callees if c in all_defined_q}
             if callees:
                 calls[mod][caller] = callees
-    return calls
+    # prune modules with no callers so header counts match rendered rows
+    return {m: f for m, f in calls.items() if f}
 
 def render_cross_calls(calls: dict, root: str, start: Optional[str] = None,
                        compact: Optional[bool] = None) -> str:
@@ -9843,6 +9870,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
+        if args.json:
+            import fnmatch
+            q = args.files.strip()
+            is_glob = any(ch in q for ch in "*?[")
+            matched = []
+            for f in files:
+                rel = os.path.relpath(f, root).replace(os.sep, "/")
+                if is_glob:
+                    if fnmatch.fnmatch(base_slash(rel), q) or fnmatch.fnmatch(rel, q):
+                        matched.append(rel)
+                elif q.lower() in rel.lower():
+                    matched.append(rel)
+            print(json.dumps({"version": VERSION, "glob": args.files,
+                              "files": sorted(matched), "count": len(matched)}, indent=2))
+            return 0
         print(render_files(files, root, args.files))
         return 0
 
@@ -10224,11 +10266,21 @@ def main(argv: Optional[List[str]] = None) -> int:
             # use persistent index if present (fast path), else build fresh
             pidx = load_persistent_index(root)
             if pidx is not None:
+                if args.json:
+                    results = search_symbols(pidx.get("symbols", {}), args.search)
+                    print(json.dumps({"version": VERSION, "query": args.search,
+                                      "results": results, "count": len(results)}, indent=2))
+                    return 0
                 print(render_search(pidx.get("symbols", {}), args.search))
                 return 0
             cache = load_cache(root)
             index = cached_symbols(files, root, cache)
             save_cache(root, cache)
+            if args.json:
+                results = search_symbols(index, args.search)
+                print(json.dumps({"version": VERSION, "query": args.search,
+                                  "results": results, "count": len(results)}, indent=2))
+                return 0
             print(render_search(index, args.search))
             return 0
 
@@ -10276,6 +10328,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
         if args.usages:
+            if args.json:
+                us = find_usages(files, root, args.usages)
+                print(json.dumps({"version": VERSION, "symbol": args.usages,
+                                  "usages": us, "count": len(us)}, indent=2))
+                return 0
             print(render_usages(files, root, args.usages))
             return 0
 
@@ -10309,6 +10366,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             kg_calls = None
             if pidx and pidx.get("kg"):
                 kg_calls = pidx["kg"].get("calls")
+            if args.json:
+                dead = dead_code(files, root, index=pidx, calls=kg_calls)
+                print(json.dumps({"version": VERSION, "root": root,
+                                  "dead_symbols": [{"symbol": d["symbol"]} for d in dead],
+                                  "count": len(dead)}, indent=2))
+                return 0
             if kg_calls:
                 print(render_deadcode(files, root, index=pidx, calls=kg_calls))
             elif args.parallel:
@@ -10320,6 +10383,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.cross:
             calls = build_cross_call_graph(files, root)
+            if args.json:
+                print(json.dumps({"version": VERSION, "root": root,
+                                  "modules": calls,
+                                  "module_count": len(calls)}, indent=2, default=list))
+                return 0
             focus = None
             if args.focus:
                 focus = args.focus
@@ -10395,6 +10463,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
         if args.task:
+            if args.json:
+                ranked = task_structural_rank(files, root, args.task)
+                print(json.dumps({"version": VERSION, "task": args.task,
+                                  "modules": ranked, "count": len(ranked)}, indent=2))
+                return 0
             print(render_task(files, root, args.task))
             return 0
 
