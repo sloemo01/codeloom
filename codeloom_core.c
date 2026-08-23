@@ -89,6 +89,11 @@ static void lower(char *s) {
 static char *match_def(const char *line) {
     const char *p = line;
     while (*p == ' ' || *p == '\t') p++;
+    /* Python: async def name( or def name( */
+    if (strncmp(p, "async", 5) == 0) {
+        p += 5;
+        while (*p == ' ' || *p == '\t') p++;
+    }
     /* Python: def name( */
     if (strncmp(p, "def ", 4) == 0) {
         const char *n = p + 4;
