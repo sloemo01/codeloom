@@ -585,7 +585,7 @@ Consequences for the agent (why this matters):
 - **Fail-safe by design** — every branch returns actionable context; the
   default is the map + task ranking. A "wrong" pick is still helpful.
 - **Deterministic == testable** — same query, same route, every time. The
-  router is exercised by the 111-test suite and the MCP handshake.
+  router is exercised by the 120-test suite and the MCP handshake.
 - **Keyword order is load-bearing** — safety (verify/blindspot) and
   write-vs-read disambiguation ("remember this bug" → write, "what do we
   know about X" → retrieve) sit BEFORE the broad branches that would
@@ -620,7 +620,7 @@ structured, importance-scored, graph-linked entries:
 ```bash
 python3 tests.py
 ```
-Expect `OK` (111 tests, incl. the 7 `TestMemoryOS` cases). Add tests for any
+Expect `OK` (120 tests, incl. the 7 `TestMemoryOS` cases). Add tests for any
 new feature.
 
 ### 5. Re-record the demo GIF
@@ -657,7 +657,7 @@ new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (111 tests).
+- `python3 tests.py` → `OK` (120 tests).
 - `codeloom --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codeloom --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codeloom --task "text" <root>` returns a ranked module list.

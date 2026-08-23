@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/badge/license-MIT-2da44e)](#license)
 [![Python](https://img.shields.io/badge/python-3.8%2B-2da44e)](https://www.python.org/downloads/)
 [![CI](https://img.shields.io/badge/CI-passing-2da44e)](https://github.com/sloemo01/codeloom/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-111-2da44e)](https://github.com/sloemo01/codeloom/blob/main/tests.py)
+[![Tests](https://img.shields.io/badge/tests-120-2da44e)](https://github.com/sloemo01/codeloom/blob/main/tests.py)
 [![Deps](https://img.shields.io/badge/deps-zero-2da44e)](https://github.com/sloemo01/codeloom#readme)
 [![MCP tools](https://img.shields.io/badge/MCP-82%20tools%20%2B%201%20router-2da44e)](#mcp-server-82-tools--1-router)
 [![Stars](https://img.shields.io/github/stars/sloemo01/codeloom)](https://github.com/sloemo01/codeloom/stargazers)
@@ -322,7 +322,7 @@ graph**, retrieved by symbol and graph neighbors (`--memory <symbol>`,
 
 ## Trust & verification
 
-- **CI**: Linux/macOS/Windows × Python 3.8–3.12, 111 tests, ≥46 grammar
+- **CI**: Linux/macOS/Windows × Python 3.8–3.12, 120 tests, ≥46 grammar
   fixtures gated by golden files
 - **Checksums**: every release publishes the SHA-256 of `codeloom.py`;
   verify with `codeloom --verify codeloom.py`
