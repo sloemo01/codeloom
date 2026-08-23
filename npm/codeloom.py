@@ -3935,6 +3935,11 @@ def dead_code(files, root, texts=None, index=None, parallel=False, calls=None):
     called = set()
     for mod, funcs in calls.items():
         for caller, callees in funcs.items():
+            if caller == "<module>":
+                # synthetic bucket for module-level calls — it marks callees
+                # as called but is not itself a defined symbol
+                called |= set(callees)
+                continue
             defined.add(f"{mod}.{caller}")
             # callees may be a set (fresh build) or list (from kg) — normalize
             called |= set(callees)
@@ -7162,6 +7167,14 @@ def build_call_graph_multi(files: List[str], root: str, texts: Optional[dict] = 
             name = next((g for g in m.groups() if g), None)
             if name:
                 defined[mod].add(name)
+        if ext == ".py":
+            # classes are definitions too: `class Registry:` is instantiable
+            # (Registry()) — without it, all_defined lacks the name, the
+            # call filter drops the instantiation, and dead_code flags the
+            # class while `REGISTRY = Registry()` sits next to it
+            # (repowise 2026-08-23 finding).
+            for cm in re.finditer(r"^\s*class\s+(\w+)", text, re.MULTILINE):
+                defined[mod].add(cm.group(1))
 
     all_defined: set = set()
     for s in defined.values():
@@ -7226,6 +7239,17 @@ def build_call_graph_multi(files: List[str], root: str, texts: Optional[dict] = 
                     callee = cm.group(1)
                     if callee in all_defined and callee != current_func:
                         calls[mod][current_func].add(callee)
+            else:
+                # module-level calls (e.g. `REGISTRY = Registry()`, `x = Foo()`)
+                # — these keep classes/lambdas alive. Without this bucket,
+                # instantiated classes are flagged dead (repowise 2026-08-23:
+                # Registry flagged dead while REGISTRY = Registry() sat 3 lines
+                # below). Track under a synthetic "<module>" caller so
+                # dead_code's called-set sees them.
+                for cm in re.finditer(r"\b(\w+)\s*\(", clean_line):
+                    callee = cm.group(1)
+                    if callee in all_defined:
+                        calls[mod].setdefault("<module>", set()).add(callee)
     # drop empty callers
     for mod in list(calls):
         calls[mod] = {k: v for k, v in calls[mod].items() if v}
