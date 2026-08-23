@@ -338,8 +338,8 @@ def _ts_function_names(root_node) -> set:
         node = stack.pop()
         t = node.type
         if t in ("function_definition", "function_declaration", "method_definition",
-                 "class_declaration", "struct_item", "impl_item", "func_declaration",
-                 "func_literal", "method_declaration", "type_declaration"):
+                 "class_declaration", "class_definition", "struct_item", "impl_item",
+                 "func_declaration", "func_literal", "method_declaration", "type_declaration"):
             # find the name child
             for child in node.children:
                 if child.type in ("identifier", "name", "type_identifier", "field_identifier"):
@@ -366,22 +366,52 @@ def _ts_call_edges(root_node) -> set:
                     break
             if caller:
                 for sub in node.children:
-                    _collect_calls(sub, caller, edges)
+                    _collect_calls(sub, edges, caller)
         for child in node.children:
             stack.append(child)
+    # Module-top-level statements (e.g. `REGISTRY = Registry()`, top-level
+    # `if __name__ == "__main__": main()`) are NOT inside any function and the
+    # walk above never visits them — so instantiated classes look uncalled and
+    # dead_code flags them (repowise 2026-08-23; mirror of the regex path's
+    # synthetic "<module>" caller). Collect calls from every top-level child
+    # that is not a definition wrapper (decorated_definition holds the decorator
+    # call AND the inner function — skipping it avoids double-attribution).
+    _ts_def_types = ("function_definition", "function_declaration", "method_definition",
+                     "class_declaration", "class_definition", "struct_item", "impl_item",
+                     "func_declaration", "func_literal", "method_declaration",
+                     "type_declaration", "decorated_definition")
+    for child in root_node.children:
+        if child.type in _ts_def_types:
+            continue
+        _collect_calls(child, edges, "<module>")
     return edges
 
-def _collect_calls(node, caller, edges):
-    """Collect call targets within a function body (iterative, no recursion limit)."""
+
+def _collect_calls(node, edges, caller=None):
+    """Collect call targets within a node (iterative, no recursion limit).
+
+    Caller is the enclosing function name; `"<module>"` for module-level
+    statements. Attribute calls (`obj.method()`, `self._x()`, `Registry()`
+    through `x = Registry()`) resolve to the rightmost identifier so
+    qualified/self-calls count as real callers.
+    """
     stack = [node]
     while stack:
         n = stack.pop()
         if n.type in ("call_expression", "call", "function_call"):
-            # find the function name
+            # find the function name — for attribute access, take the LAST
+            # identifier of the callee expression (method/class name)
             for child in n.children:
                 if child.type in ("identifier", "field_identifier", "name"):
                     callee = child.text.decode("utf-8", "replace")
                     edges.add((caller, callee))
+                    break
+                if child.type in ("attribute", "field_expression", "member_expression"):
+                    text = child.text.decode("utf-8", "replace")
+                    parts = text.split(".")
+                    callee = parts[-1].strip() if parts else text
+                    if callee:
+                        edges.add((caller, callee))
                     break
         for child in n.children:
             stack.append(child)
