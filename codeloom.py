@@ -4800,6 +4800,7 @@ def _c_walk(root: str, engine: str = "c") -> List[str]:
         os.path.join(root, l.lstrip("./")) if not os.path.isabs(l) else l
         for l in out
         if os.path.basename(l.rstrip("/")) not in _ENGINE_SELF_FILES
+        and os.path.splitext(l)[1].lower() in CALL_LANG_RULES
     ]
 
 def _c_scan(files: List[str], engine: str = "c") -> List[dict]:
@@ -4874,16 +4875,23 @@ def _c_symbol_index(files: List[str], root: str, scan: Optional[List[dict]] = No
         p = fr.get("file", "")
         if p:
             mod_map[p] = module_name_of(p, root)
-    # files whose core records lack per-symbol spans -> precise re-extract
+    # files whose core records lack per-symbol spans -> precise re-extract.
+    # .py ALWAYS goes precise: the core's dedent-based Python spans truncate
+    # complex bodies (decorators, nested defs, multi-line signatures) — the
+    # 2026-08-23 flask benchmark showed wsgi_app at 22 tok vs the Python
+    # engine's 471 tok. The core still defines the fast symbol SET; the
+    # precise pass supplies correct offsets/source for it.
     need_precise = {}
     for fr in scan:
         path = fr.get("file", "")
         if not path:
             continue
         syms = fr.get("symbols", []) or []
-        if syms and not any("line" in s or "start_byte" in s for s in syms):
-            ext = os.path.splitext(path)[1].lower()
-            if ext == ".py" or ext in CALL_LANG_RULES:
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".py":
+            need_precise[path] = ext
+        elif syms and not any("line" in s or "start_byte" in s for s in syms):
+            if ext in CALL_LANG_RULES:
                 need_precise[path] = ext
     precise_idx: dict = {}
     if need_precise:
