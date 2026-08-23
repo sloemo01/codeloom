@@ -2582,7 +2582,7 @@ def reachable(graph: dict, start: str, direction: str = "out") -> set:
         if cur in seen:
             continue
         seen.add(cur)
-        nxt = graph[cur] if direction == "out" else _dependents(graph, cur)
+        nxt = graph.get(cur, []) if direction == "out" else _dependents(graph, cur)
         for n in nxt:
             if n not in seen:
                 stack.append(n)
