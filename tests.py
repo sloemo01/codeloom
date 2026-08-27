@@ -2961,6 +2961,28 @@ class TestCEngineImports(unittest.TestCase):
         old = [m for m in mm if m.split(".")[-2:] == tgt.split(".")]
         self.assertIn(idx.get(tgt), old)
 
+    def test_aggregate_precise_by_path(self):
+        # v0.79.6: _aggregate_precise_by_path re-keys {symbol: [locs]} into
+        # {path: [(symbol, loc)]} in O(symbols). The old per-file filter was
+        # O(files x symbols) — ~2.5B path comparisons on HA-core. Every loc
+        # must land under its own path, preserving symbol + order.
+        precise = {
+            "alpha": [{"path": "/r/a.py", "line": 1}, {"path": "/r/b.py", "line": 9}],
+            "beta": [{"path": "/r/a.py", "line": 4}],
+            "gamma": [],
+        }
+        by_path = codeloom._aggregate_precise_by_path(precise)
+        a_locs = by_path.get("/r/a.py") or []
+        self.assertEqual(
+            sorted(a_locs),
+            sorted([("alpha", {"path": "/r/a.py", "line": 1}),
+                    ("beta", {"path": "/r/a.py", "line": 4})]),
+        )
+        self.assertEqual(by_path["/r/b.py"], [("alpha", {"path": "/r/b.py", "line": 9})])
+        # empty symbol lists contribute nothing; missing path -> empty tuple
+        self.assertNotIn(None, by_path)
+        self.assertEqual(by_path.get("/nowhere"), None)
+
     def test_binary_matches_platform_guard(self):
         # v0.79.5: a committed accelerator built on another OS (Mach-O on
         # Linux/Windows) must be rejected — running it yields empty output

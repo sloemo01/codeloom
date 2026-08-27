@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
-VERSION = "0.79.5"
+VERSION = "0.79.6"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -5092,13 +5092,17 @@ def _c_walk(root: str, engine: str = "c") -> List[str]:
     _C_SKIP_DIRS = (".git", "node_modules", ".venv", "venv", "__pycache__",
                     "dist", "build", "target", ".cargo", ".tox", ".mypy_cache",
                     ".pytest_cache", ".ruff_cache", ".eggs", ".cache")
-    return [
-        os.path.join(root, l.lstrip("./")) if not os.path.isabs(l) else l
-        for l in out
-        if os.path.basename(l.rstrip("/")) not in _ENGINE_SELF_FILES
-        and os.path.splitext(l)[1].lower() in CALL_LANG_RULES
-        and not any(("/" + d + "/") in ("/" + l.lstrip("./") + "/") for d in _C_SKIP_DIRS)
-    ]
+    out_norm = []
+    for l in out:
+        rel = l.lstrip("./").replace("\\", "/")  # normalize sep for skip match
+        if os.path.basename(rel.rstrip("/")) in _ENGINE_SELF_FILES:
+            continue
+        if os.path.splitext(rel)[1].lower() not in CALL_LANG_RULES:
+            continue
+        if any(("/" + d + "/") in ("/" + rel + "/") for d in _C_SKIP_DIRS):
+            continue
+        out_norm.append(os.path.join(root, rel) if not os.path.isabs(l) else l)
+    return out_norm
 
 def _c_scan(files: List[str], engine: str = "c") -> List[dict]:
     """Run the accelerator core over files. Returns per-file dicts
@@ -5150,6 +5154,19 @@ def _c_scan(files: List[str], engine: str = "c") -> List[dict]:
                 continue
     return results
 
+def _aggregate_precise_by_path(precise_idx: dict) -> dict:
+    """Re-key {symbol: [locs]} into {path: [(symbol, loc)]} in O(symbols).
+    The old per-file filter (`for name, locs in precise_idx.items()` inside
+    the per-file loop) was O(files x symbols) — ~2.5B path comparisons on
+    HA-core (18k files x 137k symbol-locs), the same quadratic pattern the
+    suffix index killed elsewhere. Pure restructuring; output identical."""
+    by_path: dict = {}
+    for name, locs in precise_idx.items():
+        for loc in locs:
+            by_path.setdefault(loc.get("path"), []).append((name, loc))
+    return by_path
+
+
 def _c_symbol_index(files: List[str], root: str, scan: Optional[List[dict]] = None) -> dict:
     """Build a symbol index (name -> locs) using the C core's fast scan.
     Faster than Python parsing; used by --engine c. Snippet is the def line.
@@ -5191,6 +5208,7 @@ def _c_symbol_index(files: List[str], root: str, scan: Optional[List[dict]] = No
             if ext in CALL_LANG_RULES:
                 need_precise[path] = ext
     precise_idx: dict = {}
+    precise_by_path: dict = {}
     if need_precise:
         # parallel precise extraction (the serial re-AST of every .py is why
         # --engine c ran SLOWER than the py engine on HA-core: C scan + full
@@ -5220,6 +5238,10 @@ def _c_symbol_index(files: List[str], root: str, scan: Optional[List[dict]] = No
         for name in list(precise_idx.keys()):
             if name not in core_names:
                 del precise_idx[name]
+        # index precise locations BY PATH once (O(symbols)) — the per-file
+        # O(symbols) scan would otherwise be O(files x symbols): ~2.5B
+        # path comparisons on HA-core (18k files x 137k symbol-locs).
+        precise_by_path = _aggregate_precise_by_path(precise_idx)
     for fr in scan:
         path = fr.get("file", "")
         if not path:
@@ -5227,10 +5249,8 @@ def _c_symbol_index(files: List[str], root: str, scan: Optional[List[dict]] = No
         mod = mod_map.get(path) or module_name_of(path, root)
         # precise extraction exists for this file -> reuse it verbatim
         if path in need_precise:
-            for name, locs in precise_idx.items():
-                file_locs = [l for l in locs if l.get("path") == path]
-                if file_locs:
-                    idx.setdefault(name, []).extend(file_locs)
+            for name, loc in precise_by_path.get(path, ()):
+                idx.setdefault(name, []).append(loc)
             continue
         for s in fr.get("symbols", []):
             name = s.get("name", "")
