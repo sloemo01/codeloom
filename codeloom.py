@@ -3536,7 +3536,13 @@ def _read_other(path: str, mod: str, ext: str, symbol: str) -> Optional[dict]:
                 if r:
                     return r
             return None
-        return find(ts_root)
+        ts_hit = find(ts_root)
+        if ts_hit is not None:
+            return ts_hit
+        # tree-sitter parsed the file but didn't find the symbol — the file
+        # may have syntax errors that hide it (ts drops broken nodes). Fall
+        # through to the regex/brace path instead of returning None: --read
+        # used to be NARROWER than --search/--get-symbol on broken files.
 
     # 2. brace-matching fallback (best-effort)
     def_re, _ = CALL_LANG_RULES[ext]
@@ -3763,14 +3769,22 @@ def get_symbol(files, root, symbol, context_lines=2):
     return loc
 
 def get_snippet_by_offset(path, start_byte, end_byte):
-    """Extract a byte-range snippet from a file. Returns {text, tokens, bytes}."""
+    """Extract a byte-range snippet from a file. Returns {text, tokens, bytes}.
+    Byte-accurate: reads the file as bytes and slices the byte range, then
+    decodes — the old text-mode slice used CHARACTER indices while the header
+    advertises bytes, so multibyte files returned a different span than the
+    byte range --get-symbol itself reports."""
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
+        with open(path, "rb") as fh:
+            data = fh.read()
     except OSError:
         return None
-    snippet = text[start_byte:end_byte]
-    return {"text": snippet, "tokens": estimate_tokens(snippet), "bytes": len(snippet.encode("utf-8"))}
+    if start_byte < 0 or end_byte < start_byte or start_byte > len(data):
+        return {"text": "", "tokens": 0, "bytes": 0, "invalid_range": True}
+    end_byte = min(end_byte, len(data))  # clamp: an over-long END reads to EOF
+    raw = data[start_byte:end_byte]
+    snippet = raw.decode("utf-8", errors="replace")
+    return {"text": snippet, "tokens": estimate_tokens(snippet), "bytes": len(raw)}
 
 def render_get_symbol(files, root, symbol, context_lines=2, summary=False, adaptive=False):
     loc = get_symbol(files, root, symbol, context_lines)
@@ -4523,16 +4537,16 @@ def render_pattern_search(files: List[str], root: str, pattern: str,
 CACHE_VERSION = 2
 
 def _file_hash(path: str) -> str:
-    """Return a content hash for a file (mtime + size + quick hash)."""
+    """Return a content hash for a file. Full-file SHA-256: the old
+    mtime+size+first-8KB sample produced IDENTICAL hashes for same-length
+    edits past byte 8192 with preserved mtime (rsync -a / cp -p / touch -r),
+    so --incremental and the resident index silently missed real edits."""
     import hashlib
     try:
-        st = os.stat(path)
-        with open(path, "rb") as f:
-            data = f.read(8192)  # sample first 8KB
         h = hashlib.sha256()
-        h.update(str(st.st_mtime_ns).encode())
-        h.update(str(st.st_size).encode())
-        h.update(data)
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
         return h.hexdigest()
     except OSError:
         return ""
@@ -5822,7 +5836,12 @@ def render_query(root: str, query: str) -> str:
         buf.write(f"\n  {len(callees)} callee(s).\n")
         return buf.getvalue()
     if ql.startswith("dependents") or ql.startswith("depends on"):
-        sym = _resolve_sym(q.split(" ", 1)[1].strip())
+        rest = q.split(" ", 1)
+        if len(rest) < 2 or not rest[1].strip():
+            buf.write("Usage: --query 'dependents <module>'\n")
+            buf.write("  (module name required — bare 'dependents' has no target)\n")
+            return buf.getvalue()
+        sym = _resolve_sym(rest[1].strip())
         hits = [m for m, deps in imports.items() if sym in deps]
         buf.write(f"## Dependents of {sym}\n")
         for m in sorted(hits):
@@ -6905,8 +6924,10 @@ def render_ask(files: List[str], root: str, task: str, max_files: int = 5000) ->
 # --diff: git-aware, structure of changed files
 # --------------------------------------------------------------------------- #
 
-def git_changed_files(root: str) -> List[str]:
-    """Return paths of files changed vs HEAD (tracked + untracked), root-relative."""
+def git_changed_files(root: str) -> Optional[List[str]]:
+    """Return paths of files changed vs HEAD (tracked + untracked), root-relative.
+    Returns None when the root is not a git repo (or git is unavailable) so
+    callers can say so honestly instead of reporting a clean tree."""
     changed: List[str] = []
     try:
         import subprocess
@@ -6915,8 +6936,10 @@ def git_changed_files(root: str) -> List[str]:
             ["git", "-C", root, "diff", "--name-only", "HEAD"],
             capture_output=True, text=True, timeout=10,
         )
-        if r.returncode == 0:
-            changed += [l for l in r.stdout.splitlines() if l.strip()]
+        if r.returncode != 0:
+            # not a git repo / no HEAD — distinguish from a clean tree
+            return None
+        changed += [l for l in r.stdout.splitlines() if l.strip()]
         # untracked files
         r2 = subprocess.run(
             ["git", "-C", root, "ls-files", "--others", "--exclude-standard"],
@@ -6925,7 +6948,7 @@ def git_changed_files(root: str) -> List[str]:
         if r2.returncode == 0:
             changed += [l for l in r2.stdout.splitlines() if l.strip()]
     except Exception:
-        pass
+        return None
     # dedupe, keep only existing files
     seen = set()
     out = []
@@ -6939,6 +6962,8 @@ def git_changed_files(root: str) -> List[str]:
 def render_diff(root: str, max_files: int) -> str:
     """Show the structure of only the files changed vs HEAD."""
     changed = git_changed_files(root)
+    if changed is None:
+        return "# codeloom --diff\nNot a git repository (or git unavailable) — nothing to diff against.\n"
     if not changed:
         return "# codeloom --diff\nNo changes vs HEAD.\n"
     # build a tree from just the changed files
@@ -6970,10 +6995,10 @@ CALL_LANG_RULES: dict = {
     ".go":   (r"^\s*func\s+(?:\([^)]*\)\s*)?(\w+)", r"\b(\w+)\s*\("),
     ".rs":   (r"^\s*(?:pub\s+)?fn\s+(\w+)", r"\b(\w+)\s*\("),
     ".java": (r"^\s*(?:public|private|protected|static|final|synchronized|abstract|native|transient|volatile|default|strictfp|)\s+[\w<>\[\],\s]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
-    ".c":    (r"^\s*(?:static\s+)?[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
-    ".h":    (r"^\s*(?:static\s+)?[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
-    ".cpp":  (r"^\s*(?:static\s+)?[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
-    ".hpp":  (r"^\s*(?:static\s+)?[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".c":    (r"^\s*(?:static\s+)?(?!(?:if|while|for|switch|return|sizeof|else|do|case)\b)[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".h":    (r"^\s*(?:static\s+)?(?!(?:if|while|for|switch|return|sizeof|else|do|case)\b)[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".cpp":  (r"^\s*(?:static\s+)?(?!(?:if|while|for|switch|return|sizeof|else|do|case|catch|new|delete)\b)[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
+    ".hpp":  (r"^\s*(?:static\s+)?(?!(?:if|while|for|switch|return|sizeof|else|do|case|catch|new|delete)\b)[\w\*]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
     ".cs":   (r"^\s*(?:public|private|protected|internal|static|async|virtual|override|sealed|abstract|readonly|)\s+[\w<>\[\],\s]+\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
     ".rb":   (r"^\s*def\s+(\w+)", r"\b(\w+)\s*\("),
     ".php":  (r"^\s*(?:public|private|protected|static|function)\s+(\w+)\s*\(", r"\b(\w+)\s*\("),
@@ -10060,7 +10085,26 @@ def main(argv: Optional[List[str]] = None) -> int:
             lazy_locs = load_symbol_lazy(root, args.get_symbol)
             if lazy_locs:
                 loc = lazy_locs[0]
-                if loc.get("tokens", 0) <= ADAPTIVE_FULL_THRESHOLD:
+                # freshness gate: the lazy store has no mtime validation of its
+                # own, so stale byte offsets used to re-slice the EDITED file
+                # into mid-token garbage while claiming exact bytes. If the
+                # file changed since indexing, fall through to the full fresh
+                # path below (same contract as --full).
+                _lp = loc.get("path") or ""
+                if _lp and not os.path.isabs(_lp):
+                    _lp = os.path.join(root, _lp)
+                _stale = True
+                try:
+                    if os.path.isfile(_lp):
+                        pidx_chk = load_persistent_index(root)
+                        _meta = (pidx_chk or {}).get("files", {}).get(_lp) if pidx_chk else None
+                        if _meta is not None:
+                            _stale = (os.path.getmtime(_lp), os.path.getsize(_lp)) != tuple(_meta)
+                        else:
+                            _stale = False  # no JSON index to compare against; keep fast path
+                except OSError:
+                    _stale = True
+                if not _stale and loc.get("tokens", 0) <= ADAPTIVE_FULL_THRESHOLD:
                     src = _read_source_from_loc(loc, root)
                     print(f"# get_symbol: {args.get_symbol}\n"
                           f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
@@ -10137,12 +10181,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         path, start, end = args.snippet
         path = os.path.join(root, path) if not os.path.isabs(path) else path
         try:
-            s = get_snippet_by_offset(path, int(start), int(end))
+            start, end = int(start), int(end)
         except ValueError:
             print("Error: START and END must be integers.")
             return 1
+        if start < 0 or end < start:
+            print(f"Error: invalid byte range {start}-{end} (need 0 <= START <= END).")
+            return 1
+        s = get_snippet_by_offset(path, start, end)
         if s is None:
             print(f"Error: cannot read {path}")
+            return 1
+        if s.get("invalid_range"):
+            print(f"Error: byte range {start}-{end} exceeds file size.")
             return 1
         print(f"# snippet: {path} bytes {start}-{end}  ~{s['tokens']} tokens  {s['bytes']} bytes\n")
         print(s["text"])
@@ -10791,6 +10842,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     m = build_map(args.root, not args.no_outline, args.max_files)
 
+    payload = None
     if args.json:
         payload = {
             "version": VERSION,
@@ -10805,10 +10857,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.cost:
             text += render_token_report(m, text)
         print(text)
-        if args.write:
+    if args.write:
+        # honor --write in BOTH modes: --json used to silently drop the
+        # write (printed JSON, wrote nothing, exit 0) — CI breakage
+        try:
+            if args.json and payload is not None:
+                out = json.dumps(payload, indent=2)
+            else:
+                out = render_text(m, compact=args.compact)
             with open(args.write, "w", encoding="utf-8") as f:
-                f.write(text)
+                f.write(out)
             print(f"\n[written to {args.write}]", file=sys.stderr)
+        except OSError as e:
+            print(f"error: cannot write {args.write}: {e}", file=sys.stderr)
+            return 1
 
     return 0
 
