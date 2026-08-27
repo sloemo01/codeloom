@@ -9773,6 +9773,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # --savings-report: token/time savings vs grep+read baseline (all local)
     if args.savings_report:
+        if args.json:
+            print(json.dumps({"version": VERSION, "root": root,
+                              "savings": render_savings_report(root, since_days=args.since,
+                                                                repo_filter=args.repo),
+                              "memory": render_memory_line(root)}, indent=2))
+            return 0
         print(render_savings_report(root, since_days=args.since,
                                     repo_filter=args.repo))
         print(render_memory_line(root))
@@ -9810,28 +9816,61 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # --index-status: show persistent index status
     if args.index_status:
+        if args.json:
+            data = load_persistent_index(root)
+            if data is None:
+                print(json.dumps({"version": VERSION, "root": root, "index": False}, indent=2))
+            else:
+                stale = 0
+                for f, h in data.get("files", {}).items():
+                    if _file_hash(f) != h:
+                        stale += 1
+                print(json.dumps({"version": VERSION, "root": root, "index": True,
+                                  "symbols": len(data.get("symbols", {})),
+                                  "stale_files": stale}, indent=2))
+            return 0
         print(render_index_status(root))
         return 0
 
     # --query: fast structural query against the persisted graph (no re-walk)
     if args.query:
+        if args.json:
+            print(json.dumps({"version": VERSION, "query": args.query,
+                              "result": render_query(root, args.query)}, indent=2))
+            return 0
         print(render_query(root, args.query))
         return 0
 
     # --framework: detect the web/app framework and surface its structure
     if args.framework:
+        if args.json:
+            print(json.dumps({"version": VERSION, "root": root,
+                              "framework": render_framework(root, args.max_files)}, indent=2))
+            return 0
         print(render_framework(root, args.max_files))
         return 0
 
     if args.routes:
+        if args.json:
+            print(json.dumps({"version": VERSION, "root": root,
+                              "routes": render_routes(root, args.max_files)}, indent=2))
+            return 0
         print(render_routes(root, args.max_files))
         return 0
 
     if args.channels:
+        if args.json:
+            print(json.dumps({"version": VERSION, "root": root,
+                              "channels": render_channels(root, args.max_files)}, indent=2))
+            return 0
         print(render_channels(root, args.max_files))
         return 0
 
     if args.export:
+        if args.json:
+            print(json.dumps({"version": VERSION, "root": root,
+                              "export": render_export(root, args.export, args.max_files)}, indent=2))
+            return 0
         print(render_export(root, args.export, args.max_files))
         return 0
 
@@ -9840,6 +9879,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
+        if args.json:
+            print(json.dumps({"version": VERSION, "root": root,
+                              "architecture": render_architecture(files, root)}, indent=2))
+            return 0
         print(render_architecture(files, root))
         return 0
 
@@ -9848,6 +9891,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
+        if args.json:
+            print(json.dumps({"version": VERSION, "root": root,
+                              "heatmap": dependency_heatmap(files, root)}, indent=2))
+            return 0
         print(dependency_heatmap(files, root))
         return 0
 
@@ -9856,6 +9903,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
+        if args.json:
+            print(json.dumps({"version": VERSION, "topic": args.explain_topic,
+                              "explain": render_explain_topic(files, root, args.explain_topic, args.max_files)}, indent=2))
+            return 0
         print(render_explain_topic(files, root, args.explain_topic, args.max_files))
         return 0
 
@@ -9864,6 +9915,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
+        if args.json:
+            print(json.dumps({"version": VERSION, "kind": args.docs,
+                              "docs": render_auto_docs(files, root, args.docs)}, indent=2))
+            return 0
         print(render_auto_docs(files, root, args.docs))
         return 0
 
@@ -9872,6 +9927,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
+        if args.json:
+            print(json.dumps({"version": VERSION, "symbol": args.refactor,
+                              "refactor": render_refactor(files, root, args.refactor, args.max_files)}, indent=2))
+            return 0
         print(render_refactor(files, root, args.refactor, args.max_files))
         return 0
 
@@ -9880,6 +9939,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
+        if args.json:
+            print(json.dumps({"version": VERSION, "old": args.rename[0], "new": args.rename[1],
+                              "rename": render_rename(files, root, args.rename[0], args.rename[1])}, indent=2))
+            return 0
         print(render_rename(files, root, args.rename[0], args.rename[1]))
         return 0
 
@@ -9888,6 +9951,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
+        if args.json:
+            print(json.dumps({"version": VERSION, "task": args.ask,
+                              "ask": render_ask(files, root, args.ask, args.max_files)}, indent=2))
+            return 0
         print(render_ask(files, root, args.ask, args.max_files))
         return 0
 
@@ -9896,10 +9963,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
+        if args.json:
+            print(json.dumps({"version": VERSION, "root": root,
+                              "bug_predict": render_bug_predict(files, root)}, indent=2))
+            return 0
         print(render_bug_predict(files, root))
         return 0
 
     if args.timeline:
+        if args.json:
+            print(json.dumps({"version": VERSION, "root": root,
+                              "timeline": render_repo_timeline(root)}, indent=2))
+            return 0
         print(render_repo_timeline(root))
         return 0
 
@@ -9908,6 +9983,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
+        if args.json:
+            print(json.dumps({"version": VERSION, "root": root,
+                              "dedup": render_dedup(root, files)}, indent=2))
+            return 0
         print(render_dedup(root, files))
         return 0
 
@@ -9920,6 +9999,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     if args.langs:
+        if args.json:
+            print(json.dumps({"version": VERSION, "langs": render_langs()}, indent=2))
+            return 0
         print(render_langs())
         return 0
 
@@ -9945,6 +10027,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
+        if args.json:
+            print(json.dumps({"version": VERSION, "query": args.find,
+                              "find": render_find(files, root, args.find, args.max_files)}, indent=2))
+            return 0
         print(render_find(files, root, args.find, args.max_files))
         return 0
 
@@ -9972,11 +10058,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     if args.context_diff:
+        if args.json:
+            print(json.dumps({"version": VERSION, "base": args.context_diff[0], "head": args.context_diff[1],
+                              "context_diff": render_context_diff(root, args.context_diff[0], args.context_diff[1])}, indent=2))
+            return 0
         print(render_context_diff(root, args.context_diff[0], args.context_diff[1]))
         return 0
 
     # --session-report: summarize the local session log
     if args.session_report:
+        if args.json:
+            print(json.dumps({"version": VERSION, "root": root,
+                              "session_report": render_session_report(root)}, indent=2))
+            return 0
         print(render_session_report(root))
         return 0
 
@@ -10136,6 +10230,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             rules = parse_gitignore(gi) if os.path.isfile(gi) else []
             hfiles: List[str] = []
             _walk(root, rules, args.max_files, hfiles)
+            if args.json:
+                print(json.dumps({"version": VERSION, "query": args.hybrid_search,
+                                  "results": render_hybrid_search(hfiles, root, args.hybrid_search)}, indent=2))
+                return 0
             print(render_hybrid_search(hfiles, root, args.hybrid_search))
             return 0
         lazy_locs = None
@@ -10164,6 +10262,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                     _stale = True
                 if not _stale and loc.get("tokens", 0) <= ADAPTIVE_FULL_THRESHOLD:
                     src = _read_source_from_loc(loc, root)
+                    if args.json:
+                        print(json.dumps({"version": VERSION, "symbol": args.get_symbol,
+                                          "module": loc["module"], "line": loc["line"],
+                                          "kind": loc["kind"], "source": src,
+                                          "tokens": loc.get("tokens", 0)}, indent=2))
+                        return 0
                     print(f"# get_symbol: {args.get_symbol}\n"
                           f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
                           f"bytes {loc.get('start_byte',0)}-{loc.get('end_byte',0)}  "
@@ -10171,6 +10275,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                           f"{src}\n")
                 else:
                     sig = loc.get("sig") or args.get_symbol
+                    if args.json:
+                        print(json.dumps({"version": VERSION, "symbol": args.get_symbol,
+                                          "module": loc["module"], "line": loc["line"],
+                                          "kind": loc["kind"], "summary": True,
+                                          "signature": sig}, indent=2))
+                        return 0
                     print(f"# get_symbol: {args.get_symbol}\n"
                           f"{loc['module']}:{loc['line']}  [{loc['kind']}]  ~10 tokens (summary)\n\n"
                           f"Signature: {sig}\n"
@@ -10185,6 +10295,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                     if args.full:
                         # full source: re-read the file from the stored byte range
                         src = _read_source_from_loc(loc, root)
+                        if args.json:
+                            print(json.dumps({"version": VERSION, "symbol": args.get_symbol,
+                                              "module": loc["module"], "line": loc["line"],
+                                              "kind": loc["kind"], "source": src,
+                                              "tokens": loc.get("tokens", 0)}, indent=2))
+                            return 0
                         print(f"# get_symbol: {args.get_symbol}\n"
                               f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
                               f"bytes {loc.get('start_byte',0)}-{loc.get('end_byte',0)}  "
@@ -10194,6 +10310,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                     # adaptive: small symbols return the implementation by default
                     if loc.get("tokens", 0) <= ADAPTIVE_FULL_THRESHOLD:
                         src = _read_source_from_loc(loc, root)
+                        if args.json:
+                            print(json.dumps({"version": VERSION, "symbol": args.get_symbol,
+                                              "module": loc["module"], "line": loc["line"],
+                                              "kind": loc["kind"], "source": src,
+                                              "tokens": loc.get("tokens", 0)}, indent=2))
+                            return 0
                         print(f"# get_symbol: {args.get_symbol}\n"
                               f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
                               f"bytes {loc.get('start_byte',0)}-{loc.get('end_byte',0)}  "
@@ -10202,16 +10324,31 @@ def main(argv: Optional[List[str]] = None) -> int:
                         return 0
                     # render summary directly from the index (no re-parse)
                     sig = loc.get("sig") or args.get_symbol
+                    if args.json:
+                        print(json.dumps({"version": VERSION, "symbol": args.get_symbol,
+                                          "module": loc["module"], "line": loc["line"],
+                                          "kind": loc["kind"], "summary": True,
+                                          "signature": sig}, indent=2))
+                        return 0
                     print(f"# get_symbol: {args.get_symbol}\n"
                           f"{loc['module']}:{loc['line']}  [{loc['kind']}]  ~10 tokens (summary)\n\n"
                           f"Signature: {sig}\n"
                           f"Use `--get-symbol {args.get_symbol} --full` for the full source.\n")
                     return 0
                 # symbol not in index — return fast, don't scan the whole repo
+                if args.json:
+                    print(json.dumps({"version": VERSION, "symbol": args.get_symbol,
+                                      "found": False}, indent=2))
+                    return 0
                 print(f"# get_symbol: {args.get_symbol}\nSymbol not found in index. "
                       f"Run `codeloom --index` to refresh, or use --full to scan.\n")
                 return 0
             if args.search:
+                if args.json:
+                    results = search_symbols(pidx.get("symbols", {}), args.search)
+                    print(json.dumps({"version": VERSION, "query": args.search,
+                                      "results": results, "count": len(results)}, indent=2))
+                    return 0
                 print(render_search(pidx.get("symbols", {}), args.search))
                 return 0
 
@@ -10315,6 +10452,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # --diff: git-aware, structure of changed files
     if args.diff:
+        if args.json:
+            print(json.dumps({"version": VERSION, "root": root,
+                              "diff": render_diff(root, args.max_files)}, indent=2))
+            return 0
         print(render_diff(root, args.max_files))
         return 0
 
@@ -10324,6 +10465,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
+        cache = load_cache(root)
+        changed = changed_files(files, cache, root)
+        if args.json:
+            print(json.dumps({"version": VERSION, "root": root,
+                              "changed": [os.path.relpath(c, root) for c in sorted(changed)],
+                              "count": len(changed)}, indent=2))
+            update_cache(files, cache, root)
+            save_cache(root, cache)
+            return 0
         print(render_incremental(files, root, args.max_files))
         return 0
 
@@ -10394,22 +10544,48 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
         if args.embed_search:
+            if args.json:
+                print(json.dumps({"version": VERSION, "query": args.embed_search,
+                                  "results": render_embed_search(files, root, args.embed_search)}, indent=2))
+                return 0
             print(render_embed_search(files, root, args.embed_search))
             return 0
 
         if args.context_card:
+            if args.json:
+                print(json.dumps({"version": VERSION, "targets": args.context_card,
+                                  "card": render_context_card(files, root, args.context_card)}, indent=2))
+                return 0
             print(render_context_card(files, root, args.context_card))
             return 0
 
         if args.answer:
+            if args.json:
+                print(json.dumps({"version": VERSION, "question": args.answer,
+                                  "answer": render_answer(files, root, args.answer)}, indent=2))
+                return 0
             print(render_answer(files, root, args.answer))
             return 0
 
         if args.why:
+            if args.json:
+                print(json.dumps({"version": VERSION, "query": args.why,
+                                  "why": render_why(files, root, args.why)}, indent=2))
+                return 0
             print(render_why(files, root, args.why))
             return 0
 
         if args.health:
+            if args.json:
+                index = build_byte_index(files, root)
+                calls = build_call_graph_multi(files, root)
+                result = compute_health(files, root, index, calls)
+                s = result["_summary"]
+                print(json.dumps({"version": VERSION, "root": root,
+                                  "avg_score": s["avg_score"], "files_scanned": s["files_scanned"],
+                                  "total_findings": s["total_findings"],
+                                  "worst": s["worst"]}, indent=2))
+                return 0
             print(render_health(files, root, compact=args.compact))
             return 0
 
@@ -10427,12 +10603,24 @@ def main(argv: Optional[List[str]] = None) -> int:
                 rules = parse_gitignore(gi) if os.path.isfile(gi) else []
                 vfiles: List[str] = []
                 _walk(vroot, rules, args.max_files, vfiles)
+                if args.json:
+                    print(json.dumps({"version": VERSION, "root": vroot, "revspec": "HEAD~1..HEAD",
+                                      "risk": render_change_risk(vfiles, vroot, "HEAD~1..HEAD")}, indent=2))
+                    return 0
                 print(render_change_risk(vfiles, vroot, "HEAD~1..HEAD"))
             else:
+                if args.json:
+                    print(json.dumps({"version": VERSION, "root": root, "revspec": revspec,
+                                      "risk": render_change_risk(files, root, revspec)}, indent=2))
+                    return 0
                 print(render_change_risk(files, root, revspec))
             return 0
 
         if args.pattern:
+            if args.json:
+                print(json.dumps({"version": VERSION, "pattern": args.pattern,
+                                  "results": render_pattern_search(files, root, args.pattern)}, indent=2))
+                return 0
             print(render_pattern_search(files, root, args.pattern))
             return 0
 
@@ -10446,26 +10634,50 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
         if args.grep:
+            if args.json:
+                print(json.dumps({"version": VERSION, "query": args.grep,
+                                  "results": render_grep(files, root, args.grep)}, indent=2))
+                return 0
             print(render_grep(files, root, args.grep))
             return 0
 
         if args.grep_symbolic:
+            if args.json:
+                print(json.dumps({"version": VERSION, "query": args.grep_symbolic,
+                                  "results": render_grep_symbolic(files, root, args.grep_symbolic)}, indent=2))
+                return 0
             print(render_grep_symbolic(files, root, args.grep_symbolic))
             return 0
 
         if args.read:
+            if args.json:
+                print(json.dumps({"version": VERSION, "symbol": args.read,
+                                  "read": render_read(files, root, args.read)}, indent=2))
+                return 0
             print(render_read(files, root, args.read))
             return 0
 
         if args.explain:
+            if args.json:
+                print(json.dumps({"version": VERSION, "symbol": args.explain,
+                                  "explain": render_explain(files, root, args.explain)}, indent=2))
+                return 0
             print(render_explain(files, root, args.explain))
             return 0
 
         if args.precision:
+            if args.json:
+                print(json.dumps({"version": VERSION, "symbol": args.precision,
+                                  "precision": render_precision(files, root, args.precision)}, indent=2))
+                return 0
             print(render_precision(files, root, args.precision))
             return 0
 
         if args.similar:
+            if args.json:
+                print(json.dumps({"version": VERSION, "symbol": args.similar,
+                                  "similar": render_similar(files, root, args.similar)}, indent=2))
+                return 0
             print(render_similar(files, root, args.similar))
             return 0
 
@@ -10550,14 +10762,26 @@ def main(argv: Optional[List[str]] = None) -> int:
                 else:
                     print(f"module not found: {args.impact}", file=sys.stderr)
                     return 1
+            if args.json:
+                print(json.dumps({"version": VERSION, "root": root, "target": target,
+                                  "impact": render_impact(graph, root, target)}, indent=2))
+                return 0
             print(render_impact(graph, root, target))
             return 0
 
         if args.check_edit:
+            if args.json:
+                print(json.dumps({"version": VERSION, "target": args.check_edit,
+                                  "check": preflight_check(files, root, args.check_edit, "edit")}, indent=2))
+                return 0
             print(preflight_check(files, root, args.check_edit, "edit"))
             return 0
 
         if args.check_delete:
+            if args.json:
+                print(json.dumps({"version": VERSION, "target": args.check_delete,
+                                  "check": preflight_check(files, root, args.check_delete, "delete")}, indent=2))
+                return 0
             print(preflight_check(files, root, args.check_delete, "delete"))
             return 0
 
@@ -10581,26 +10805,50 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
         if args.plan:
+            if args.json:
+                print(json.dumps({"version": VERSION, "task": args.plan,
+                                  "plan": build_plan(files, root, args.plan)}, indent=2))
+                return 0
             print(build_plan(files, root, args.plan))
             return 0
 
         if args.pack:
+            if args.json:
+                print(json.dumps({"version": VERSION, "task": args.pack,
+                                  "pack": render_pack(files, root, args.pack)}, indent=2))
+                return 0
             print(render_pack(files, root, args.pack))
             return 0
 
         if args.cognitive_load:
+            if args.json:
+                print(json.dumps({"version": VERSION, "topic": args.cognitive_load,
+                                  "cognitive_load": render_cognitive_load(files, root, args.cognitive_load)}, indent=2))
+                return 0
             print(render_cognitive_load(files, root, args.cognitive_load))
             return 0
 
         if args.resume:
+            if args.json:
+                print(json.dumps({"version": VERSION, "root": root,
+                                  "resume": render_resume(files, root, args.max_files, full=args.full)}, indent=2))
+                return 0
             print(render_resume(files, root, args.max_files, full=args.full))
             return 0
 
         if args.checkpoint_restore:
+            if args.json:
+                print(json.dumps({"version": VERSION, "root": root,
+                                  "checkpoint": render_checkpoint_restore(root)}, indent=2))
+                return 0
             print(render_checkpoint_restore(root))
             return 0
 
         if args.loom:
+            if args.json:
+                print(json.dumps({"version": VERSION, "task": args.loom,
+                                  "loom": render_loom_context(files, root, args.loom, args.max_files)}, indent=2))
+                return 0
             print(render_loom_context(files, root, args.loom, args.max_files))
             return 0
 
@@ -10608,6 +10856,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         # write). The legacy --remember NOTE keeps appending; --remember with
         # a symbol-resolvable value dispatches here too (graph retrieval).
         if args.memory:
+            if args.json:
+                print(json.dumps({"version": VERSION, "symbol": args.memory,
+                                  "memory": render_memory_graph(files, root, args.memory,
+                                                                target_root=args.target_root,
+                                                                include_archive=args.include_archive,
+                                                                max_files=args.max_files)}, indent=2))
+                return 0
             print(render_memory_graph(files, root, args.memory,
                                       target_root=args.target_root,
                                       include_archive=args.include_archive,
@@ -10632,6 +10887,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         # --memory-stats: counts by type/tier, bytes, top linked symbols
         if args.memory_stats:
+            if args.json:
+                print(json.dumps({"version": VERSION, "root": root,
+                                  "memory_stats": render_memory_stats(root)}, indent=2))
+                return 0
             print(render_memory_stats(root))
             return 0
 
@@ -10639,10 +10898,21 @@ def main(argv: Optional[List[str]] = None) -> int:
             # legacy --remember NOTE appends to a section (default DECISIONS);
             # a symbol-resolvable value switches to graph retrieval
             if memory_symbol_resolve(files, root, args.remember):
+                if args.json:
+                    print(json.dumps({"version": VERSION, "note": args.remember,
+                                      "memory": render_memory_graph(files, root, args.remember,
+                                                                    target_root=args.target_root,
+                                                                    include_archive=args.include_archive,
+                                                                    max_files=args.max_files)}, indent=2))
+                    return 0
                 print(render_memory_graph(files, root, args.remember,
                                           target_root=args.target_root,
                                           include_archive=args.include_archive,
                                           max_files=args.max_files))
+                return 0
+            if args.json:
+                print(json.dumps({"version": VERSION, "note": args.remember,
+                                  "remember": memory_remember(root, args.section, args.remember)}, indent=2))
                 return 0
             print(memory_remember(root, args.section, args.remember))
             return 0
@@ -10762,6 +11032,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
         if args.query_memory:
+            if args.json:
+                print(json.dumps({"version": VERSION, "query": args.query_memory,
+                                  "memory": memory_query(root, args.query_memory)}, indent=2))
+                return 0
             print(memory_query(root, args.query_memory))
             return 0
 
@@ -10778,14 +11052,27 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if os.path.isdir(cand_abs):
                     mr_root = cand_abs
                     items = items[:-1]
+            if args.json:
+                print(json.dumps({"version": VERSION, "root": mr_root,
+                                  "marked": items,
+                                  "result": journal_mark_seen(mr_root, items)}, indent=2))
+                return 0
             print(journal_mark_seen(mr_root, items))
             return 0
 
         if args.working_state:
+            if args.json:
+                print(json.dumps({"version": VERSION, "root": root,
+                                  "working_state": render_working_state(root, full=True)}, indent=2))
+                return 0
             print(render_working_state(root, full=True))
             return 0
 
         if args.adr_list:
+            if args.json:
+                print(json.dumps({"version": VERSION, "root": root,
+                                  "adrs": render_adr_list(root)}, indent=2))
+                return 0
             print(render_adr_list(root))
             return 0
 
@@ -10813,16 +11100,28 @@ def main(argv: Optional[List[str]] = None) -> int:
         rules = parse_gitignore(gi) if os.path.isfile(gi) else []
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
+        if args.json:
+            print(json.dumps({"version": VERSION, "root": root,
+                              "churn": git_churn(root, files)}, indent=2))
+            return 0
         print(git_churn(root, files))
         return 0
 
     if args.seen:
         # session memory: report already-read files/symbols to avoid re-reading
+        if args.json:
+            print(json.dumps({"version": VERSION, "root": root,
+                              "seen": render_seen(root)}, indent=2))
+            return 0
         print(render_seen(root))
         return 0
 
     # Cross-repo mode: one graph across multiple repo roots
     if args.cross_repo:
+        if args.json:
+            print(json.dumps({"version": VERSION, "roots": args.cross_repo,
+                              "cross_repo": render_cross_repo(args.cross_repo, args.max_files, compact=args.compact)}, indent=2))
+            return 0
         print(render_cross_repo(args.cross_repo, args.max_files, compact=args.compact))
         return 0
 
@@ -10856,6 +11155,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                     else:
                         print(f"module not found: {args.focus}", file=sys.stderr)
                         return 1
+            if args.json:
+                print(json.dumps({"version": VERSION, "root": root, "kind": "calls",
+                                  "focus": focus, "modules": calls,
+                                  "module_count": len(calls)}, indent=2, default=list))
+                return 0
             text = render_calls(calls, root, start=focus, compact=args.compact)
             if args.cost:
                 text += render_token_report({}, text)
@@ -10890,8 +11194,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                     else:
                         print(f"module not found: {args.focus}", file=sys.stderr)
                         return 1
+            if args.json:
+                print(json.dumps({"version": VERSION, "root": root, "kind": "graph",
+                                  "focus": focus, "modules": graph,
+                                  "module_count": len(graph)}, indent=2, default=list))
+                return 0
             text = render_graph_multi(graph, root, start=focus, compact=args.compact)
         else:
+            if args.json:
+                print(json.dumps({"version": VERSION, "root": root, "kind": "graph",
+                                  "modules": graph, "module_count": len(graph)}, indent=2, default=list))
+                return 0
             text = render_graph_multi(graph, root, compact=args.compact)
         if args.cost:
             text += render_token_report({}, text)
