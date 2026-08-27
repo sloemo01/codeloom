@@ -35,7 +35,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.79.6"
+SERVER_VERSION = "0.79.7"
 
 # Server identity stamp for the stale-server handshake: the exact file mtime
 # (seconds since epoch) and a content hash of THIS file at load time. A
@@ -2038,6 +2038,19 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
                             "what do i remember", "what i remember", "do i remember",
                             "what do i know", "show memory", "what does the repo remember"]):
         return {"content": [{"type": "text", "text": codeloom.memory_read(root)}]}
+
+    # 1.5. Routes/channels explicit nouns beat generic 'show me' symbol
+    # retrieval — 'show me the routes for the api' must list endpoints, not
+    # search for a symbol named 'routes' (v0.79.7 misroute fix).
+    if any(k in q for k in ["http route", "endpoint", "api route", "what routes",
+                            "url pattern", "rest api", "get post put delete",
+                            "web framework routes", "the routes", "routes for",
+                            "list routes", "all routes", "route for"]):
+        return {"content": [{"type": "text", "text": codeloom.render_routes(root, max_files)}]}
+    if any(k in q for k in ["pub sub", "pubsub", "event channel", "emits",
+                            "listens on", "socket.io", "kafka", "rabbitmq",
+                            "message queue", "event emitter"]):
+        return {"content": [{"type": "text", "text": codeloom.render_channels(root, max_files)}]}
 
     # 2. Symbol retrieval — "where is X / show me X / what does X do"
     if any(k in q for k in ["where is", "find symbol", "search for", "show me", "what does",

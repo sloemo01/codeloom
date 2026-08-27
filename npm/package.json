@@ -1,6 +1,6 @@
 {
   "name": "codeloom",
-  "version": "0.79.6",
+  "version": "0.79.7",
   "description": "A map of your repo for AI agents. One file, zero dependencies, no daemon, 100% local. npm wrapper for the Python single-file tool + MCP server.",
   "license": "MIT",
   "keywords": ["mcp", "ai", "agent", "codebase", "context", "compaction", "memory", "llm", "repo-map"],
