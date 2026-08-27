@@ -260,6 +260,19 @@ class TestCodeLoom(unittest.TestCase):
         finally:
             force_rmtree(tmp)
 
+    def test_js_escape_unit(self):
+        # _js_escape must neutralize every dangerous character, on all
+        # platforms (the CLI test below only runs on POSIX because the
+        # quote character can't exist in a Windows filename at all)
+        esc = codeloom._js_escape
+        self.assertEqual(esc('evil"+alert(1)+"'), 'evil\\"+alert(1)+\\"')
+        self.assertEqual(esc("a\\b"), "a\\\\b")
+        self.assertEqual(esc("x</script>"), "x<\\/script>")
+        self.assertEqual(esc("l1\nl2\rl3\tl4"), "l1\\nl2\\rl3\\tl4")
+        # clean names pass through untouched
+        self.assertEqual(esc("engine.core"), "engine.core")
+
+    @unittest.skipIf(os.name == "nt", "hostile quote filename cannot exist on Windows")
     def test_cli_graph_html_escape(self):
         # hostile filename must not break out of the JS string literal
         tmp = tempfile.mkdtemp()
