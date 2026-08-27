@@ -2801,5 +2801,136 @@ class TestMemoryOS(unittest.TestCase):
             force_rmtree(tmp)
 
 
+class TestCEngineImports(unittest.TestCase):
+    """C-engine import-edge parity (2026-08-27 HA-core finding): the C core
+    emitted ZERO Python/C import edges (quoted-source-only match_import +
+    is_code gate dropping #include lines), so --index --engine c produced a
+    knowledge graph with ~35% fewer edges than the py engine and --query
+    'dependents/hubs' returned empty. Also covers the stale-binary
+    auto-rebuild (committed core lagging codeloom_core.c)."""
+
+    def _c_engine_available(self):
+        """True if a usable C core can be built (cc present)."""
+        import shutil
+        return shutil.which("cc") is not None
+
+    def _make_import_repo(self, repo):
+        """Small Python repo with local + stdlib + relative imports."""
+        def j(*parts):
+            return os.path.join(repo, *parts)
+        def w(path, content):
+            with open(path, "w") as f:
+                f.write(content)
+        os.makedirs(j("src", "core"))
+        os.makedirs(j("src", "utils"))
+        w(j("src", "__init__.py"), "")
+        w(j("src", "cli.py"),
+          "import os\n"
+          "import json\n"
+          "from core.engine import Engine\n"
+          "from utils.retry import retry\n"
+          "from .core import engine as core_engine\n"
+          "\n"
+          "def main():\n"
+          "    return Engine().run()\n")
+        w(j("src", "core", "__init__.py"), "")
+        w(j("src", "core", "engine.py"),
+          "from utils.retry import retry\n"
+          "\n"
+          "class Engine:\n"
+          "    def run(self):\n"
+          "        return retry(lambda: None)\n")
+        w(j("src", "utils", "__init__.py"), "")
+        w(j("src", "utils", "retry.py"),
+          "def retry(fn, tries=3):\n    return fn()\n")
+
+    def test_c_engine_python_import_edges(self):
+        # --index --engine c must record import edges (this is the parity fix)
+        if not self._c_engine_available():
+            self.skipTest("cc not available — C engine cannot build")
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(repo)
+            self._make_import_repo(repo)
+            r = subprocess.run(
+                [sys.executable, os.path.join(TESTS_DIR, "codeloom.py"),
+                 "--index", "--engine", "c", repo],
+                capture_output=True, text=True, cwd=tmp, timeout=180)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            idx = codeloom.load_persistent_index(repo)
+            self.assertIsNotNone(idx, "persistent index not saved")
+            kg = idx.get("kg", {})
+            imports = kg.get("imports", {})
+            # cli.py imports core.engine and utils.retry (both local)
+            cli_imps = imports.get("src.cli", set())
+            self.assertIn("src.core.engine", cli_imps,
+                          "C engine missed 'from core.engine import Engine'")
+            self.assertIn("src.utils.retry", cli_imps,
+                          "C engine missed 'from utils.retry import retry'")
+            # engine.py imports utils.retry
+            eng_imps = imports.get("src.core.engine", set())
+            self.assertIn("src.utils.retry", eng_imps,
+                          "C engine missed import edge in engine.py")
+        finally:
+            force_rmtree(tmp)
+
+    def test_c_engine_c_include_edges(self):
+        # #include lines were dropped by the is_code gate — must be imports now
+        if not self._c_engine_available():
+            self.skipTest("cc not available — C engine cannot build")
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(repo)
+            with open(os.path.join(repo, "main.c"), "w") as f:
+                f.write("#include <stdio.h>\n"
+                        "#include \"mylib.h\"\n"
+                        "int main(void) { return 0; }\n")
+            with open(os.path.join(repo, "mylib.h"), "w") as f:
+                f.write("int helper(void);\n")
+            r = subprocess.run(
+                [sys.executable, os.path.join(TESTS_DIR, "codeloom.py"),
+                 "--index", "--engine", "c", repo],
+                capture_output=True, text=True, cwd=tmp, timeout=180)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            idx = codeloom.load_persistent_index(repo)
+            self.assertIsNotNone(idx, "persistent index not saved")
+            kg = idx.get("kg", {})
+            imports = kg.get("imports", {})
+            main_imps = imports.get("main", set())
+            self.assertIn("mylib", main_imps,
+                          "C engine missed #include \"mylib.h\"")
+        finally:
+            force_rmtree(tmp)
+
+    def test_core_is_stale_helper(self):
+        # _core_is_stale must flag a binary older than its source and accept
+        # a fresh one — the shipped-core-lagging-source regression guard
+        tmp = tempfile.mkdtemp()
+        try:
+            src = os.path.join(tmp, "codeloom_core.c")
+            binary = os.path.join(tmp, "codeloom_core")
+            with open(src, "w") as f:
+                f.write("/* stub */\n")
+            with open(binary, "w") as f:
+                f.write("#!/bin/sh\n")
+            # source newer -> stale
+            os.utime(src, (1000, 2000))
+            os.utime(binary, (1000, 1000))
+            self.assertTrue(codeloom._core_is_stale(tmp, "codeloom_core", binary),
+                            "binary older than source must be stale")
+            # binary newer -> fresh
+            os.utime(binary, (1000, 3000))
+            self.assertFalse(codeloom._core_is_stale(tmp, "codeloom_core", binary),
+                             "binary newer than source must be fresh")
+            # missing source -> not stale (no source to rebuild from)
+            os.remove(src)
+            self.assertFalse(codeloom._core_is_stale(tmp, "codeloom_core", binary),
+                             "missing source must not be flagged stale")
+        finally:
+            force_rmtree(tmp)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

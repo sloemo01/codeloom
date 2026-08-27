@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
-VERSION = "0.79.1"
+VERSION = "0.79.2"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -4909,22 +4909,30 @@ _ENGINE_SELF_FILES = frozenset({
 def _find_core_engine(engine: str = "c") -> Optional[str]:
     """Locate the compiled accelerator binary (C or Rust) next to codeloom.py.
     engine='c' -> codeloom_core; engine='rust' -> codeloom_core_rs.
-    Auto-builds a missing core from its committed source (no download) when
-    the matching compiler is present: cc for the C core, rustc for the Rust
-    core. This keeps --engine c and --engine rust symmetric: both are
-    optimization hints, and both fail loudly (with an honest per-compiler
-    message) only when the source AND the compiler are both absent."""
+    Auto-builds a missing OR STALE core from its committed source (no download)
+    when the matching compiler is present: cc for the C core, rustc for the
+    Rust core — the binary is stale whenever the committed .c/.rs source has a
+    newer mtime (a shipped binary can lag its source after source-only fixes,
+    and a silent stale binary was exactly the 2026-08-27 HA-core finding: the
+    committed core emitted ZERO import edges and the CLI never complained).
+    Both engines stay symmetric: optimization hints that fail loudly (with an
+    honest per-compiler message) only when the source AND the compiler are
+    both absent."""
     name = "codeloom_core" if engine == "c" else "codeloom_core_rs"
     here = os.path.dirname(os.path.abspath(__file__))
     cands = [os.path.join(here, name), os.path.join(here, name + ".exe")]
     for c in cands:
         if os.path.isfile(c) and os.access(c, os.X_OK):
-            return c
+            if not _core_is_stale(here, name, c):
+                return c
+            # stale binary — rebuild below; do NOT silently serve it
     import shutil
     on_path = shutil.which(name)
-    if on_path:
-        return on_path
-    # not built — auto-compile from committed source (no download)
+    if on_path and os.path.isfile(on_path) and os.access(on_path, os.X_OK):
+        if not _core_is_stale(os.path.dirname(on_path), name, on_path):
+            return on_path
+        # a stale PATH binary: rebuild next to codeloom.py below
+    # not built or stale — auto-compile from committed source (no download)
     import subprocess as _sp
     if engine == "c":
         src = os.path.join(here, "codeloom_core.c")
@@ -4962,21 +4970,38 @@ def _find_rs_watcher() -> Optional[str]:
     import shutil
     return shutil.which(name)
 
+def _core_is_stale(here: str, name: str, binary: str) -> bool:
+    """True if the accelerator binary is older than its committed source.
+    mtime comparison (like the --verify-edit / docs sidecar pattern):
+    source-only fixes land in the .c/.rs file but the shipped binary can lag
+    behind — a stale binary must be rebuilt, never silently served."""
+    src = os.path.join(here, name + (".c" if name == "codeloom_core" else ".rs"))
+    if not os.path.isfile(src):
+        return False
+    try:
+        return os.path.getmtime(src) > os.path.getmtime(binary) + 1
+    except OSError:
+        return False
+
+
 def _find_core() -> Optional[str]:
     """Locate the compiled codeloom_core binary next to codeloom.py or on PATH.
-    If it's not built, auto-build it from the committed codeloom_core.c source
-    (no download — compiles locally with cc). Returns None only if cc is
-    unavailable or the source is missing."""
+    If it's not built (or is STALE vs codeloom_core.c), auto-build it from the
+    committed source (no download — compiles locally with cc). Returns None
+    only if cc is unavailable or the source is missing."""
     here = os.path.dirname(os.path.abspath(__file__))
     cands = [os.path.join(here, _CORE_NAME), os.path.join(here, _CORE_NAME + ".exe")]
     for c in cands:
         if os.path.isfile(c) and os.access(c, os.X_OK):
-            return c
+            if not _core_is_stale(here, _CORE_NAME, c):
+                return c
+            break  # stale local binary — rebuild it below
     import shutil
     on_path = shutil.which(_CORE_NAME)
-    if on_path:
-        return on_path
-    # not built — auto-build from committed source (integrated, no download)
+    if on_path and os.path.isfile(on_path) and os.access(on_path, os.X_OK):
+        if not _core_is_stale(os.path.dirname(on_path), _CORE_NAME, on_path):
+            return on_path
+    # not built or stale — auto-build from committed source (integrated, no download)
     core_src = os.path.join(here, "codeloom_core.c")
     if os.path.isfile(core_src) and shutil.which("cc"):
         import subprocess as _sp
@@ -10386,12 +10411,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not os.path.isfile(core_src):
             print(f"C core source not found at {core_src}")
             return 1
-        # check for an EXISTING binary directly — _find_core() auto-builds, so
-        # calling it here would make --build-core lie "already built" right
-        # after silently compiling the core itself.
+        # check for an EXISTING FRESH binary directly — _find_core() auto-builds,
+        # so calling it here would make --build-core lie "already built" right
+        # after silently compiling the core itself. A STALE binary (source
+        # newer) is rebuilt too — same mtime rule the finders apply.
         here = os.path.dirname(os.path.abspath(__file__))
         existing = [os.path.join(here, _CORE_NAME), os.path.join(here, _CORE_NAME + ".exe")]
-        if any(os.path.isfile(c) and os.access(c, os.X_OK) for c in existing):
+        if any(os.path.isfile(c) and os.access(c, os.X_OK)
+               and not _core_is_stale(here, _CORE_NAME, c) for c in existing):
             print("C accelerator already built — nothing to do.")
             return 0
         import shutil as _shutil

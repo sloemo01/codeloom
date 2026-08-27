@@ -49,6 +49,25 @@ it — and it re-derives everything from scratch. Over and over.
 
 No install. No daemon. No GPU. No telemetry. Runs 100% on your machine.
 
+## What's new in v0.79.2 (C-engine parity release)
+
+Found by running codeloom against home-assistant/core (18,484 Python files,
+287 MB — the opposite of a small repo):
+
+- **C engine now extracts Python + C import edges** — the C core's import
+  matcher only handled quoted sources (`import 'x'`, `require('x')`), so
+  Python's `import x.y` / `from x import y` (unquoted) and C `#include`
+  lines were silently dropped: `--index --engine c` produced ~35% fewer
+  edges than the py engine and `--query dependents/hubs` came back empty.
+  Python `from`/`import` parsing and `#include` handling are fixed and
+  covered by tests.
+- **Stale accelerator binaries are rebuilt, never silently served** — the
+  shipped `codeloom_core` had lagged `codeloom_core.c` by four commits; the
+  finders only auto-built when the binary was *missing*. Now a binary older
+  than its committed source is rebuilt on demand (`--engine c` /
+  `--watch-core` / `--serve`) and `--build-core` rebuilds stale cores.
+- Verified: 132 tests pass, including 3 new C-engine regression tests.
+
 ## What's new in v0.79.1 (hardening release)
 
 A robustness + security pass — no new commands, everything below is

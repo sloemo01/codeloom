@@ -441,20 +441,48 @@ static char *match_import(const char *line) {
         }
         return NULL;
     }
-    /* import ... from 'x' or import 'x' */
-    if (strncmp(low, "import", 6) == 0) {
-        const char *from = strstr(low, "from ");
-        const char *q = NULL;
-        if (from) {
-            const char *src = from + 5;
-            while (*src == ' ' || *src == '\t') src++;
-            if (*src == '\'' || *src == '"') q = src;
-        } else {
-            const char *src = p + 6;
-            while (*src == ' ' || *src == '\t') src++;
-            if (*src == '\'' || *src == '"') q = src;
+    /* Python (unquoted): from x.y import ... / import x.y[ as z] */
+    if (strncmp(low, "from ", 5) == 0) {
+        const char *s = p + 5;
+        while (*s == ' ' || *s == '\t') s++;
+        /* skip relative-level dots (from . import x / from ..pkg import y) —
+           the Python side resolves them against the importer's package */
+        while (*s == '.') s++;
+        const char *start = s;
+        while (*s && *s != ' ' && *s != '\t') s++;
+        if (s > start) {
+            size_t len = (size_t)(s - start);
+            char *r = malloc(len + 1);
+            memcpy(r, start, len); r[len] = '\0';
+            return r;
         }
-        if (q) {
+        return NULL;
+    }
+    /* import ... from 'x' or import 'x' (JS/Go quoted) */
+    if (strncmp(low, "import", 6) == 0) {
+        const char *src = p + 6;
+        while (*src == ' ' || *src == '\t') src++;
+        /* JS: import {a} from 'x' / import a from 'x' — the 'from <quoted>'
+           clause (Python's 'from x import' is handled by the branch above) */
+        const char *fromp = strstr(low, "from ");
+        if (fromp) {
+            const char *qs = p + (fromp - low) + 5;
+            while (*qs == ' ' || *qs == '\t') qs++;
+            if (*qs == '\'' || *qs == '"') {
+                qs++;
+                const char *e = strchr(qs, '\'');
+                if (!e) e = strchr(qs, '"');
+                if (e) {
+                    size_t len = (size_t)(e - qs);
+                    char *r = malloc(len + 1);
+                    memcpy(r, qs, len); r[len] = '\0';
+                    return r;
+                }
+                return NULL;
+            }
+        }
+        if (*src == '\'' || *src == '"') {
+            const char *q = src;
             q++;
             const char *e = strchr(q, '\'');
             if (!e) e = strchr(q, '"');
@@ -464,6 +492,21 @@ static char *match_import(const char *line) {
                 memcpy(r, q, len); r[len] = '\0';
                 return r;
             }
+            return NULL;
+        }
+        /* Python unquoted: import x.y[ as z][, w.v] — return the first module
+           name; the Python side resolves it. Multi-name lines emit only the
+           first name (the Python AST path emits all; the C path is a fast
+           approximation — import edges that matter are single-name 95%+ of
+           the time, and _resolve_import drops unknowns anyway). */
+        const char *start = src;
+        while (*src && (isalnum((unsigned char)*src) || *src == '_' ||
+                        *src == '.')) src++;
+        if (src > start) {
+            size_t len = (size_t)(src - start);
+            char *r = malloc(len + 1);
+            memcpy(r, start, len); r[len] = '\0';
+            return r;
         }
         return NULL;
     }
@@ -586,8 +629,17 @@ static int scan_file(const char *path, const char *ext, FileResult *fr) {
             else if (line[b] == '}') brace_delta--;
         }
         char *t = trim(line);
-        int is_code = (t[0] != '\0' && t[0] != '#' && t[0] != '/' &&
-                       t[0] != '*' && t[0] != ';');
+        int is_code;
+        if (t[0] == '#') {
+            /* preprocessor line: only #include is code (C/C++); everything
+               else (#ifdef, #define, shebangs, comments) stays non-code */
+            char lowc[MAX_LINE];
+            strncpy(lowc, t, MAX_LINE - 1); lowc[MAX_LINE - 1] = '\0';
+            lower(lowc);
+            is_code = (strncmp(lowc, "#include", 8) == 0);
+        } else {
+            is_code = (t[0] != '\0' && t[0] != '/' && t[0] != '*' && t[0] != ';');
+        }
         /* close spans whose body ended on this line */
         if (is_py) {
             while (n_open > 0 && is_code &&
