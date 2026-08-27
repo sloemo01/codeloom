@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
-VERSION = "0.79.3"
+VERSION = "0.79.4"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -2135,6 +2135,34 @@ def module_name_of(path: str, root: str) -> str:
         rel = rel[:-9]
     return rel.replace(os.sep, ".")
 
+_SUFFIX_INDEX_CACHE: dict = {}  # id(module_map) -> (module_map, {suffix: mod})
+
+
+def _suffix_index(module_map: dict) -> dict:
+    """Build {suffix: shallowest_module} ONCE per module_map (plain dicts can't
+    take attributes, so a module-level cache keyed by id() with an identity
+    check — the strong ref to the map prevents id reuse while cached). The old
+    _resolve_import step-4 scanned every module name for every unresolved
+    import — O(resolutions × modules), the quadratic wall on HA-core
+    (~200k resolutions × 12k modules ≈ 2.5B comparisons)."""
+    key = id(module_map)
+    hit = _SUFFIX_INDEX_CACHE.get(key)
+    if hit is not None and hit[0] is module_map:
+        return hit[1]
+    idx = {}
+    for mod in module_map:
+        segs = mod.split(".")
+        for i in range(len(segs)):
+            skey = ".".join(segs[i:])
+            cur = idx.get(skey)
+            if cur is None or len(segs) < len(cur.split(".")):
+                idx[skey] = mod
+    if len(_SUFFIX_INDEX_CACHE) > 64:
+        _SUFFIX_INDEX_CACHE.clear()
+    _SUFFIX_INDEX_CACHE[key] = (module_map, idx)
+    return idx
+
+
 def _resolve_import(target: str, importer_mod: str, root: str, module_map: dict) -> Optional[str]:
     """Resolve an imported module name to an existing local module, or None.
     Handles absolute, relative (from .x / from ..x), namespace packages, and the
@@ -2172,14 +2200,9 @@ def _resolve_import(target: str, importer_mod: str, root: str, module_map: dict)
             return cand
 
     # 4. suffix match: does any local module end with '.target' (or equal it)?
-    tgt_segs = target.split(".")
-    best = None
-    for mod in module_map:
-        msegs = mod.split(".")
-        if len(msegs) >= len(tgt_segs) and msegs[-len(tgt_segs):] == tgt_segs:
-            # prefer shallowest (fewest segments above the match)
-            if best is None or len(msegs) < len(best.split(".")):
-                best = mod
+    #    O(1) via the per-map suffix index (built once) — the old full-scan
+    #    over every module per import was the quadratic wall on big repos.
+    best = _suffix_index(module_map).get(target)
     if best:
         return best
 
@@ -2601,7 +2624,7 @@ def build_cross_repo(repos: List[str], max_files: int = 20000) -> dict:
         rules = parse_gitignore(gi) if _os.path.isfile(gi) else []
         files: List[str] = []
         _walk(root, rules, max_files, files)
-        graph = build_graph_multi(files, root)
+        graph = build_graph_multi(files, root, parallel=True)
         name = _os.path.basename(root) or root
         result["repos"][name] = {"root": root, "files": len(files), "modules": sorted(graph.keys())}
         # namespace this repo's modules so cross-repo refs are unambiguous
@@ -5135,12 +5158,25 @@ def _c_symbol_index(files: List[str], root: str, scan: Optional[List[dict]] = No
                 need_precise[path] = ext
     precise_idx: dict = {}
     if need_precise:
-        for path, ext in need_precise.items():
-            mod = mod_map.get(path) or module_name_of(path, root)
-            if ext == ".py":
-                _index_python_bytes(path, mod, precise_idx)
-            else:
-                _index_other_bytes(path, mod, ext, precise_idx)
+        # parallel precise extraction (the serial re-AST of every .py is why
+        # --engine c ran SLOWER than the py engine on HA-core: C scan + full
+        # serial Python parse = strictly more work). Multiprocessing on >=100
+        # files; serial otherwise (spawn overhead dominates on tiny repos).
+        if len(need_precise) >= 100:
+            import multiprocessing as mp
+            work = [(path, root) for path in need_precise]
+            with mp.Pool() as pool:
+                per_files = pool.map(_index_file_worker, work)
+            for per_file in per_files:
+                for name, locs in per_file.items():
+                    precise_idx.setdefault(name, []).extend(locs)
+        else:
+            for path, ext in need_precise.items():
+                mod = mod_map.get(path) or module_name_of(path, root)
+                if ext == ".py":
+                    _index_python_bytes(path, mod, precise_idx)
+                else:
+                    _index_other_bytes(path, mod, ext, precise_idx)
         # keep only the names the core actually saw (its scanner defines the
         # symbol set; the precise pass only supplies offsets/source for them)
         core_names = set()
@@ -6955,7 +6991,7 @@ def render_ask(files: List[str], root: str, task: str, max_files: int = 5000) ->
     # 2. impact / blast radius (what breaks if you touch the relevant files)
     try:
         rel = edit_relevance(files, root, task, top=6)
-        graph = build_graph_multi(files, root)
+        graph = build_graph_multi(files, root, parallel=True)
         buf.write("## Blast radius (what breaks if you edit these)\n")
         seen = set()
         for r in rel[:6]:
@@ -9571,7 +9607,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--json", action="store_true", help="emit JSON")
     p.add_argument("--no-outline", action="store_true", help="skip per-file outlines (faster)")
     p.add_argument("--max-files", type=int, default=20000, help="cap traversal (default 20000; raise for 10M+ LOC monorepos)")
-    p.add_argument("--parallel", action="store_true", help="parallelize file parsing for heavy ops (--cross/--deadcode/--calls) on large repos")
+    p.add_argument("--parallel", action="store_true", help="parallelize file parsing for heavy ops (--graph/--calls/--impact/--cross/--deadcode/--index/--verify-edit) on large repos")
     p.add_argument("--graph", action="store_true", help="show Python import dependency graph")
     p.add_argument("--focus", metavar="MODULE", help="show deps/dependents of one module (with --graph)")
     p.add_argument("--calls", action="store_true", help="show function-level call graph (multi-language)")
@@ -10800,7 +10836,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         _walk(root, rules, args.max_files, files)
 
         if args.impact:
-            graph = build_graph(files, root)
+            graph = build_graph_multi(files, root, parallel=True)
             target = args.impact
             target_path = os.path.join(root, target) if not os.path.isabs(target) else target
             if os.path.isdir(target_path):
@@ -11191,7 +11227,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         files: List[str] = []
         _walk(root, rules, args.max_files, files)
         if args.calls:
-            calls = build_call_graph_multi(files, root)
+            calls = build_call_graph_multi(files, root, parallel=True)
             focus = None
             if args.focus:
                 focus = args.focus
@@ -11224,7 +11260,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 text += render_token_report({}, text)
             print(text)
             return 0
-        graph = build_graph_multi(files, root)
+        graph = build_graph_multi(files, root, parallel=True)
         if args.focus:
             # accept file path, directory (package), or dotted module name
             focus = args.focus

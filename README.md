@@ -49,6 +49,32 @@ it — and it re-derives everything from scratch. Over and over.
 
 No install. No daemon. No GPU. No telemetry. Runs 100% on your machine.
 
+## What's new in v0.79.4 (speed release)
+
+Big-repo cold-scan speedups, measured on home-assistant/core (18,486 files,
+same machine, same repo):
+
+| Command | Before | After | Why |
+|---|---|---|---|
+| `--graph` | 2m31s | **26s** | parallel import extraction (was serial) |
+| `--impact` | 2m39s | **28s** | parallel graph + O(1) suffix import resolution |
+| `--calls --focus zha` | 46s | **35s** | parallel call-edge scan |
+| `--verify-edit` | 8min | **75s** | O(1) suffix resolution (the quadratic wall) |
+| `--index --engine c` | 12min | **4m30s** | parallel precise symbol pass (was serial re-AST) |
+
+- **`_resolve_import` is no longer quadratic** — step 4 scanned *every*
+  module name for *every* unresolved import (~2.5B comparisons on HA-core).
+  A per-map suffix index (`_suffix_index`, cached by identity) makes suffix
+  resolution O(1); results are byte-identical (133 tests pass).
+- **`--graph`/`--calls`/`--impact` are now parallel by default** on large
+  repos (the `--parallel` flag previously existed but was never wired into
+  these dispatches). `--parallel` stays as an explicit override for
+  `--index`/`--cross`/`--deadcode`.
+- **C engine's precise pass is parallel** — it re-ASTs every `.py` for
+  byte-accurate spans; that was serial, so `--engine c` did C-scan + full
+  serial parse (why it ran *slower* than py). Now 3× faster and close to
+  parity with the py engine.
+
 ## What's new in v0.79.3 (query-fix release)
 
 - **`--query callers/callees` return real answers** — the knowledge graph

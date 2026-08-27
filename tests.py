@@ -2931,6 +2931,29 @@ class TestCEngineImports(unittest.TestCase):
         finally:
             force_rmtree(tmp)
 
+    def test_suffix_index_resolves_like_old_scan(self):
+        # _suffix_index (v0.79.4: O(1) suffix resolution) must match the old
+        # full-scan step-4 semantics: every suffix of a module name resolves
+        # to the SHALLOWEST module with that suffix, and an unknown target
+        # resolves to nothing.
+        mm = {"src.core.engine": "f1", "core.engine": "f2",
+              "src.utils.retry": "f3", "tests.test_cli": "f4"}
+        idx = codeloom._suffix_index(mm)
+        # exact suffix wins
+        self.assertEqual(idx["core.engine"], "core.engine")  # shallowest
+        self.assertEqual(idx["engine"], "core.engine")        # 1-seg suffix
+        self.assertEqual(idx["src.utils.retry"], "src.utils.retry")
+        self.assertEqual(idx["retry"], "src.utils.retry")
+        self.assertEqual(idx["test_cli"], "tests.test_cli")
+        # unknown -> absent
+        self.assertNotIn("nope", idx)
+        # cached: same dict object, no rebuild
+        self.assertIs(codeloom._suffix_index(mm), idx)
+        # matches the old scan's answer for a full suffix
+        tgt = "utils.retry"
+        old = [m for m in mm if m.split(".")[-2:] == tgt.split(".")]
+        self.assertIn(idx.get(tgt), old)
+
     def test_query_callers_returns_cross_module_callers(self):
         # --query 'callers X' must return every module+function calling X.
         # Regression (2026-08-27): render_query tested `sym in cs` against the
