@@ -585,7 +585,7 @@ Consequences for the agent (why this matters):
 - **Fail-safe by design** — every branch returns actionable context; the
   default is the map + task ranking. A "wrong" pick is still helpful.
 - **Deterministic == testable** — same query, same route, every time. The
-  router is exercised by the 120-test suite and the MCP handshake.
+  router is exercised by the 133-test suite and the MCP handshake.
 - **Keyword order is load-bearing** — safety (verify/blindspot) and
   write-vs-read disambiguation ("remember this bug" → write, "what do we
   know about X" → retrieve) sit BEFORE the broad branches that would
@@ -676,6 +676,21 @@ new feature.
   `codeloom_core_rs.rs` (`rustc -O`) locally — no network, no permission,
   no pip. If the compiler is missing, codeloom silently falls back to the
   pure-Python engine and still works. `--build-core` pre-builds explicitly.
+- **Stale core binaries are rebuilt automatically (v0.79.2)** — the finders
+  used to serve ANY existing binary, so a shipped `codeloom_core` lagging
+  `codeloom_core.c` silently ran old code (2026-08-27 HA-core: the committed
+  core emitted ZERO Python/C import edges and the CLI never complained).
+  Now `_core_is_stale()` (source mtime vs binary) triggers a rebuild in
+  `_find_core_engine` / `_find_core` / `--build-core`. If you ever hand-build
+  the core (`cc -O3 -o codeloom_core codeloom_core.c`), keep it fresh with
+  the source or it will just be rebuilt for you.
+- **C-engine kg parity is load-bearing** (`--engine c --index`): the C core
+  extracts imports via line regexes (Python `import x.y` / `from x import y`
+  + C `#include` are handled since v0.79.2; JS quoted forms too) and call
+  edges via `word(` scanning inside the current function — NOT AST. Expect
+  roughly the same edge counts as the py engine (it emits one import per
+  name-line, so `import os, sys` yields only `os`). Verify parity after any
+  `codeloom_core.c` change with the `TestCEngineImports` tests.
 
 
 - `--diff` requires the target to be a git repo with a committed baseline;
