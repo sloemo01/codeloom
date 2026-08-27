@@ -1655,6 +1655,14 @@ class _Index:
         if sig != entry.get("_walk_sig"):
             current = _collect_files(root, max_files)
             if len(current) != len(entry["files"]) or set(current) != set(entry["files"]):
+                # file-set changed: drop cached state for files that no longer
+                # exist — otherwise deleted files' symbols stay in the flat
+                # index forever (ghost symbols served by search/get_symbol)
+                gone = set(entry["files"]) - set(current)
+                for f in gone:
+                    entry["symbols"].pop(f, None)
+                    entry["hashes"].pop(f, None)
+                    entry["kg"] = None  # graph built from the file list too
                 entry["files"] = current
                 entry["hashes"] = {}
             else:
@@ -1665,27 +1673,26 @@ class _Index:
     @staticmethod
     def _root_signature(root: str) -> tuple:
         """Cheap change detector for the walk: (entry count, newest mtime)
-        of the root dir itself plus one level of subdirs. Catches new/deleted
-        files and dirs without walking the whole tree."""
-        try:
-            st = os.stat(root)
-            sig = [st.st_mtime]
-            try:
-                with os.scandir(root) as it:
-                    n = 0
-                    for e in it:
-                        n += 1
-                        if n > 500:
-                            break
-                        try:
-                            sig.append(e.stat().st_mtime)
-                        except OSError:
-                            pass
-            except OSError:
-                pass
-            return (len(sig), max(sig))
-        except OSError:
-            return (0, 0.0)
+        of the root dir plus a bounded recursive scan. A root-only scan misses
+        files created at depth >= 2 under an EXISTING subdir (pkg/sub/y.py
+        where pkg/sub already existed changes no parent mtime), so walk deep
+        with a hard file cap — still far cheaper than re-walking + hashing."""
+        sig = [0.0]
+        n = 0
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames
+                           if d not in (".git", "__pycache__", "node_modules", ".venv", "venv")]
+            for fn in filenames:
+                n += 1
+                if n > 5000:
+                    return (5001, sig[0])
+                try:
+                    m = os.stat(os.path.join(dirpath, fn)).st_mtime
+                    if m > sig[0]:
+                        sig[0] = m
+                except OSError:
+                    pass
+        return (n, sig[0])
 
     def symbols(self, root: str, max_files: int) -> dict:
         """Return the symbol index, re-parsing only changed files."""
@@ -1959,9 +1966,17 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
                             "check my edit", "is my edit safe", "edit safety",
                             "verify edit"]):
         import re as _re
-        m = _re.search(r"([\w./-]+\.py|[\w./-]+)",
-                       q.replace("did i break", "").replace("check my edit", "")
-                        .replace("verify", "").replace("edit safety", ""))
+        _stripped = (q.replace("did i break", "").replace("check my edit", "")
+                      .replace("verify", "").replace("edit safety", ""))
+        # prefer explicit .py/.ts/... targets, then skip pronoun filler like
+        # 'my' — "verify my edit to codeloom.py" must target codeloom.py,
+        # not invent <root>/my and ERROR on it
+        m = _re.search(r"([\w./-]+\.\w{1,4})", _stripped)
+        if not m:
+            for tok in _re.findall(r"[\w./-]+", _stripped):
+                if tok.lower() not in ("my", "the", "a", "an", "this", "that", "edit", "change", "to"):
+                    m = _re.match(rf"^{_re.escape(tok)}$", tok) and _re.search(_re.escape(tok), _stripped)
+                    break
         target = m.group(1) if m else root
         if not os.path.isabs(target):
             target = os.path.join(root, target)
@@ -1974,9 +1989,14 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
                             "what haven't i read", "not yet read", "coverage gap",
                             "what am i missing"]):
         import re as _re
-        m = _re.search(r"([\w./-]+\.py|[\w./-]+)",
-                       q.replace("blindspot", "").replace("read coverage", "")
-                        .replace("read everything", ""))
+        _stripped = (q.replace("blindspot", "").replace("read coverage", "")
+                      .replace("read everything", ""))
+        m = _re.search(r"([\w./-]+\.\w{1,4})", _stripped)
+        if not m:
+            for tok in _re.findall(r"[\w./-]+", _stripped):
+                if tok.lower() not in ("my", "the", "a", "an", "this", "that", "edit", "change", "to"):
+                    m = _re.search(_re.escape(tok), _stripped)
+                    break
         target = m.group(1) if m else root
         if not os.path.isabs(target):
             target = os.path.join(root, target)
@@ -2110,7 +2130,11 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
                             "current state", "remind me", "what is my status",
                             "after compaction", "recover context", "what did i decide",
                             "record decision", "what is still open", "hot set"]):
-        if any(k in q for k in ["record decision", "decided ", "reject "]):
+        # retrieval-shaped questions ("what did i decide to use?") must READ,
+        # not write — "decided " used to hijack them into wm_decide()
+        _retrieval = ("?" in q or q.startswith(("what ", "why ", "how ", "where ", "is "))
+                      or "what did i decide" in q)
+        if not _retrieval and any(k in q for k in ["record decision", "decided ", "reject "]):
             import re as _re
             title = _re.sub(r"(record decision|decided|reject|to use|because.*)", "", q).strip()
             status = "rejected" if ("reject" in q or "rejected" in q) else "accepted"
@@ -2156,6 +2180,14 @@ def _route_ask(args: Dict[str, Any], root: str, max_files: int) -> Dict[str, Any
             return {"content": [{"type": "text", "text": _memory_symbol(root, sym)}]}
     if any(k in q for k in ["adr", "architectural decision", "record decision", "decision record"]):
         if any(k in q for k in ["list", "what adrs", "show adrs"]):
+            return {"content": [{"type": "text", "text": codeloom.render_adr_list(root)}]}
+        # question-shaped queries must READ, not write: "what is the adr
+        # policy", "why do we have an adr for X" used to CREATE an ADR file
+        # on disk. Only imperative write phrases create.
+        _question = ("?" in q or q.startswith(("what ", "why ", "how ", "where ",
+                                               "is there", "do we", "did we"))
+                     or " what " in f" {q} " or " policy " in f" {q} ")
+        if _question:
             return {"content": [{"type": "text", "text": codeloom.render_adr_list(root)}]}
         import re as _re
         m = _re.search(r"adr[:\s]+([A-Za-z0-9 _-]+)", q)
@@ -2317,7 +2349,14 @@ def _memory_stats(root: str) -> str:
 def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     """Execute a tool and return an MCP result (text content)."""
     root = os.path.abspath(args.get("root", "."))
-    max_files = int(args.get("max_files", 5000))
+    # clients send max_files as string ("20000") or garbage — coerce safely
+    # instead of crashing the whole server on int()
+    try:
+        max_files = int(args.get("max_files", 5000))
+    except (TypeError, ValueError):
+        max_files = 5000
+    if max_files <= 0:
+        max_files = 5000
     files = _collect_files(root, max_files)
 
     # codeloom_ask: single natural-language entry point that routes
@@ -2546,6 +2585,9 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         repos = args.get("repos", [])
         if not repos:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'repos' argument"}]}
+        if not isinstance(repos, list) or not all(isinstance(r, str) for r in repos):
+            return {"isError": True, "content": [{"type": "text",
+                    "text": "'repos' must be a list of path strings"}]}
         text = codeloom.render_cross_repo(repos, max_files)
 
     elif name == "codeloom_map":
@@ -2759,6 +2801,12 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if not symbol:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'symbol' argument"}]}
         ctx = args.get("context_lines", 2)
+        try:
+            ctx = int(ctx)
+        except (TypeError, ValueError):
+            ctx = 2
+        if ctx < 0:
+            ctx = 2
         full = bool(args.get("full", False))
         # use the in-memory index (incremental, always fresh); a module-style
         # target ('src.flask.app') falls back to the module's docstring +
@@ -2822,7 +2870,14 @@ def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         command = args.get("command")
         if not command:
             return {"isError": True, "content": [{"type": "text", "text": "missing 'command' argument"}]}
-        text = codeloom.render_trace(list(command), root)
+        if isinstance(command, str):
+            # schema requires an array; a plain string used to be mangled into
+            # per-character argv (['p','y','t','h',...]) — split it properly
+            command = command.split()
+        if not isinstance(command, list) or not all(isinstance(c, str) for c in command):
+            return {"isError": True, "content": [{"type": "text",
+                    "text": "'command' must be an array of strings (or a single string)"}]}
+        text = codeloom.render_trace(command, root)
     else:
         return {"isError": True, "content": [{"type": "text", "text": f"unknown tool: {name}"}]}
 
@@ -2906,36 +2961,59 @@ def read_resource(uri: str, root: Optional[str] = None) -> Optional[Dict[str, An
 # Minimal MCP stdio server (JSON-RPC 2.0)
 # --------------------------------------------------------------------------- #
 
-def _send(msg: Dict[str, Any]) -> None:
+def _send(msg) -> None:
     sys.stdout.write(json.dumps(msg) + "\n")
     sys.stdout.flush()
 
 
-def _read() -> Optional[Dict[str, Any]]:
+class _ParseError:
+    """Sentinel for a stdin line that is not valid JSON (distinct from EOF
+    so serve() can answer -32700 and keep serving)."""
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+
+_PARSE_ERROR = _ParseError()
+
+
+def _read():
+    """Read one JSON-RPC message from stdin. Returns None ONLY on EOF;
+    a malformed line returns the _PARSE_ERROR sentinel (never None) so the
+    server emits a JSON-RPC parse error and survives garbage input from a
+    restarting client."""
     line = sys.stdin.readline()
     if not line:
         return None
     try:
         return json.loads(line)
     except json.JSONDecodeError:
-        return None
+        return _PARSE_ERROR
 
 
-def serve() -> int:
-    while True:
-        msg = _read()
-        if msg is None:
-            break
+def _handle_message(msg) -> Optional[Dict[str, Any]]:
+    """Handle one decoded JSON-RPC message. Returns the response object, or
+    None for notifications (no id). Never raises: a handler bug answers the
+    in-flight request with a JSON-RPC internal error instead of killing the
+    long-lived stdio server (which would leave every later request dead)."""
+    try:
         method = msg.get("method")
         msg_id = msg.get("id")
         params = msg.get("params") or {}
+    except AttributeError:
+        return {"jsonrpc": "2.0", "id": None,
+                "error": {"code": -32600, "message": "invalid request: expected an object"}}
 
-        # Notifications have no id — respond to nothing.
-        if msg_id is None:
-            continue
+    # Notifications have no id — respond to nothing.
+    if msg_id is None:
+        return None
 
+    try:
         if method == "initialize":
-            _send({
+            return {
                 "jsonrpc": "2.0",
                 "id": msg_id,
                 "result": {
@@ -2952,25 +3030,30 @@ def serve() -> int:
                         "server_sha256": _SERVER_SHA,
                     },
                 },
-            })
-        elif method == "resources/list":
-            _send({"jsonrpc": "2.0", "id": msg_id, "result": {"resources": RESOURCES}})
-        elif method == "resources/read":
+            }
+        if method == "resources/list":
+            return {"jsonrpc": "2.0", "id": msg_id, "result": {"resources": RESOURCES}}
+        if method == "resources/read":
             uri = params.get("uri", "")
             result = read_resource(uri, params.get("root"))
-            _send({"jsonrpc": "2.0", "id": msg_id, "result": result})
-        elif method == "tools/list":
-            _send({"jsonrpc": "2.0", "id": msg_id, "result": {"tools": TOOLS}})
-        elif method == "tools/call":
+            if isinstance(result, dict) and result.get("isError"):
+                # unknown/failed resource read: proper JSON-RPC error shape,
+                # not a tool-style isError body
+                try:
+                    msg_text = str(result.get("content", [{}])[0].get("text", "resource read failed"))
+                except Exception:
+                    msg_text = "resource read failed"
+                return {"jsonrpc": "2.0", "id": msg_id,
+                        "error": {"code": -32602, "message": msg_text}}
+            return {"jsonrpc": "2.0", "id": msg_id, "result": result}
+        if method == "tools/list":
+            return {"jsonrpc": "2.0", "id": msg_id, "result": {"tools": TOOLS}}
+        if method == "tools/call":
             name = params.get("name", "")
             args = params.get("arguments") or {}
+            if not isinstance(args, dict):
+                args = {}
             result = call_tool(name, args)
-            # freshness envelope on every successful response (repowise parity):
-            # agents always know index age + commit + staleness before trusting.
-            # Truthful by serving source: the resident in-memory index re-parses
-            # changed files by content hash (always fresh), so tools served from
-            # it report source=resident and stale=false. Tools served from the
-            # on-disk persistent index report its true age/staleness.
             if isinstance(result, dict) and not result.get("isError"):
                 try:
                     root = str(args.get("root") or ".")
@@ -2991,15 +3074,43 @@ def serve() -> int:
                         result["_meta"] = codeloom.meta_envelope(root)
                 except Exception:
                     pass
-            _send({"jsonrpc": "2.0", "id": msg_id, "result": result})
-        elif method == "ping":
-            _send({"jsonrpc": "2.0", "id": msg_id, "result": {}})
-        else:
-            _send({
-                "jsonrpc": "2.0",
-                "id": msg_id,
-                "error": {"code": -32601, "message": f"method not found: {method}"},
-            })
+            return {"jsonrpc": "2.0", "id": msg_id, "result": result}
+        if method == "ping":
+            return {"jsonrpc": "2.0", "id": msg_id, "result": {}}
+        return {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "error": {"code": -32601, "message": f"method not found: {method}"},
+        }
+    except Exception as e:
+        # NEVER let a handler bug kill the server: answer -32603 so the
+        # client's in-flight request gets a response and the connection
+        # stays alive for later requests.
+        return {"jsonrpc": "2.0", "id": msg_id,
+                "error": {"code": -32603, "message": f"internal error: {type(e).__name__}: {e}"}}
+
+
+def serve() -> int:
+    while True:
+        msg = _read()
+        if msg is None:
+            break  # EOF — clean shutdown
+        if msg is _PARSE_ERROR:
+            # Malformed JSON line (client restart, truncation): answer
+            # -32700 and KEEP SERVING. A single garbage byte must not kill
+            # a long-lived stdio server (JSON-RPC 2.0 spec).
+            _send({"jsonrpc": "2.0", "id": None,
+                   "error": {"code": -32700, "message": "parse error: input is not valid JSON"}})
+            continue
+        if isinstance(msg, list):
+            # JSON-RPC 2.0 batch request (MCP 2024-11-05 permits arrays).
+            responses = [r for r in (_handle_message(m) for m in msg) if r is not None]
+            if responses:
+                _send(responses)
+            continue
+        resp = _handle_message(msg)
+        if resp is not None:
+            _send(resp)
     return 0
 
 
