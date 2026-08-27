@@ -91,8 +91,18 @@ the trust surface. Know what each one does:
   `--root` it stays fully offline.
 - **`--index`** — writes `.codeloom-index.json` (JSON-only; no binary cache is
   ever written or loaded). Repo-supplied index files are treated as untrusted:
-  entries pointing outside the repo root are dropped, and legacy `.bin` files
-  are ignored with a warning rather than unmarshalled.
+  entries pointing outside the repo root are dropped (checked through
+  `realpath`, so in-repo symlinks pointing outside are dropped too), the lazy
+  `.codeloom-index.lazy` dbm store is containment-checked on every read, and
+  legacy `.bin` files are ignored with a warning rather than unmarshalled.
+- **Symlinks** — the file walker follows symlinks only when they resolve
+  inside the repo root; a symlink pointing outside (e.g. `~/.ssh`) is skipped,
+  so a hostile repo can't smuggle outside content into the index.
+- **`--graph-html`** — module names (derived from file names on disk) are
+  escaped before embedding into the generated page's inline JavaScript, so a
+  hostile filename can't execute script when the HTML is opened. Note: the
+  page loads the `force-graph` library from unpkg.com when opened — the only
+  network touch in the generated artifact.
 
 ## The trust model
 

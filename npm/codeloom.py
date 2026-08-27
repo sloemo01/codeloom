@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
-VERSION = "0.79.0"
+VERSION = "0.79.1"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -1807,31 +1807,6 @@ def render_dedup(root: str, files: List[str]) -> str:
         buf.write(f"  ... (+{len(new_files)-20} more)\n")
     return buf.getvalue()
 
-# 9 (full). Session dedupe INSIDE a response: suppress already-seen symbols ----
-def dedupe_symbols(files: List[str], root: str, symbol: str) -> bool:
-    """True if this symbol was already read this session (per the local log),
-    so the caller can skip re-embedding it. Session memory, single-response."""
-    import json as _json
-    path = _session_path(root)
-    if not os.path.isfile(path):
-        return False
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    e = _json.loads(line)
-                except _json.JSONDecodeError:
-                    continue
-                cmd = e.get("cmd", "")
-                if symbol in cmd:
-                    return True
-    except OSError:
-        pass
-    return False
-
 # 25. Natural-language API: flow discovery -------------------------------------
 def render_find(files: List[str], root: str, query: str, max_files: int = 5000) -> str:
     """Natural-language flow discovery: 'where does X start', 'show every X
@@ -3159,13 +3134,6 @@ def _embedding_model():
 
 
 _EMBED_CACHE = {}
-
-
-def _embeddings_available() -> bool:
-    if "model" in _EMBED_CACHE:
-        return _EMBED_CACHE["model"] is not None
-    _EMBED_CACHE["model"] = _embedding_model()
-    return _EMBED_CACHE["model"] is not None
 
 
 def _embed_cosine(a, b) -> float:
@@ -4752,15 +4720,6 @@ def load_symbol_lazy(root: str, symbol: str) -> Optional[list]:
         return kept or None
     except Exception:
         return None
-
-def lazy_index_has(root: str) -> bool:
-    """True if a lazy per-symbol index exists for this root."""
-    try:
-        import dbm
-        with dbm.open(_index_lazy_path(root), "r"):
-            return True
-    except Exception:
-        return False
 
 def _read_source_from_loc(loc: dict, root: str) -> str:
     """Re-read a symbol's full source from disk using the stored byte range.
@@ -7251,17 +7210,6 @@ def _strip_strings_comments(text: str, ext: str) -> str:
         i += 1
     return "".join(out)
 
-def _scan_calls(text: str, ext: str, all_defined: set) -> set:
-    """Find calls to repo-defined functions in `text`, skipping strings/comments."""
-    clean = _strip_strings_comments(text, ext)
-    call_re = r"\b(\w+)\s*\("
-    found = set()
-    for m in re.finditer(call_re, clean):
-        callee = m.group(1)
-        if callee in all_defined:
-            found.add(callee)
-    return found
-
 def _scan_defs(text: str, ext: str) -> set:
     """Find function/class definition names in `text`, skipping strings/comments."""
     clean = _strip_strings_comments(text, ext)
@@ -7653,12 +7601,15 @@ SESSION_LOG = ".codeloom-session.jsonl"
 def _session_path(root: str) -> str:
     return os.path.join(root, SESSION_LOG)
 
-def log_session(root: str, command: str, text: str) -> None:
+def log_session(root: str, command: str, text: str, elapsed: float = 0.0) -> None:
     """Append one invocation to the local session log (JSONL).
     est_tokens_out = bytes/4 of emitted text (honest estimate);
     est_tokens_in = the grep+read baseline input the command replaced (4x
     the output estimate — reading whole files instead of the compressed map).
-    Both are LOCAL estimates; nothing leaves the machine."""
+    Both are LOCAL estimates; nothing leaves the machine.
+    `elapsed` is the REAL wall time of the invocation (measured by the
+    --session wrapper) — the old hardcoded 0.0 made the savings ledger
+    fiction."""
     import json as _json
     import time as _time
     est_out = max(1, len(text) // 4)
@@ -7670,7 +7621,7 @@ def log_session(root: str, command: str, text: str) -> None:
         "bytes": len(text),
         "est_tokens_out": est_out,
         "est_tokens_in": est_out * 4,
-        "seconds": 0.0,
+        "seconds": round(elapsed, 3),
     }
     try:
         with open(_session_path(root), "a", encoding="utf-8") as f:
@@ -8349,14 +8300,6 @@ def memory_rotate(root: str, name: str) -> bool:
         return True
     except OSError:
         return False
-
-def memory_enforce_caps(root: str) -> List[str]:
-    """Enforce caps on the capped memory files. Returns files rotated."""
-    rotated = []
-    for name in MEMORY_CAPPED_FILES:
-        if memory_rotate(root, name):
-            rotated.append(name)
-    return rotated
 
 def session_rotate_weekly(root: str) -> Optional[str]:
     """Rotate .codeloom-session.jsonl weekly into archive/session-YYYY-MM-DD.jsonl.
@@ -9745,9 +9688,28 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # --session: log this invocation to the local session log (every command)
     if args.session:
-        log_session(root, " ".join(sys.argv[1:]), " ".join(sys.argv[1:]))
-        # weekly rotation of the session log into .codeloom-memory/archive
-        session_rotate_weekly(root)
+        import time as _time
+        _t0 = _time.time()
+        _real_stdout = sys.stdout
+        _buf = io.StringIO()
+        class _Tee:
+            def write(self, s):
+                _buf.write(s)
+                _real_stdout.write(s)
+            def flush(self):
+                _real_stdout.flush()
+        sys.stdout = _Tee()  # type: ignore[assignment]
+        try:
+            # strip --session so the recursive dispatch doesn't re-enter this
+            # branch (infinite recursion)
+            rc = main([a for a in (argv or []) if a != "--session"])
+        finally:
+            sys.stdout = _real_stdout  # type: ignore[assignment]
+            log_session(root, " ".join(sys.argv[1:]), _buf.getvalue(),
+                        elapsed=_time.time() - _t0)
+            # weekly rotation of the session log into .codeloom-memory/archive
+            session_rotate_weekly(root)
+        return rc
 
     # --verify-edit: post-edit graph-integrity oracle (GO/STOP/CHECK verdict)
     if args.verify_edit:
@@ -10502,15 +10464,39 @@ def main(argv: Optional[List[str]] = None) -> int:
                     if use_summary == "adaptive":
                         # adaptive: full source if small, summary if large
                         if loc.get("tokens", 0) <= ADAPTIVE_FULL_THRESHOLD:
+                            if args.json:
+                                print(json.dumps({"version": VERSION, "symbol": args.get_symbol,
+                                                  "module": loc["module"], "line": loc["line"],
+                                                  "kind": loc["kind"], "source": loc.get("source", ""),
+                                                  "tokens": loc.get("tokens", 0)}, indent=2))
+                                return 0
                             print(f"# get_symbol: {args.get_symbol}\n"
                                   f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
                                   f"bytes {loc['start_byte']}-{loc['end_byte']}  ~{loc['tokens']} tokens\n\n"
                                   f"{loc['source']}\n")
                         else:
+                            if args.json:
+                                print(json.dumps({"version": VERSION, "symbol": args.get_symbol,
+                                                  "module": loc["module"], "line": loc["line"],
+                                                  "kind": loc["kind"], "summary": True,
+                                                  "signature": loc.get("sig") or args.get_symbol}, indent=2))
+                                return 0
                             print(render_get_symbol(files, root, args.get_symbol, summary=True))
                     elif use_summary:
+                        if args.json:
+                            print(json.dumps({"version": VERSION, "symbol": args.get_symbol,
+                                              "module": loc["module"], "line": loc["line"],
+                                              "kind": loc["kind"], "summary": True,
+                                              "signature": loc.get("sig") or args.get_symbol}, indent=2))
+                            return 0
                         print(render_get_symbol(files, root, args.get_symbol, summary=True))
                     else:
+                        if args.json:
+                            print(json.dumps({"version": VERSION, "symbol": args.get_symbol,
+                                              "module": loc["module"], "line": loc["line"],
+                                              "kind": loc["kind"], "source": loc.get("source", ""),
+                                              "tokens": loc.get("tokens", 0)}, indent=2))
+                            return 0
                         print(f"# get_symbol: {args.get_symbol}\n"
                               f"{loc['module']}:{loc['line']}  [{loc['kind']}]  "
                               f"bytes {loc['start_byte']}-{loc['end_byte']}  ~{loc['tokens']} tokens\n\n"
@@ -10518,6 +10504,25 @@ def main(argv: Optional[List[str]] = None) -> int:
                     return 0
             # adaptive: pass summary=True so render_get_symbol flips to full
             # source only for small symbols (<= threshold)
+            if args.json:
+                loc = get_symbol(files, root, args.get_symbol)
+                if loc is None:
+                    print(json.dumps({"version": VERSION, "symbol": args.get_symbol,
+                                      "found": False}, indent=2))
+                    return 0
+                small = loc.get("tokens", 0) <= ADAPTIVE_FULL_THRESHOLD
+                if (use_summary == "adaptive" and small) or use_summary is False:
+                    print(json.dumps({"version": VERSION, "symbol": args.get_symbol,
+                                      "module": loc["module"], "line": loc["line"],
+                                      "kind": loc["kind"], "source": loc.get("source", ""),
+                                      "tokens": loc.get("tokens", 0)}, indent=2))
+                else:
+                    sig = _signature_shape(loc.get("source", ""))
+                    print(json.dumps({"version": VERSION, "symbol": args.get_symbol,
+                                      "module": loc["module"], "line": loc["line"],
+                                      "kind": loc["kind"], "summary": True,
+                                      "signature": sig[0] if sig else args.get_symbol}, indent=2))
+                return 0
             print(render_get_symbol(files, root, args.get_symbol, summary=(use_summary is True or use_summary == "adaptive"), adaptive=(use_summary == "adaptive")))
             return 0
 

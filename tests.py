@@ -198,6 +198,144 @@ class TestCodeLoom(unittest.TestCase):
         finally:
             force_rmtree(tmp)
 
+    def test_cli_get_symbol_json_contract(self):
+        # --json --get-symbol emits machine-readable JSON (not human text)
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = self._make_cli_repo(tmp)
+            r, _ = self._run_cli("--json", "--get-symbol", "Engine", repo)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            import json
+            data = json.loads(r.stdout)
+            self.assertEqual(data["symbol"], "Engine")
+            self.assertIn("source", data)
+            self.assertIn("class Engine", data["source"])
+            # not-found path is JSON too
+            r2, _ = self._run_cli("--json", "--get-symbol", "NoSuchSymbol", repo)
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            self.assertFalse(json.loads(r2.stdout)["found"])
+        finally:
+            force_rmtree(tmp)
+
+    def test_cli_snippet_byte_accuracy(self):
+        # --snippet is byte-accurate: a multi-byte (UTF-8) file sliced at
+        # byte offsets must not produce mojibake or off-by-one text
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(repo)
+            # 3-byte chars: "é" = 0xC3 0xA9. 10 é's = 30 bytes + newline.
+            with open(os.path.join(repo, "u.py"), "w", encoding="utf-8") as f:
+                f.write("é" * 10 + "\n" + "def x():\n    return 1\n")
+            r, _ = self._run_cli("--snippet", "u.py", "0", "31", repo)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("é" * 10, r.stdout)
+            # reversed range must error, not silently return garbage
+            r2, _ = self._run_cli("--snippet", "u.py", "31", "0", repo)
+            self.assertNotEqual(r2.returncode, 0)
+        finally:
+            force_rmtree(tmp)
+
+    def test_cli_query_dependents_no_crash(self):
+        # --query dependents on a symbol with no dependents must not crash
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = self._make_cli_repo(tmp)
+            r, _ = self._run_cli("--query", "dependents backup", repo)
+            self.assertEqual(r.returncode, 0, r.stderr)
+        finally:
+            force_rmtree(tmp)
+
+    def test_cli_diff_non_git_honesty(self):
+        # --diff on a non-git dir must say so, not crash or fabricate
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(repo)
+            with open(os.path.join(repo, "a.py"), "w") as f:
+                f.write("x = 1\n")
+            r, _ = self._run_cli("--diff", repo)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("not a git", r.stdout.lower())
+        finally:
+            force_rmtree(tmp)
+
+    def test_cli_graph_html_escape(self):
+        # hostile filename must not break out of the JS string literal
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(repo)
+            with open(os.path.join(repo, 'evil"+alert(1)+".py'), "w") as f:
+                f.write("import normal\n\ndef hostile():\n    return normal.n()\n")
+            with open(os.path.join(repo, "normal.py"), "w") as f:
+                f.write("def n():\n    return 1\n")
+            r, _ = self._run_cli("--graph-html", repo)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            html = os.path.join(repo, "codeloom-graph.html")
+            self.assertTrue(os.path.isfile(html), "--graph-html wrote no file")
+            with open(html, encoding="utf-8") as fh:
+                content = fh.read()
+            # the raw quote must be escaped in the emitted JS
+            self.assertNotIn('"evil"', content)
+            self.assertIn("\\\"", content)
+        finally:
+            force_rmtree(tmp)
+
+    def test_cli_symlink_containment(self):
+        # a symlink pointing outside the repo must not leak outside content
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = os.path.join(tmp, "repo")
+            outside = os.path.join(tmp, "outside")
+            os.makedirs(repo)
+            os.makedirs(outside)
+            with open(os.path.join(outside, "secret.py"), "w") as f:
+                f.write("TOPSECRET = 'leak'\n")
+            os.symlink(outside, os.path.join(repo, "leakdir"))
+            r, _ = self._run_cli(repo)  # default command = map
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("secret.py", r.stdout)
+            self.assertNotIn("TOPSECRET", r.stdout)
+        finally:
+            force_rmtree(tmp)
+
+    def test_cli_session_logs_real_time(self):
+        # --session must record real wall time and real output bytes
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(repo)
+            with open(os.path.join(repo, "a.py"), "w") as f:
+                f.write("def a():\n    return 1\n")
+            r, _ = self._run_cli("--session", repo)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            import json
+            log = os.path.join(repo, ".codeloom-session.jsonl")
+            self.assertTrue(os.path.isfile(log))
+            with open(log, encoding="utf-8") as fh:
+                entry = json.loads(fh.readline())
+            self.assertGreater(entry["seconds"], 0.0)
+            self.assertGreater(entry["bytes"], 0)
+        finally:
+            force_rmtree(tmp)
+
+    def test_cli_json_write_roundtrip(self):
+        # --json --write must actually write the JSON payload (was: silent drop)
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = self._make_cli_repo(tmp)
+            out = os.path.join(tmp, "out.json")
+            r, _ = self._run_cli("--json", "--write", out, repo)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertTrue(os.path.isfile(out), "JSON payload was not written")
+            import json
+            with open(out, encoding="utf-8") as fh:
+                data = json.load(fh)
+            self.assertIn("file_count", data)
+        finally:
+            force_rmtree(tmp)
+
     def test_cli_pack_dispatch(self):
         # --pack emits a single-shot task brief with a ranked reading order
         tmp = tempfile.mkdtemp()
