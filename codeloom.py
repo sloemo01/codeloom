@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
-VERSION = "0.79.2"
+VERSION = "0.79.3"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -5860,7 +5860,20 @@ def render_query(root: str, query: str) -> str:
     # query types
     if ql.startswith("callers "):
         sym = _resolve_sym(q[8:].strip())
-        hits = [m for m, cs in calls.items() if sym in cs]
+        # kg calls = {module: {caller_func: set(callee_names)}} — a "caller" of
+        # sym is any function (in any module) whose target set contains sym.
+        # The old code tested `sym in cs` against the module's function-KEYS,
+        # which only ever matched the module defining sym — a pre-existing bug
+        # (both engines) exposed on HA-core: 20 usages, 1 bogus "caller".
+        # Legacy flat shape {module: [callees]} is tolerated too (old indexes).
+        hits = []
+        for m, funcs in calls.items():
+            if isinstance(funcs, dict):
+                for caller, targets in funcs.items():
+                    if sym in targets:
+                        hits.append(f"{m}.{caller}" if caller != "<module>" else m)
+            elif sym in funcs:
+                hits.append(m)
         buf.write(f"## Callers of {sym}\n")
         for m in sorted(hits):
             buf.write(f"  {m}\n")
@@ -5870,9 +5883,23 @@ def render_query(root: str, query: str) -> str:
         return buf.getvalue()
     if ql.startswith("callees"):
         sym = _resolve_sym(q[7:].strip())
-        callees = sorted(calls.get(sym, []))
+        callees = set()
+        if sym in calls:
+            funcs = calls[sym]
+            if isinstance(funcs, dict):
+                # module name: every callee of every function in the module
+                for targets in funcs.values():
+                    callees |= set(targets)
+            else:
+                # legacy flat shape: {module: [callee names]}
+                callees |= set(funcs)
+        else:
+            # function name: the callees of that function wherever defined
+            for funcs in calls.values():
+                if isinstance(funcs, dict) and sym in funcs:
+                    callees |= set(funcs[sym])
         buf.write(f"## Callees of {sym}\n")
-        for c in callees:
+        for c in sorted(callees):
             buf.write(f"  {c}\n")
         buf.write(f"\n  {len(callees)} callee(s).\n")
         return buf.getvalue()

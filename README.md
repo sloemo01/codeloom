@@ -49,6 +49,18 @@ it — and it re-derives everything from scratch. Over and over.
 
 No install. No daemon. No GPU. No telemetry. Runs 100% on your machine.
 
+## What's new in v0.79.3 (query-fix release)
+
+- **`--query callers/callees` return real answers** — the knowledge graph
+  stores call edges as `{module: {caller_func: set(callees)}}`, but
+  `render_query` read it as `{module: set(callees)}`: `callers X` tested
+  `X in cs` against the module's function-KEYS, so it only ever matched the
+  module *defining* X (on HA-core: 20 real callers, 1 bogus result), and
+  `callees X` looked up X as a module key. Callers now scan every module's
+  callee sets; callees accept either a module or a function name.
+- Regression test: `--query callers` on a 3-module fixture returns the
+  cross-module caller.
+
 ## What's new in v0.79.2 (C-engine parity release)
 
 Found by running codeloom against home-assistant/core (18,484 Python files,

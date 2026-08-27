@@ -2931,6 +2931,32 @@ class TestCEngineImports(unittest.TestCase):
         finally:
             force_rmtree(tmp)
 
+    def test_query_callers_returns_cross_module_callers(self):
+        # --query 'callers X' must return every module+function calling X.
+        # Regression (2026-08-27): render_query tested `sym in cs` against the
+        # module's function-KEYS, so 'callers async_track_time_interval' on
+        # HA-core (20 usages) returned only the module defining it.
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(repo)
+            self._make_import_repo(repo)
+            r = subprocess.run(
+                [sys.executable, os.path.join(TESTS_DIR, "codeloom.py"),
+                 "--index", repo],
+                capture_output=True, text=True, cwd=tmp, timeout=180)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            r = subprocess.run(
+                [sys.executable, os.path.join(TESTS_DIR, "codeloom.py"),
+                 "--query", "callers run", repo],
+                capture_output=True, text=True, cwd=tmp, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            # src.cli.main calls run() (via Engine().run()) -> must appear
+            self.assertIn("src.cli.main", r.stdout,
+                          "cross-module caller missing from --query callers")
+        finally:
+            force_rmtree(tmp)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
