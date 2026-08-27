@@ -620,7 +620,7 @@ structured, importance-scored, graph-linked entries:
 ```bash
 python3 tests.py
 ```
-Expect `OK` (120 tests, incl. the 7 `TestMemoryOS` cases). Add tests for any
+Expect `OK` (129 tests, incl. the 7 `TestMemoryOS` cases). Add tests for any
 new feature.
 
 ### 5. Re-record the demo GIF
@@ -689,7 +689,7 @@ new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (120 tests).
+- `python3 tests.py` → `OK` (129 tests).
 - `codeloom --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codeloom --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codeloom --task "text" <root>` returns a ranked module list.

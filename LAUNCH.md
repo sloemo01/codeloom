@@ -11,7 +11,7 @@ reproducible ([`benchmarks/README.md`](benchmarks/README.md)).
 
 - Demo GIF: `https://raw.githubusercontent.com/sloemo01/codeloom/main/demo.gif`
 - Repo: `https://github.com/sloemo01/codeloom`
-- Latest release: `https://github.com/sloemo01/codeloom/releases/tag/v0.79.0`
+- Latest release: `https://github.com/sloemo01/codeloom/releases/tag/v0.79.1`
 
 ---
 
