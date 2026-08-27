@@ -2810,9 +2810,16 @@ class TestCEngineImports(unittest.TestCase):
     auto-rebuild (committed core lagging codeloom_core.c)."""
 
     def _c_engine_available(self):
-        """True if a usable C core can be built (cc present)."""
-        import shutil
-        return shutil.which("cc") is not None
+        """True if the C core can actually be built/run on this platform.
+        NOT just shutil.which('cc'): Windows runners ship a Git-for-Windows
+        'cc' that cannot compile codeloom_core.c, and a committed Mach-O
+        binary is rejected by the platform guard. _find_core_engine runs the
+        full logic (platform magic check + stale check + auto-build attempt)
+        and returns None when the core genuinely can't be produced."""
+        try:
+            return codeloom._find_core_engine("c") is not None
+        except Exception:
+            return False
 
     def _make_import_repo(self, repo):
         """Small Python repo with local + stdlib + relative imports."""
