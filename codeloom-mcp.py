@@ -35,7 +35,7 @@ import codeloom  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "codeloom-mcp"
-SERVER_VERSION = "0.79.4"
+SERVER_VERSION = "0.79.5"
 
 # Server identity stamp for the stale-server handshake: the exact file mtime
 # (seconds since epoch) and a content hash of THIS file at load time. A

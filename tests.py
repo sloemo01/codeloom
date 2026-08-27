@@ -2954,6 +2954,42 @@ class TestCEngineImports(unittest.TestCase):
         old = [m for m in mm if m.split(".")[-2:] == tgt.split(".")]
         self.assertIn(idx.get(tgt), old)
 
+    def test_binary_matches_platform_guard(self):
+        # v0.79.5: a committed accelerator built on another OS (Mach-O on
+        # Linux/Windows) must be rejected — running it yields empty output
+        # and '--engine c produced no symbols' (the 2026-08-27 CI failure on
+        # all non-macOS runners). Shebang scripts are portable and pass.
+        tmp = tempfile.mkdtemp()
+        try:
+            macho = os.path.join(tmp, "macho")
+            with open(macho, "wb") as f:
+                f.write(b"\xcf\xfa\xed\xfe" + b"\x00" * 24)
+            elf = os.path.join(tmp, "elf")
+            with open(elf, "wb") as f:
+                f.write(b"\x7fELF" + b"\x00" * 24)
+            pe = os.path.join(tmp, "pe")
+            with open(pe, "wb") as f:
+                f.write(b"MZ" + b"\x00" * 24)
+            script = os.path.join(tmp, "script")
+            with open(script, "w") as f:
+                f.write("#!/bin/sh\ncat >/dev/null\n")
+            if sys.platform == "darwin":
+                self.assertTrue(codeloom._binary_matches_platform(macho))
+                self.assertFalse(codeloom._binary_matches_platform(elf))
+                self.assertFalse(codeloom._binary_matches_platform(pe))
+            elif sys.platform.startswith("linux"):
+                self.assertTrue(codeloom._binary_matches_platform(elf))
+                self.assertFalse(codeloom._binary_matches_platform(macho))
+                self.assertFalse(codeloom._binary_matches_platform(pe))
+            else:  # windows
+                self.assertTrue(codeloom._binary_matches_platform(pe))
+                self.assertFalse(codeloom._binary_matches_platform(macho))
+                self.assertFalse(codeloom._binary_matches_platform(elf))
+            # shebang scripts pass on every platform
+            self.assertTrue(codeloom._binary_matches_platform(script))
+        finally:
+            force_rmtree(tmp)
+
     def test_query_callers_returns_cross_module_callers(self):
         # --query 'callers X' must return every module+function calling X.
         # Regression (2026-08-27): render_query tested `sym in cs` against the

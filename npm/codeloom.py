@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
-VERSION = "0.79.4"
+VERSION = "0.79.5"
 
 # Adaptive full-source threshold: symbols at or below this many tokens return
 # their actual implementation by default (no --full needed); larger symbols
@@ -4946,13 +4946,15 @@ def _find_core_engine(engine: str = "c") -> Optional[str]:
     cands = [os.path.join(here, name), os.path.join(here, name + ".exe")]
     for c in cands:
         if os.path.isfile(c) and os.access(c, os.X_OK):
+            if not _binary_matches_platform(c):
+                break  # foreign-OS binary (e.g. Mach-O on Linux) — rebuild below
             if not _core_is_stale(here, name, c):
                 return c
             # stale binary — rebuild below; do NOT silently serve it
     import shutil
     on_path = shutil.which(name)
     if on_path and os.path.isfile(on_path) and os.access(on_path, os.X_OK):
-        if not _core_is_stale(os.path.dirname(on_path), name, on_path):
+        if _binary_matches_platform(on_path) and not _core_is_stale(os.path.dirname(on_path), name, on_path):
             return on_path
         # a stale PATH binary: rebuild next to codeloom.py below
     # not built or stale — auto-compile from committed source (no download)
@@ -4979,6 +4981,35 @@ def _find_core_engine(engine: str = "c") -> Optional[str]:
                 pass
     return None
 
+def _binary_matches_platform(path: str) -> bool:
+    """True if an existing binary can run on THIS OS (magic-byte check).
+    Committed accelerator binaries are built on the maintainer's macOS
+    (Mach-O) — a Linux/Windows checkout must NOT serve them (running a
+    Mach-O on Linux yields empty output and '--engine c produced no
+    symbols', the 2026-08-27 CI failure on all non-macOS runners). A
+    foreign-OS binary is treated as missing: the finders auto-rebuild from
+    committed source instead. Shebang scripts are portable and pass."""
+    try:
+        with open(path, "rb") as fh:
+            magic = fh.read(4)
+    except OSError:
+        return False
+    if not magic:
+        return False
+    # #! scripts run anywhere — let them through (empty output is caught by
+    # the zero-symbols guard, not here)
+    if magic[:2] == b"#!":
+        return True
+    if sys.platform == "darwin":
+        return magic[:4] in (b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xce",
+                             b"\xca\xfe\xba\xbe")
+    if sys.platform.startswith("linux"):
+        return magic[:4] == b"\x7fELF"
+    if sys.platform in ("win32", "cygwin"):
+        return magic[:2] == b"MZ"
+    return True  # unknown platform: never block
+
+
 def _find_rs_watcher() -> Optional[str]:
     """Locate the standalone Rust CLI (codeloom_rs) that has the `watch`
     subcommand. The single-file scan core (codeloom_core_rs) does NOT have a
@@ -4989,7 +5020,8 @@ def _find_rs_watcher() -> Optional[str]:
     cands = [os.path.join(here, name), os.path.join(here, name + ".exe")]
     for c in cands:
         if os.path.isfile(c) and os.access(c, os.X_OK):
-            return c
+            if _binary_matches_platform(c):
+                return c
     import shutil
     return shutil.which(name)
 
@@ -5016,13 +5048,15 @@ def _find_core() -> Optional[str]:
     cands = [os.path.join(here, _CORE_NAME), os.path.join(here, _CORE_NAME + ".exe")]
     for c in cands:
         if os.path.isfile(c) and os.access(c, os.X_OK):
+            if not _binary_matches_platform(c):
+                break  # foreign-OS binary — rebuild below
             if not _core_is_stale(here, _CORE_NAME, c):
                 return c
             break  # stale local binary — rebuild it below
     import shutil
     on_path = shutil.which(_CORE_NAME)
     if on_path and os.path.isfile(on_path) and os.access(on_path, os.X_OK):
-        if not _core_is_stale(os.path.dirname(on_path), _CORE_NAME, on_path):
+        if _binary_matches_platform(on_path) and not _core_is_stale(os.path.dirname(on_path), _CORE_NAME, on_path):
             return on_path
     # not built or stale — auto-build from committed source (integrated, no download)
     core_src = os.path.join(here, "codeloom_core.c")
@@ -10481,6 +10515,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         here = os.path.dirname(os.path.abspath(__file__))
         existing = [os.path.join(here, _CORE_NAME), os.path.join(here, _CORE_NAME + ".exe")]
         if any(os.path.isfile(c) and os.access(c, os.X_OK)
+               and _binary_matches_platform(c)
                and not _core_is_stale(here, _CORE_NAME, c) for c in existing):
             print("C accelerator already built — nothing to do.")
             return 0

@@ -49,6 +49,18 @@ it — and it re-derives everything from scratch. Over and over.
 
 No install. No daemon. No GPU. No telemetry. Runs 100% on your machine.
 
+## What's new in v0.79.5 (cross-platform fix)
+
+- **Committed accelerator binaries are platform-checked** — `codeloom_core`
+  and friends are built on macOS (Mach-O arm64); a Linux/Windows checkout
+  previously picked them up anyway (they're executable files), ran them,
+  got empty output, and `--engine c` failed with "produced no symbols" —
+  the CI failure on every non-macOS runner. `_binary_matches_platform()`
+  reads the magic bytes and a foreign-OS binary is treated as missing, so
+  the finders auto-rebuild from committed source (Linux CI has `cc`).
+  Shebang scripts still pass (portable). Applies to the C core, the Rust
+  core, the Rust CLI, and `--build-core`.
+
 ## What's new in v0.79.4 (speed release)
 
 Big-repo cold-scan speedups, measured on home-assistant/core (18,486 files,
