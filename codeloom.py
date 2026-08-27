@@ -928,15 +928,20 @@ class Node:
     children: List["Node"] = field(default_factory=list)
 
 def _walk(root: str, rules: List[GitignoreRule], max_files: int, files: List[str],
-          _visited: Optional[set] = None) -> None:
+          _visited: Optional[set] = None, _base_real: Optional[str] = None) -> None:
     """Collect file paths, respecting ignores, capped by max_files.
     Guards against symlink loops by tracking visited real paths.
     Merges nested .gitignore files as it descends (gitignore semantics:
-    a subdirectory's .gitignore adds rules scoped to that directory)."""
+    a subdirectory's .gitignore adds rules scoped to that directory).
+    Symlinks are followed ONLY when they resolve inside the repo root —
+    a symlinked dir/file pointing outside (e.g. ~/.ssh) used to be walked
+    and indexed, leaking outside content into the index."""
     if len(files) >= max_files:
         return
     if _visited is None:
         _visited = set()
+        _base_real = os.path.realpath(root)
+    assert _base_real is not None  # set together with _visited above
     try:
         real = os.path.realpath(root)
         if real in _visited:
@@ -955,8 +960,15 @@ def _walk(root: str, rules: List[GitignoreRule], max_files: int, files: List[str
         full = os.path.join(root, e)
         if is_ignored(full, rules):
             continue
+        if os.path.islink(full):
+            # containment: only follow symlinks that stay inside the repo
+            try:
+                if not os.path.realpath(full).startswith(_base_real + os.sep):
+                    continue
+            except OSError:
+                continue
         if os.path.isdir(full):
-            _walk(full, rules, max_files, files, _visited)
+            _walk(full, rules, max_files, files, _visited, _base_real)
         elif os.path.isfile(full):
             if len(files) >= max_files:
                 return
@@ -2081,6 +2093,19 @@ def render_lsp_symbol(files: List[str], root: str, symbol: str) -> str:
         buf.write(f"  LSP resolved: {res.get('uri', '?')}:{res.get('line', 0) + 1}\n")
         buf.write("  (LSP gives the real cross-file definition static parsing may miss.)\n")
     return buf.getvalue()
+def _js_escape(s: str) -> str:
+    """Escape a string for safe embedding inside a double-quoted JS string
+    literal. Module names derive from FILE NAMES on disk — a hostile repo
+    (e.g. a dir named `evil\"+alert(1)+\"`) used to break out of the literal
+    and execute arbitrary JS when the generated graph HTML was opened."""
+    return (s.replace("\\", "\\\\")
+             .replace('"', '\\"')
+             .replace("\n", "\\n")
+             .replace("\r", "\\r")
+             .replace("\t", "\\t")
+             .replace("</", "<\\/"))  # also defuse </script> breakout
+
+
 def render_graph_html(files: List[str], root: str) -> str:
     """Local zoomable HTML graph view (functions/imports/calls). No daemon —
     writes a self-contained HTML file the user opens in a browser."""
@@ -2091,8 +2116,8 @@ def render_graph_html(files: List[str], root: str) -> str:
         for d in sorted(deps):
             if d in graph:
                 edges.append((m, d))
-    js_nodes = "[" + ",".join(f'"{n}"' for n in nodes) + "]"
-    js_links = "[" + ",".join(f'{{"source":"{a}","target":"{b}"}}' for a, b in edges) + "]"
+    js_nodes = "[" + ",".join(f'"{_js_escape(n)}"' for n in nodes) + "]"
+    js_links = "[" + ",".join(f'{{"source":"{_js_escape(a)}","target":"{_js_escape(b)}"}}' for a, b in edges) + "]"
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>codeloom graph</title>
 <style>body{{font-family:system-ui;margin:0;background:#0d1117;color:#e6edf3}}
@@ -4697,7 +4722,11 @@ def save_lazy_index(root: str, index: dict) -> bool:
 
 def load_symbol_lazy(root: str, symbol: str) -> Optional[list]:
     """Look up ONE symbol from the lazy index — a single keyed read (~ms).
-    Returns the list of locs, or None if the symbol isn't present/loaded."""
+    Returns the list of locs, or None if the symbol isn't present/loaded.
+    SECURITY: the dbm store is repo-supplied and was previously trusted
+    verbatim — a crafted store with path '../secret.py' made --get-symbol
+    read files OUTSIDE the repo. Locs whose resolved path escapes the root
+    are dropped here."""
     try:
         import dbm
         path = _index_lazy_path(root)
@@ -4705,7 +4734,22 @@ def load_symbol_lazy(root: str, symbol: str) -> Optional[list]:
             raw = db.get(symbol.encode("utf-8"))
         if raw is None:
             return None
-        return json.loads(raw.decode("utf-8"))
+        locs = json.loads(raw.decode("utf-8"))
+        if not isinstance(locs, list):
+            return None
+        root_real = os.path.realpath(root)
+        kept = []
+        for loc in locs:
+            if not isinstance(loc, dict):
+                continue
+            p = loc.get("path")
+            if p is None:
+                kept.append(loc)
+                continue
+            resolved = os.path.realpath(p if os.path.isabs(p) else os.path.join(root, p))
+            if resolved.startswith(root_real + os.sep):
+                kept.append(loc)
+        return kept or None
     except Exception:
         return None
 
@@ -4721,11 +4765,21 @@ def lazy_index_has(root: str) -> bool:
 def _read_source_from_loc(loc: dict, root: str) -> str:
     """Re-read a symbol's full source from disk using the stored byte range.
     Used by --full and the adaptive small-symbol path, since the persisted
-    index no longer stores full source strings (they make it multi-GB)."""
+    index no longer stores full source strings (they make it multi-GB).
+    SECURITY: resolves through realpath and refuses paths outside the root —
+    a crafted index entry pointing through an in-repo symlink used to read
+    files outside the repo."""
     path = loc.get("path")
     sb, eb = loc.get("start_byte", 0), loc.get("end_byte", 0)
     if not path or not os.path.isabs(path):
         path = os.path.join(root, path) if path else None
+    if path:
+        try:
+            root_real = os.path.realpath(root)
+            if not os.path.realpath(path).startswith(root_real + os.sep):
+                return loc.get("source", "") or ""
+        except OSError:
+            return loc.get("source", "") or ""
     if path and os.path.isfile(path):
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as fh:
@@ -5565,12 +5619,15 @@ def _index_contain(root: str, data: Optional[dict]) -> Optional[dict]:
     if not data:
         return data
     root_abs = os.path.abspath(root)
+    root_real = os.path.realpath(root)
     files = data.get("files")
     if isinstance(files, dict):
         kept = {}
         for f, meta in files.items():
             if os.path.isabs(f):
-                if not os.path.abspath(f).startswith(root_abs + os.sep):
+                # realpath: an in-repo symlink pointing outside used to pass
+                # the abspath prefix check and then read outside the repo
+                if not os.path.realpath(f).startswith(root_real + os.sep):
                     continue
             elif os.path.normpath(f).startswith(".."):
                 continue
@@ -5591,7 +5648,7 @@ def _index_contain(root: str, data: Optional[dict]) -> Optional[dict]:
                     keep.append(loc)
                     continue
                 if os.path.isabs(p):
-                    if os.path.abspath(p).startswith(root_abs + os.sep):
+                    if os.path.realpath(p).startswith(root_real + os.sep):
                         keep.append(loc)
                 elif not os.path.normpath(p).startswith(".."):
                     keep.append(loc)
@@ -8997,8 +9054,9 @@ def install_hook(root: str) -> str:
         "# check can be updated without reinstalling. Always exits 0 unless\n"
         "# the script itself fails — codeloom hooks never block a commit\n"
         "# (they warn).\n"
-        "if [ -x \"%s\" ]; then\n"
-        "  \"%s\"\n"
+        f"HOOK_SCRIPT='{script.replace(chr(39), chr(39) + chr(92) + chr(39) + chr(39))}'\n"
+        "if [ -x \"$HOOK_SCRIPT\" ]; then\n"
+        "  \"$HOOK_SCRIPT\"\n"
         "  rc=$?\n"
         "  if [ $rc -ne 0 ]; then\n"
         "    echo \"pre-commit-hook.sh exited $rc; codeloom hook is warn-only and\"\n"
@@ -9008,7 +9066,7 @@ def install_hook(root: str) -> str:
         "fi\n"
         "echo \"codeloom pre-commit hook: scripts/pre-commit-hook.sh not found; skipping.\"\n"
         "exit 0\n"
-    ) % (script, script)
+    )
     hook_path = os.path.join(hooks, "pre-commit")
     try:
         with open(hook_path, "w", encoding="utf-8") as fh:

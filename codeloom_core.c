@@ -1019,7 +1019,14 @@ static void serve_index(const char *root) {
     long size = ftell(fp);
     fseek(fp, 0, SEEK_SET);
     char *buf = malloc(size + 1);
-    fread(buf, 1, size, fp);
+    if (!buf) { fclose(fp); fprintf(stderr, "serve: out of memory\n"); return; }
+    size_t got = fread(buf, 1, (size_t)size, fp);
+    if (got != (size_t)size) {
+        /* short read: never serve uninitialized heap bytes */
+        free(buf); fclose(fp);
+        fprintf(stderr, "serve: short read (%zu of %ld bytes)\n", got, size);
+        return;
+    }
     buf[size] = '\0';
     fclose(fp);
     printf("serve: %ld bytes resident (%s) — type a symbol, one per line\n", size, path);
