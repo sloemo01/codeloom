@@ -620,7 +620,9 @@ structured, importance-scored, graph-linked entries:
 ```bash
 python3 tests.py
 ```
-Expect `OK` (129 tests, incl. the 7 `TestMemoryOS` cases). Add tests for any
+Expect `OK` (133 tests, incl. the 7 `TestMemoryOS` cases and 4
+`TestCEngineImports` cases: C-engine Python/C import edges, stale-core
+auto-rebuild helper, and `--query callers` cross-module resolution). Add tests for any
 new feature.
 
 ### 5. Re-record the demo GIF
@@ -689,7 +691,7 @@ new feature.
 
 ## Verification
 
-- `python3 tests.py` → `OK` (129 tests).
+- `python3 tests.py` → `OK` (133 tests).
 - `codeloom --graph --focus <module> <root>` returns `depends_on`/`depended_on_by`.
 - `codeloom --impact <module> <root>` returns `risk` + `Direct dependents`.
 - `codeloom --task "text" <root>` returns a ranked module list.
