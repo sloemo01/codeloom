@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/badge/license-MIT-2da44e)](#license)
 [![Python](https://img.shields.io/badge/python-3.8%2B-2da44e)](https://www.python.org/downloads/)
 [![CI](https://img.shields.io/badge/CI-passing-2da44e)](https://github.com/sloemo01/codeloom/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-120-2da44e)](https://github.com/sloemo01/codeloom/blob/main/tests.py)
+[![Tests](https://img.shields.io/badge/tests-128-2da44e)](https://github.com/sloemo01/codeloom/blob/main/tests.py)
 [![Deps](https://img.shields.io/badge/deps-zero-2da44e)](https://github.com/sloemo01/codeloom#readme)
 [![MCP tools](https://img.shields.io/badge/MCP-82%20tools%20%2B%201%20router-2da44e)](#mcp-server-82-tools--1-router)
 [![Stars](https://img.shields.io/github/stars/sloemo01/codeloom)](https://github.com/sloemo01/codeloom/stargazers)
@@ -48,6 +48,32 @@ it — and it re-derives everything from scratch. Over and over.
    repo learned about a symbol *and* its graph neighbors in one call.
 
 No install. No daemon. No GPU. No telemetry. Runs 100% on your machine.
+
+## What's new in v0.79.1 (hardening release)
+
+A robustness + security pass — no new commands, everything below is
+verified by regression tests (`python3 tests.py`, 128 tests):
+
+- **MCP server survives garbage input** — handler exceptions answer `-32603`
+  (was: process death), malformed JSON answers `-32700` and keeps serving,
+  JSON-RPC batches handled, bad arg types (`max_files:"abc"`, `repos:[123]`)
+  return clean errors instead of killing the server
+- **`--json` on every command** — all 51 dispatch branches now emit
+  machine-readable JSON with `--json` (previously ~30 silently ignored it)
+- **Security**: file walker skips symlinks resolving outside the repo root;
+  crafted index entries pointing through symlinks are dropped (realpath
+  checks on the JSON index, lazy dbm store, and symbol re-reads); module
+  names are JS-escaped in `--graph-html` (hostile filenames can't execute);
+  the pre-commit hook's script path is properly quoted
+- **Honest ledgers** — `--session` logs real wall time + real output bytes
+  (was: hardcoded `0.0s`); `--diff` on a non-git directory says so instead
+  of fabricating; `--snippet` is byte-accurate on multi-byte files and
+  rejects invalid ranges; file hashing is full-file SHA-256 (the old 8KB
+  sample could miss same-length edits past byte 8192)
+- **Dead code removed** — 5 never-called functions deleted
+  (`_scan_calls`, `lazy_index_has`, `dedupe_symbols`,
+  `_embeddings_available`, `memory_enforce_caps` — caps were already
+  enforced inline per write)
 
 ## Quickstart
 
@@ -322,7 +348,7 @@ graph**, retrieved by symbol and graph neighbors (`--memory <symbol>`,
 
 ## Trust & verification
 
-- **CI**: Linux/macOS/Windows × Python 3.8–3.12, 120 tests, ≥46 grammar
+- **CI**: Linux/macOS/Windows × Python 3.8–3.12, 128 tests, ≥46 grammar
   fixtures gated by golden files
 - **Checksums**: every release publishes the SHA-256 of `codeloom.py`;
   verify with `codeloom --verify codeloom.py`
@@ -376,7 +402,7 @@ one file, honest claims.
 
 [简体中文](docs/translations/README.zh-CN.md) · [日本語](docs/translations/README.ja.md) · [Español](docs/translations/README.es.md) · [हिन्दी](docs/translations/README.hi.md)
 
-Generated with v0.79 — may lag after upgrades.
+Generated with v0.79.1 — may lag after upgrades.
 
 ## Agent skill
 
